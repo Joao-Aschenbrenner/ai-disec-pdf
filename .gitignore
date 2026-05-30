@@ -1,0 +1,38 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.sln.docstates
+*.userprefs
+
+## Publish output
+publish/
+
+## VS
+.vs/
+*.csproj.user
+
+## IDE
+.idea/
+*.swp
+.vscode/
+
+## OS
+Thumbs.db
+.DS_Store
+*.lnk
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/

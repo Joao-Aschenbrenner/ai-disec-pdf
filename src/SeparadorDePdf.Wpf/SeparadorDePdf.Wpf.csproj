@@ -1,0 +1,47 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>SeparadorDePdf.Wpf</RootNamespace>
+    <ApplicationIcon />
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MaterialDesignThemes" Version="5.2.1" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SeparadorDePdf.Core\SeparadorDePdf.Core.csproj" />
+    <ProjectReference Include="..\SeparadorDePdf.Services\SeparadorDePdf.Services.csproj" />
+    <ProjectReference Include="..\SeparadorDePdf.Utils\SeparadorDePdf.Utils.csproj" />
+    <ProjectReference Include="..\SeparadorDePdf.Classifiers\SeparadorDePdf.Classifiers.csproj" />
+    <ProjectReference Include="..\SeparadorDePdf.Extractors\SeparadorDePdf.Extractors.csproj" />
+    <ProjectReference Include="..\SeparadorDePdf.ImageProcessing\SeparadorDePdf.ImageProcessing.csproj" />
+    <ProjectReference Include="..\SeparadorDePdf.Ocr\SeparadorDePdf.Ocr.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="tessdata\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="tessdata\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Pack>true</Pack>
+      <PackagePath>\publish\tessdata</PackagePath>
+    </Content>
+  </ItemGroup>
+
+</Project>

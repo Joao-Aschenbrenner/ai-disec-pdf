@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>SeparadorDePdf.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SeparadorDePdf.Core\SeparadorDePdf.Core.csproj" />
+    <ProjectReference Include="..\..\src\SeparadorDePdf.Classifiers\SeparadorDePdf.Classifiers.csproj" />
+    <ProjectReference Include="..\..\src\SeparadorDePdf.Extractors\SeparadorDePdf.Extractors.csproj" />
+    <ProjectReference Include="..\..\src\SeparadorDePdf.Utils\SeparadorDePdf.Utils.csproj" />
+    <ProjectReference Include="..\..\src\SeparadorDePdf.Services\SeparadorDePdf.Services.csproj" />
+  </ItemGroup>
+
+</Project>
