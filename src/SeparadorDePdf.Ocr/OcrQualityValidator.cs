@@ -13,8 +13,15 @@ public static class OcrQualityValidator
         if (result.IsLowQuality)
             return false;
 
-        var alphaRatio = result.Text.Count(char.IsLetter) / (double)result.Text.Length;
-        if (alphaRatio < 0.3)
+        if (string.IsNullOrEmpty(result.Text))
+            return false;
+
+        var text = result.Text.Trim();
+        if (text.Length == 0)
+            return false;
+
+        var alphaRatio = text.Count(char.IsLetter) / (double)text.Length;
+        if (alphaRatio < 0.15)
             return false;
 
         return true;

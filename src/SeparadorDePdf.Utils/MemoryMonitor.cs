@@ -22,15 +22,14 @@ public static class MemoryMonitor
         return GetMemoryUsagePercentage() > threshold;
     }
 
-    public static void CollectIfPressureHigh(double threshold = 80.0)
+    public static void CollectIfPressureHigh(double threshold = 90.0)
     {
         lock (_lock)
         {
             if (IsMemoryPressureHigh(threshold))
             {
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, false);
                 GC.WaitForPendingFinalizers();
-                GC.Collect();
             }
         }
     }

@@ -88,13 +88,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ErrorCount = 0;
         CurrentFile = Path.GetFileName(InputFilePath);
 
+        var progress = new Progress<double>(value =>
+        {
+            Application.Current.Dispatcher.Invoke(() => ProgressPercentage = value);
+        });
+
         try
         {
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-            ProgressPercentage = 50;
-
-            var result = await _pdfProcessor.ProcessAsync(InputFilePath, OutputFolder, _cts.Token);
+            var result = await _pdfProcessor.ProcessAsync(InputFilePath, OutputFolder, _cts.Token, progress);
 
             stopwatch.Stop();
 
@@ -118,10 +121,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (OperationCanceledException)
         {
+            _logService.Warning("Processamento cancelado pelo usuário.");
             StatusText = "Processamento cancelado.";
         }
         catch (Exception ex)
         {
+            _logService.Error(ex, "Erro durante processamento");
             StatusText = $"Erro: {ex.Message}";
             ErrorCount = 1;
             MessageBox.Show($"Erro durante processamento:\n{ex.Message}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -178,6 +183,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
+            _logService.Error(ex, "Erro ao exportar logs");
             MessageBox.Show($"Erro ao exportar logs:\n{ex.Message}", "Erro", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }

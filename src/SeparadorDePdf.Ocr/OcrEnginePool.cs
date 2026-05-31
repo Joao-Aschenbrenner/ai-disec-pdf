@@ -9,12 +9,14 @@ public sealed class OcrEnginePool : IDisposable
     private readonly ConcurrentBag<TesseractEngine> _pool = new();
     private readonly string _tessDataPath;
     private readonly string _language;
+    private readonly int _maxPoolSize;
     private bool _disposed;
 
-    public OcrEnginePool(string tessDataPath, string language = "por+eng")
+    public OcrEnginePool(string tessDataPath, string language = "por+eng", int maxPoolSize = 16)
     {
         _tessDataPath = tessDataPath;
         _language = language;
+        _maxPoolSize = maxPoolSize;
     }
 
     public PooledEngine Rent()
@@ -23,16 +25,14 @@ public sealed class OcrEnginePool : IDisposable
             throw new ObjectDisposedException(nameof(OcrEnginePool));
 
         if (!_pool.TryTake(out var engine))
-        {
             engine = new TesseractEngine(_tessDataPath, _language, EngineMode.Default);
-        }
 
         return new PooledEngine(engine, this);
     }
 
     internal void Return(TesseractEngine engine)
     {
-        if (!_disposed)
+        if (!_disposed && _pool.Count < _maxPoolSize)
             _pool.Add(engine);
         else
             engine.Dispose();

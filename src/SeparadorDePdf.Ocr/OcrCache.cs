@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using SeparadorDePdf.Core.Interfaces;
 using SeparadorDePdf.Core.Models;
 
@@ -18,9 +19,9 @@ public class OcrCache : IClassificationCache
 
     public Task SetAsync(string fileHash, OcrResult result)
     {
-        if (_cache.Count >= MaxCacheSize)
+        if (_cache.Count >= MaxCacheSize && !_cache.ContainsKey(fileHash))
         {
-            var oldestKey = fileHash;
+            var oldestKey = _cache.Keys.FirstOrDefault() ?? fileHash;
             _cache.TryRemove(oldestKey, out _);
         }
 

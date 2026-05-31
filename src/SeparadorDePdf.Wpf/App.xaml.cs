@@ -24,6 +24,8 @@ public partial class App : System.Windows.Application
         ConfigureServices(services);
         _serviceProvider = services.BuildServiceProvider();
 
+        SetupGlobalExceptionHandling();
+
         var historyRepo = _serviceProvider.GetRequiredService<IProcessingHistoryRepository>();
         await historyRepo.InitializeAsync();
 
@@ -32,6 +34,30 @@ public partial class App : System.Windows.Application
             DataContext = _serviceProvider.GetRequiredService<ViewModels.MainViewModel>()
         };
         mainWindow.Show();
+    }
+
+    private void SetupGlobalExceptionHandling()
+    {
+        DispatcherUnhandledException += (_, args) =>
+        {
+            var log = _serviceProvider?.GetService<ILogService>();
+            log?.Error(args.Exception, "UI Thread");
+            args.Handled = true;
+        };
+
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            var log = _serviceProvider?.GetService<ILogService>();
+            if (args.ExceptionObject is Exception ex)
+                log?.Error(ex, "AppDomain");
+        };
+
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            var log = _serviceProvider?.GetService<ILogService>();
+            log?.Error(args.Exception, "Task");
+            args.SetObserved();
+        };
     }
 
     private static void ConfigureServices(IServiceCollection services)

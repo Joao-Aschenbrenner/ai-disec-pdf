@@ -14,7 +14,38 @@
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <local:InvertBoolConverter x:Key="InvertBoolConverter" xmlns:local="clr-namespace:SeparadorDePdf.Wpf.Converters"/>
+
+        <Storyboard x:Key="StatusFadeIn">
+            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.3"/>
+        </Storyboard>
+
+        <Style x:Key="SmoothProgressBar" TargetType="ProgressBar">
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Background" Value="{DynamicResource MaterialDesignDivider}"/>
+            <Setter Property="Foreground" Value="{DynamicResource PrimaryHueMidBrush}"/>
+        </Style>
+
+        <Style x:Key="StatusTextStyle" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding StatusText}" Value="Pronto">
+                    <Setter Property="Foreground" Value="{DynamicResource MaterialDesignBody}"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding StatusText}" Value="Processando...">
+                    <Setter Property="Foreground" Value="{DynamicResource PrimaryHueMidBrush}"/>
+                </DataTrigger>
+                <Trigger Property="Text" Value="Processando...">
+                    <Trigger.EnterActions>
+                        <BeginStoryboard Storyboard="{StaticResource StatusFadeIn}"/>
+                    </Trigger.EnterActions>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
+
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -25,7 +56,10 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <materialDesign:Card Grid.Row="0" Margin="0,0,0,16" Padding="16">
+        <materialDesign:Card Grid.Row="0" Margin="0,0,0,16" Padding="16" RenderTransformOrigin="0.5,0.5">
+            <materialDesign:Card.RenderTransform>
+                <ScaleTransform ScaleX="1" ScaleY="1"/>
+            </materialDesign:Card.RenderTransform>
             <StackPanel>
                 <TextBlock Text="SEPARADOR DE PDF" FontSize="24" FontWeight="Bold"/>
                 <TextBlock Text="Organização automática com OCR de documentos escaneados" FontSize="14" Opacity="0.7"/>
@@ -59,10 +93,11 @@
         </materialDesign:Card>
 
         <materialDesign:Card Grid.Row="2" Margin="0,0,0,12" Padding="16">
-            <StackPanel Orientation="Horizontal">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                 <Button Content="▶ Iniciar" Command="{Binding StartProcessingCommand}" Margin="0,0,8,0" IsEnabled="{Binding IsProcessing, Converter={StaticResource InvertBoolConverter}}"/>
                 <Button Content="■ Parar" Command="{Binding StopProcessingCommand}" Margin="0,0,8,0" IsEnabled="{Binding IsProcessing}"/>
-                <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Margin="16,0,0,0" FontWeight="SemiBold" Opacity="0.8"/>
+                <TextBlock Text="⏳" FontSize="18" VerticalAlignment="Center" Margin="8,0,0,0" Visibility="{Binding IsProcessing, Converter={StaticResource BoolToVis}}"/>
+                <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" Margin="4,0,0,0" Style="{StaticResource StatusTextStyle}"/>
             </StackPanel>
         </materialDesign:Card>
 
@@ -73,10 +108,10 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="{Binding CurrentFile, StringFormat='Processando: {0}'}" FontSize="13" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Grid.Column="1" Text="{Binding ProgressPercentage, StringFormat='{}{0:F0}%'}" FontWeight="Bold" Margin="8,0,0,0"/>
+                    <TextBlock Text="{Binding CurrentFile, StringFormat='Processando: {0}'}" FontSize="13" TextTrimming="CharacterEllipsis" Visibility="{Binding IsProcessing, Converter={StaticResource BoolToVis}}"/>
+                    <TextBlock Grid.Column="1" Text="{Binding ProgressPercentage, StringFormat='{}{0:F0}%'}" FontWeight="Bold" Margin="8,0,0,0" Visibility="{Binding IsProcessing, Converter={StaticResource BoolToVis}}"/>
                 </Grid>
-                <ProgressBar Value="{Binding ProgressPercentage}" Minimum="0" Maximum="100" Height="20"/>
+                <ProgressBar x:Name="ProgressBarControl" Value="{Binding ProgressPercentage}" Minimum="0" Maximum="100" Height="20"/>
                 <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
                     <materialDesign:PackIcon Kind="CheckCircle" Foreground="Green" Margin="0,0,4,0" VerticalAlignment="Center"/>
                     <TextBlock Text="{Binding SuccessCount, StringFormat='Sucesso: {0}'}" Margin="0,0,24,0"/>
@@ -89,7 +124,21 @@
         <materialDesign:Card Grid.Row="4" Padding="8">
             <DockPanel>
                 <TextBlock Text="Logs em Tempo Real" FontSize="13" FontWeight="SemiBold" DockPanel.Dock="Top" Margin="8,4"/>
-                <ListBox ItemsSource="{Binding Logs}" DockPanel.Dock="Top" Margin="0,4,0,0" ScrollViewer.HorizontalScrollBarVisibility="Auto" x:Name="LogList">
+                <ListBox ItemsSource="{Binding Logs}" DockPanel.Dock="Top" Margin="0,4,0,0" ScrollViewer.HorizontalScrollBarVisibility="Auto" x:Name="LogList" VirtualizingPanel.ScrollUnit="Pixel">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Opacity" Value="1"/>
+                            <Style.Triggers>
+                                <EventTrigger RoutedEvent="Loaded">
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </EventTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Grid>
@@ -98,25 +147,28 @@
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Margin="0,0,8,0" FontWeight="Bold" Opacity="0.6"/>
-                                <TextBlock Grid.Column="1" Text="{Binding Level}" Margin="0,0,8,0" FontWeight="Bold">
+                                <TextBlock Text="{Binding Timestamp, StringFormat='{}{0:HH:mm:ss}'}" Margin="0,1,8,0" FontWeight="Bold" Opacity="0.6" FontSize="12"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Level}" Margin="0,1,8,0" FontWeight="Bold" FontSize="12">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock">
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding Level}" Value="Error">
-                                                    <Setter Property="Foreground" Value="Red"/>
+                                                    <Setter Property="Foreground" Value="#FF5252"/>
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding Level}" Value="Warning">
-                                                    <Setter Property="Foreground" Value="Orange"/>
+                                                    <Setter Property="Foreground" Value="#FFAB40"/>
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding Level}" Value="Info">
-                                                    <Setter Property="Foreground" Value="Green"/>
+                                                    <Setter Property="Foreground" Value="#69F0AE"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Level}" Value="Debug">
+                                                    <Setter Property="Foreground" Value="#90CAF9"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
-                                <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap"/>
+                                <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" Margin="0,1,0,0" FontSize="12"/>
                             </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>

@@ -9,11 +9,17 @@ namespace SeparadorDePdf.Services;
 
 public class FolderWatcherService : IFolderWatcher, IDisposable
 {
+    private readonly ILogService _logService;
     private FileSystemWatcher? _watcher;
     private CancellationTokenSource? _cts;
     private Timer? _debounceTimer;
     private readonly object _lock = new();
     private const int DebounceMs = 1000;
+
+    public FolderWatcherService(ILogService logService)
+    {
+        _logService = logService;
+    }
 
     public event EventHandler<string>? FileDetected;
 
@@ -78,8 +84,9 @@ public class FolderWatcherService : IFolderWatcher, IDisposable
                     {
                         using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.None);
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        _logService.Error(ex, $"Arquivo ainda bloqueado: {filePath}");
                         return;
                     }
 
@@ -91,7 +98,7 @@ public class FolderWatcherService : IFolderWatcher, IDisposable
 
     public void Dispose()
     {
-        StopAsync().GetAwaiter().GetResult();
+        Task.Run(async () => await StopAsync()).GetAwaiter().GetResult();
         _cts?.Dispose();
     }
 }

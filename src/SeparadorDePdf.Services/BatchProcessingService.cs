@@ -98,6 +98,7 @@ public class BatchProcessingService : IBatchProcessor
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
+                    _logService.Error(ex, $"Erro ao processar {currentFile}");
                     var failResult = ProcessingResult.Fail(pdfPath, ex.Message, TimeSpan.Zero);
                     _results.Add(failResult);
                     Interlocked.Increment(ref _errorCount);

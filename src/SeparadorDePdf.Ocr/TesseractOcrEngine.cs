@@ -69,9 +69,10 @@ public class TesseractOcrEngine : IOcrEngine
                     PageCount = 1
                 };
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 sw.Stop();
+                Debug.WriteLine($"[TesseractOcrEngine] OCR falhou: {ex.Message}");
 
                 return new OcrResult
                 {

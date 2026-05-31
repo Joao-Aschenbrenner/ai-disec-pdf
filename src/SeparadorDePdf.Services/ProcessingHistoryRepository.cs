@@ -14,9 +14,11 @@ public class ProcessingHistoryRepository : IProcessingHistoryRepository
 {
     private readonly string _connectionString;
     private readonly AsyncLock _lock = new();
+    private readonly ILogService _logService;
 
-    public ProcessingHistoryRepository(string? dbPath = null)
+    public ProcessingHistoryRepository(ILogService logService, string? dbPath = null)
     {
+        _logService = logService;
         dbPath ??= Path.Combine(AppContext.BaseDirectory, "processing_history.db");
         FileHelper.EnsureDirectoryExists(Path.GetDirectoryName(dbPath)!);
         _connectionString = $"Data Source={dbPath}";
@@ -172,6 +174,7 @@ public class ProcessingHistoryRepository : IProcessingHistoryRepository
         using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM ProcessingHistory";
         await command.ExecuteNonQueryAsync();
+        _logService.Info("Histórico de processamento limpo.");
     }
 
     public async Task ExportToCsvAsync(string outputPath)

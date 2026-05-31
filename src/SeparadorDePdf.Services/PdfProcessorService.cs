@@ -49,7 +49,7 @@ public class PdfProcessorService : IPdfProcessor
         _aggressiveOptions = ImageProcessingOptions.Aggressive;
     }
 
-    public async Task<ProcessingResult> ProcessAsync(string pdfPath, string outputFolder, CancellationToken cancellationToken = default)
+    public async Task<ProcessingResult> ProcessAsync(string pdfPath, string outputFolder, CancellationToken cancellationToken = default, IProgress<double>? progress = null)
     {
         var sw = Stopwatch.StartNew();
         var fileName = Path.GetFileName(pdfPath);
@@ -57,14 +57,19 @@ public class PdfProcessorService : IPdfProcessor
         try
         {
             _logService.Info($"Processando: {fileName}", pdfPath);
+            progress?.Report(5);
+
+            await Task.Yield();
 
             if (!PdfValidator.IsValidPdf(pdfPath))
             {
                 _logService.Warning($"PDF inválido ou corrompido: {fileName}", pdfPath);
                 return ProcessingResult.Skipped(pdfPath, "PDF inválido ou corrompido");
             }
+            progress?.Report(10);
 
             var fileHash = await HashHelper.ComputeFileHashAsync(pdfPath, cancellationToken);
+            progress?.Report(15);
 
             var existing = await _historyRepository.GetByHashAsync(fileHash);
             if (existing is not null && existing.Status == ProcessingStatus.Completed)
@@ -72,6 +77,8 @@ public class PdfProcessorService : IPdfProcessor
                 _logService.Info($"Já processado anteriormente: {fileName}", pdfPath);
                 return ProcessingResult.Skipped(pdfPath, "Já processado");
             }
+
+            var pageCount = await _pdfRenderer.GetPageCountAsync(pdfPath, cancellationToken);
 
             var cachedOcr = await _cache.GetAsync(fileHash);
             string ocrText;
@@ -82,9 +89,12 @@ public class PdfProcessorService : IPdfProcessor
                 ocrText = cachedOcr.Text;
                 ocrConfidence = cachedOcr.MeanConfidence;
                 _logService.Info($"Cache OCR hit: {fileName}", pdfPath);
+                progress?.Report(90);
             }
             else
             {
+                progress?.Report(20);
+
                 var pages = await _pdfRenderer.RenderPagesAsync(pdfPath, 300, cancellationToken);
 
                 if (pages.Count == 0 || pages.All(p => p.Length == 0))
@@ -96,10 +106,16 @@ public class PdfProcessorService : IPdfProcessor
                 var textParts = new List<string>();
                 float totalConfidence = 0;
                 int validPages = 0;
+                var totalPages = pages.Count;
 
-                foreach (var pageImage in pages)
+                for (int i = 0; i < totalPages; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    var pageProgress = 20 + ((double)(i + 1) / totalPages * 70);
+                    progress?.Report(pageProgress);
+
+                    var pageImage = pages[i];
                     if (pageImage.Length == 0) continue;
 
                     if (_imageProcessor.IsEmptyPage(pageImage))
@@ -146,7 +162,7 @@ public class PdfProcessorService : IPdfProcessor
                 {
                     FilePath = pdfPath, FileName = fileName, Type = DocumentType.Desconhecido,
                     OcrText = string.Empty, FileHash = fileHash,
-                    PageCount = await _pdfRenderer.GetPageCountAsync(pdfPath, cancellationToken)
+                    PageCount = pageCount
                 };
                 await _fileOrganizer.OrganizeAsync(doc, outputFolder, cancellationToken);
                 sw.Stop();
@@ -167,7 +183,7 @@ public class PdfProcessorService : IPdfProcessor
                 NumeroNota = extractedData["NumeroNota"], CnpjEmitente = extractedData["CnpjEmitente"],
                 Cpf = extractedData["Cpf"], NomePessoa = extractedData["NomePessoa"],
                 NumeroImposto = extractedData["NumeroImposto"], ChaveAcesso = extractedData["ChaveAcesso"],
-                FileHash = fileHash, PageCount = await _pdfRenderer.GetPageCountAsync(pdfPath, cancellationToken)
+                FileHash = fileHash, PageCount = pageCount
             };
 
             await _fileOrganizer.OrganizeAsync(document, outputFolder, cancellationToken);
@@ -254,6 +270,6 @@ public class PdfProcessorService : IPdfProcessor
                 ProcessedAt = DateTime.UtcNow
             });
         }
-        catch { /* non-critical */ }
+        catch (Exception ex) { _logService.Error(ex, "Falha ao salvar histórico (não crítico)"); }
     }
 }
