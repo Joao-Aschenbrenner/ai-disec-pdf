@@ -6,6 +6,15 @@ using SeparadorDePdf.Services;
 
 namespace SeparadorDePdf.Tests.Services;
 
+public static class AsyncEnumerableHelper
+{
+    public static async IAsyncEnumerable<T> ToAsyncEnumerable<T>(this IEnumerable<T> source)
+    {
+        foreach (var item in source)
+            yield return item;
+    }
+}
+
 public class PdfProcessorServiceTests
 {
     private readonly Mock<IPdfRenderer> _rendererMock;
@@ -95,7 +104,7 @@ public class PdfProcessorServiceTests
     }
 
     [Fact]
-    public async Task ProcessAsync_NoRenderedPages_ReturnsFail()
+    public async Task ProcessAsync_NoPagesFound_ReturnsFail()
     {
         var pdfPath = CreateTempPdf();
         try
@@ -103,19 +112,15 @@ public class PdfProcessorServiceTests
             _rendererMock.Setup(x => x.IsValidPdf(pdfPath)).Returns(true);
             _historyMock.Setup(x => x.GetByHashAsync(It.IsAny<string>())).ReturnsAsync((ProcessingHistoryEntry?)null);
             _cacheMock.Setup(x => x.GetAsync(It.IsAny<string>())).ReturnsAsync((OcrResult?)null);
-            _rendererMock.Setup(x => x.RenderPagesAsync(pdfPath, 300, default))
-                .ReturnsAsync(new List<byte[]>());
             _rendererMock.Setup(x => x.GetPageCountAsync(pdfPath, default))
-                .ReturnsAsync(1);
+                .ReturnsAsync(0);
 
-            _fileOrganizerMock.Setup(x => x.OrganizeAsync(It.IsAny<DocumentInfo>(), It.IsAny<string>(), default))
-                .ReturnsAsync("path");
             _historyMock.Setup(x => x.SaveAsync(It.IsAny<ProcessingHistoryEntry>())).Returns(Task.CompletedTask);
 
             var result = await _service.ProcessAsync(pdfPath, @"C:\output");
 
             Assert.Equal(ProcessingStatus.Error, result.Status);
-            Assert.Contains("Nenhuma página renderizada", result.ErrorMessage);
+            Assert.Contains("Nenhuma página encontrada", result.ErrorMessage);
         }
         finally
         {
@@ -159,7 +164,7 @@ public class PdfProcessorServiceTests
             Assert.NotNull(result.Document);
             Assert.Equal(DocumentType.NotaFiscal, result.Document.Type);
             _cacheMock.Verify(x => x.GetAsync(It.IsAny<string>()), Times.Once);
-            _rendererMock.Verify(x => x.RenderPagesAsync(It.IsAny<string>(), It.IsAny<int>(), default), Times.Never);
+            _rendererMock.Verify(x => x.RenderPagesStreamingAsync(It.IsAny<string>(), It.IsAny<int>(), default), Times.Never);
         }
         finally
         {
@@ -179,8 +184,8 @@ public class PdfProcessorServiceTests
 
             _cacheMock.Setup(x => x.GetAsync(It.IsAny<string>())).ReturnsAsync((OcrResult?)null);
 
-            _rendererMock.Setup(x => x.RenderPagesAsync(pdfPath, 300, default))
-                .ReturnsAsync(new List<byte[]> { new byte[] { 1, 2, 3 } });
+            _rendererMock.Setup(x => x.RenderPagesStreamingAsync(pdfPath, 300, default))
+                .Returns(new List<byte[]> { new byte[] { 1, 2, 3 } }.ToAsyncEnumerable());
 
             _imageProcessorMock.Setup(x => x.IsEmptyPage(It.IsAny<byte[]>(), It.IsAny<double>())).Returns(false);
             _imageProcessorMock.Setup(x => x.EnhanceAsync(It.IsAny<byte[]>(), It.IsAny<ImageProcessingOptions>(), default))
@@ -225,8 +230,8 @@ public class PdfProcessorServiceTests
             _rendererMock.Setup(x => x.GetPageCountAsync(pdfPath, default)).ReturnsAsync(1);
             _cacheMock.Setup(x => x.GetAsync(It.IsAny<string>())).ReturnsAsync((OcrResult?)null);
 
-            _rendererMock.Setup(x => x.RenderPagesAsync(pdfPath, 300, default))
-                .ReturnsAsync(new List<byte[]> { new byte[] { 1, 2, 3 } });
+            _rendererMock.Setup(x => x.RenderPagesStreamingAsync(pdfPath, 300, default))
+                .Returns(new List<byte[]> { new byte[] { 1, 2, 3 } }.ToAsyncEnumerable());
 
             _imageProcessorMock.Setup(x => x.IsEmptyPage(It.IsAny<byte[]>(), It.IsAny<double>())).Returns(false);
             _imageProcessorMock.Setup(x => x.EnhanceAsync(It.IsAny<byte[]>(), It.IsAny<ImageProcessingOptions>(), default))
@@ -235,14 +240,12 @@ public class PdfProcessorServiceTests
             _ocrEngineMock.Setup(x => x.ProcessImageAsync(It.IsAny<byte[]>(), default))
                 .ReturnsAsync(new OcrResult { Text = "", MeanConfidence = 0 });
 
-            _fileOrganizerMock.Setup(x => x.OrganizeAsync(It.IsAny<DocumentInfo>(), It.IsAny<string>(), default))
-                .ReturnsAsync("path");
             _historyMock.Setup(x => x.SaveAsync(It.IsAny<ProcessingHistoryEntry>())).Returns(Task.CompletedTask);
 
             var result = await _service.ProcessAsync(pdfPath, @"C:\output");
 
             Assert.Equal(ProcessingStatus.Error, result.Status);
-            Assert.Contains("vazio", result.ErrorMessage);
+            Assert.Contains("Nenhuma página processada", result.ErrorMessage);
         }
         finally
         {

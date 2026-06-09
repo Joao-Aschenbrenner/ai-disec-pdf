@@ -95,27 +95,26 @@ public class PdfProcessorService : IPdfProcessor
             {
                 progress?.Report(20);
 
-                var pages = await _pdfRenderer.RenderPagesAsync(pdfPath, 300, cancellationToken);
-
-                if (pages.Count == 0 || pages.All(p => p.Length == 0))
+                var totalPages = await _pdfRenderer.GetPageCountAsync(pdfPath, cancellationToken);
+                if (totalPages == 0)
                 {
-                    _logService.Warning($"Nenhuma página renderizada: {fileName}", pdfPath);
-                    return ProcessingResult.Fail(pdfPath, "Nenhuma página renderizada", sw.Elapsed);
+                    _logService.Warning($"Nenhuma página encontrada: {fileName}", pdfPath);
+                    return ProcessingResult.Fail(pdfPath, "Nenhuma página encontrada", sw.Elapsed);
                 }
 
                 var textParts = new List<string>();
                 float totalConfidence = 0;
                 int validPages = 0;
-                var totalPages = pages.Count;
+                int pageIndex = 0;
 
-                for (int i = 0; i < totalPages; i++)
+                await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, 300, cancellationToken))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    pageIndex++;
 
-                    var pageProgress = 20 + ((double)(i + 1) / totalPages * 70);
+                    var pageProgress = 20 + ((double)pageIndex / totalPages * 70);
                     progress?.Report(pageProgress);
 
-                    var pageImage = pages[i];
                     if (pageImage.Length == 0) continue;
 
                     if (_imageProcessor.IsEmptyPage(pageImage))
@@ -142,6 +141,12 @@ public class PdfProcessorService : IPdfProcessor
                     }
                 }
 
+                if (textParts.Count == 0)
+                {
+                    _logService.Warning($"Nenhuma página processada: {fileName}", pdfPath);
+                    return ProcessingResult.Fail(pdfPath, "Nenhuma página processada", sw.Elapsed);
+                }
+
                 ocrText = string.Join("\n", textParts);
                 ocrConfidence = validPages > 0 ? totalConfidence / validPages : 0;
 
@@ -150,7 +155,7 @@ public class PdfProcessorService : IPdfProcessor
                     Text = ocrText,
                     MeanConfidence = ocrConfidence,
                     Languages = new[] { "por", "eng" },
-                    PageCount = pages.Count
+                    PageCount = totalPages
                 };
                 await _cache.SetAsync(fileHash, ocrResultForCache);
             }
@@ -212,11 +217,12 @@ public class PdfProcessorService : IPdfProcessor
                 _logService.Info($"Retry {attempt}/3: {fileName}", pdfPath);
                 await Task.Delay((int)Math.Pow(2, attempt) * 1000, cancellationToken);
 
-                var pages = await _pdfRenderer.RenderPagesAsync(pdfPath, 300, cancellationToken);
                 var textParts = new List<string>();
 
-                foreach (var pageImage in pages)
+                int pageCount = 0;
+                await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, 300, cancellationToken))
                 {
+                    pageCount++;
                     if (pageImage.Length == 0) continue;
                     var enhancedImage = await _imageProcessor.EnhanceAsync(pageImage, _aggressiveOptions, cancellationToken);
                     var ocrResult = await _ocrEngine.ProcessImageAsync(enhancedImage, cancellationToken);
@@ -237,7 +243,7 @@ public class PdfProcessorService : IPdfProcessor
                     Cpf = extractedData["Cpf"], NomePessoa = extractedData["NomePessoa"],
                     NumeroImposto = extractedData["NumeroImposto"], ChaveAcesso = extractedData["ChaveAcesso"],
                     FileHash = await HashHelper.ComputeFileHashAsync(pdfPath, cancellationToken),
-                    PageCount = pages.Count
+                    PageCount = pageCount
                 };
 
                 await _fileOrganizer.OrganizeAsync(document, outputFolder, cancellationToken);

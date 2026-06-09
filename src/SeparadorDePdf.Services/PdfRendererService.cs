@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
 using SeparadorDePdf.Core.Interfaces;
 using SeparadorDePdf.Utils;
 using UglyToad.PdfPig;
@@ -55,6 +57,39 @@ public class PdfRendererService : IPdfRenderer
 
             return pages;
         }, cancellationToken);
+    }
+
+    public async IAsyncEnumerable<byte[]> RenderPagesStreamingAsync(string pdfPath, int dpi = 300, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        PdfDocument? document = null;
+        try
+        {
+            document = await Task.Run(() => PdfDocument.Open(pdfPath), cancellationToken);
+
+            for (int i = 1; i <= document.NumberOfPages; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                byte[] pageData;
+                try
+                {
+                    using var skBitmap = document.GetPageAsSKBitmap(i, dpi);
+                    using var pngData = skBitmap.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
+                    pageData = pngData.ToArray();
+                }
+                catch (Exception ex)
+                {
+                    _logService?.Error(ex, $"Falha ao renderizar página {i} de: {pdfPath}");
+                    pageData = Array.Empty<byte>();
+                }
+
+                yield return pageData;
+            }
+        }
+        finally
+        {
+            document?.Dispose();
+        }
     }
 
     public async Task<int> GetPageCountAsync(string pdfPath, CancellationToken cancellationToken = default)
