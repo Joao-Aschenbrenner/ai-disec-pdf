@@ -16,7 +16,7 @@ public partial class App : System.Windows.Application
 {
     private ServiceProvider? _serviceProvider;
 
-    protected override async void OnStartup(StartupEventArgs e)
+protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
@@ -26,14 +26,12 @@ public partial class App : System.Windows.Application
 
         SetupGlobalExceptionHandling();
 
-        var historyRepo = _serviceProvider.GetRequiredService<IProcessingHistoryRepository>();
-        await historyRepo.InitializeAsync();
-
-        var mainWindow = new Views.MainView
-        {
-            DataContext = _serviceProvider.GetRequiredService<ViewModels.MainViewModel>()
-        };
+        var vm = _serviceProvider.GetRequiredService<ViewModels.MainViewModel>();
+        var mainWindow = new Views.MainView { DataContext = vm };
+        MainWindow = mainWindow;
         mainWindow.Show();
+
+        _serviceProvider.GetRequiredService<IProcessingHistoryRepository>().InitializeAsync().ConfigureAwait(false);
     }
 
     private void SetupGlobalExceptionHandling()
