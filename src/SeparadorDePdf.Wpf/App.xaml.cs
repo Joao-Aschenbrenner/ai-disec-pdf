@@ -70,7 +70,7 @@ protected override void OnStartup(StartupEventArgs e)
         services.AddSingleton<IPdfRenderer, PdfRendererService>();
         services.AddSingleton<IFileOrganizer, FileOrganizerService>();
         services.AddSingleton<IProcessingHistoryRepository, ProcessingHistoryRepository>();
-        services.AddSingleton<IPdfProcessor, PdfProcessorService>();
+        services.AddSingleton<IPdfProcessor, PythonPdfProcessor>();
         services.AddSingleton<IBatchProcessor, BatchProcessingService>();
         services.AddSingleton<IFolderWatcher, FolderWatcherService>();
         services.AddSingleton<ViewModels.MainViewModel>();
