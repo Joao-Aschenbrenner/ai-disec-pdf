@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using SeparadorDePdf.Core.Interfaces;
+using SeparadorDePdf.Core.Models;
 using SeparadorDePdf.Utils;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.Rendering.Skia;
@@ -89,6 +91,44 @@ public class PdfRendererService : IPdfRenderer
         finally
         {
             document?.Dispose();
+        }
+    }
+
+    public async Task<PdfInfo> GetPdfInfoAsync(string pdfPath, CancellationToken cancellationToken = default)
+    {
+        var sw = Stopwatch.StartNew();
+        var fileInfo = new FileInfo(pdfPath);
+
+        try
+        {
+            var pageCount = await Task.Run(() =>
+            {
+                using var document = PdfDocument.Open(pdfPath);
+                return document.NumberOfPages;
+            }, cancellationToken);
+
+            sw.Stop();
+            return new PdfInfo
+            {
+                FilePath = pdfPath,
+                PageCount = pageCount,
+                FileSizeBytes = fileInfo.Length,
+                IsValid = true,
+                LoadTime = sw.Elapsed
+            };
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _logService?.Error(ex, $"Falha ao obter info do PDF: {pdfPath}");
+            return new PdfInfo
+            {
+                FilePath = pdfPath,
+                IsValid = false,
+                ErrorMessage = ex.Message,
+                FileSizeBytes = fileInfo.Length,
+                LoadTime = sw.Elapsed
+            };
         }
     }
 

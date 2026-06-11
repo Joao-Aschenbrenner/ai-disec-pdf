@@ -57,19 +57,23 @@ public class PdfProcessorService : IPdfProcessor
         try
         {
             _logService.Info($"Processando: {fileName}", pdfPath);
-            progress?.Report(5);
+            progress?.Report(2);
 
             await Task.Yield();
 
-            if (!PdfValidator.IsValidPdf(pdfPath))
+            var pdfInfo = await _pdfRenderer.GetPdfInfoAsync(pdfPath, cancellationToken);
+            progress?.Report(5);
+
+            if (!pdfInfo.IsValid)
             {
                 _logService.Warning($"PDF inválido ou corrompido: {fileName}", pdfPath);
                 return ProcessingResult.Skipped(pdfPath, "PDF inválido ou corrompido");
             }
-            progress?.Report(10);
+
+            _logService.Info($"PDF aberto: {pdfInfo.PageCount} páginas ({pdfInfo.FileSizeBytes / 1024 / 1024} MB) em {pdfInfo.LoadTime.TotalSeconds:F1}s", pdfPath);
 
             var fileHash = await HashHelper.ComputeFileHashAsync(pdfPath, cancellationToken);
-            progress?.Report(15);
+            progress?.Report(10);
 
             var existing = await _historyRepository.GetByHashAsync(fileHash);
             if (existing is not null && existing.Status == ProcessingStatus.Completed)
@@ -78,7 +82,7 @@ public class PdfProcessorService : IPdfProcessor
                 return ProcessingResult.Skipped(pdfPath, "Já processado");
             }
 
-            var pageCount = await _pdfRenderer.GetPageCountAsync(pdfPath, cancellationToken);
+            var pageCount = pdfInfo.PageCount;
 
             var cachedOcr = await _cache.GetAsync(fileHash);
             string ocrText;
@@ -95,8 +99,7 @@ public class PdfProcessorService : IPdfProcessor
             {
                 progress?.Report(20);
 
-                var totalPages = await _pdfRenderer.GetPageCountAsync(pdfPath, cancellationToken);
-                if (totalPages == 0)
+                if (pageCount == 0)
                 {
                     _logService.Warning($"Nenhuma página encontrada: {fileName}", pdfPath);
                     return ProcessingResult.Fail(pdfPath, "Nenhuma página encontrada", sw.Elapsed);
@@ -112,7 +115,7 @@ public class PdfProcessorService : IPdfProcessor
                     cancellationToken.ThrowIfCancellationRequested();
                     pageIndex++;
 
-                    var pageProgress = 20 + ((double)pageIndex / totalPages * 70);
+                    var pageProgress = 20 + ((double)pageIndex / pageCount * 70);
                     progress?.Report(pageProgress);
 
                     if (pageImage.Length == 0) continue;
@@ -155,7 +158,7 @@ public class PdfProcessorService : IPdfProcessor
                     Text = ocrText,
                     MeanConfidence = ocrConfidence,
                     Languages = new[] { "por", "eng" },
-                    PageCount = totalPages
+                    PageCount = pageCount
                 };
                 await _cache.SetAsync(fileHash, ocrResultForCache);
             }
