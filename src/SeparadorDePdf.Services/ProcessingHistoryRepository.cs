@@ -19,13 +19,15 @@ public class ProcessingHistoryRepository : IProcessingHistoryRepository
     public ProcessingHistoryRepository(ILogService logService, string? dbPath = null)
     {
         _logService = logService;
-        dbPath ??= Path.Combine(AppContext.BaseDirectory, "processing_history.db");
-        FileHelper.EnsureDirectoryExists(Path.GetDirectoryName(dbPath)!);
-        _connectionString = $"Data Source={dbPath}";
+        _dbPath = dbPath ?? Path.Combine(AppContext.BaseDirectory, "processing_history.db");
+        _connectionString = $"Data Source={_dbPath}";
     }
+
+    private readonly string _dbPath;
 
     public async Task InitializeAsync()
     {
+        FileHelper.EnsureDirectoryExists(Path.GetDirectoryName(_dbPath)!);
         using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync();
 

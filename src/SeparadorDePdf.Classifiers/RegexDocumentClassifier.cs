@@ -78,7 +78,7 @@ public class RegexDocumentClassifier : IDocumentClassifier
             new() { Type = DocumentType.NotaFiscal, Keyword = "DOCUMENTO AUXILIAR", Score = 4 },
             new() { Type = DocumentType.NotaFiscal, Keyword = "EMITENTE", Score = 2 },
             new() { Type = DocumentType.NotaFiscal, Keyword = "DESTINATARIO", Score = 2 },
-            new() { Type = DocumentType.NotaFiscal, IsRegex = true, CompiledRegex = new Regex(@"\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}", RegexOptions.Compiled), Keyword = "CHAVE_ACESSO_44", Score = 4 },
+            new() { Type = DocumentType.NotaFiscal, IsRegex = true, CompiledRegex = new Regex(@"\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4}"), Keyword = "CHAVE_ACESSO_44", Score = 4 },
 
             new() { Type = DocumentType.PlanilhaBalanco, Keyword = "PLANILHA", Score = 3 },
             new() { Type = DocumentType.PlanilhaBalanco, Keyword = "BALANÇO", Score = 4 },

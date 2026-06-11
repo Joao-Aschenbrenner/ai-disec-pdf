@@ -29,9 +29,24 @@ public class TesseractOcrEngine : IOcrEngine
         }
     }
 
+    private static string? _cachedTessDataPath;
+    private static readonly object _tessDataLock = new();
+
     public TesseractOcrEngine(string? tessDataPath = null)
     {
-        _tessDataPath = tessDataPath ?? FindTessDataPath();
+        if (tessDataPath is not null)
+        {
+            _tessDataPath = tessDataPath;
+        }
+        else
+        {
+            lock (_tessDataLock)
+            {
+                if (_cachedTessDataPath is null)
+                    _cachedTessDataPath = FindTessDataPath();
+                _tessDataPath = _cachedTessDataPath;
+            }
+        }
         _enginePool = new OcrEnginePool(_tessDataPath, TesseractLanguage.PortugueseAndEnglish);
     }
 
