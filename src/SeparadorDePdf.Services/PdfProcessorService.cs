@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 using SeparadorDePdf.Core.Enums;
 using SeparadorDePdf.Core.Interfaces;
 using SeparadorDePdf.Core.Models;
@@ -105,44 +108,7 @@ public class PdfProcessorService : IPdfProcessor
                     return ProcessingResult.Fail(pdfPath, "Nenhuma página encontrada", sw.Elapsed);
                 }
 
-                var textParts = new List<string>();
-                float totalConfidence = 0;
-                int validPages = 0;
-                int pageIndex = 0;
-
-                await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, 300, cancellationToken))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    pageIndex++;
-
-                    var pageProgress = 20 + ((double)pageIndex / pageCount * 70);
-                    progress?.Report(pageProgress);
-
-                    if (pageImage.Length == 0) continue;
-
-                    if (_imageProcessor.IsEmptyPage(pageImage))
-                    {
-                        _logService.Debug($"Página vazia detectada em: {fileName}", pdfPath);
-                        continue;
-                    }
-
-                    var enhancedImage = await _imageProcessor.EnhanceAsync(pageImage, _defaultOptions, cancellationToken);
-                    var ocrResult = await _ocrEngine.ProcessImageAsync(enhancedImage, cancellationToken);
-
-                    if (!OcrQualityValidator.IsValidResult(ocrResult))
-                    {
-                        _logService.Debug($"Retry com opções agressivas: {fileName}", pdfPath);
-                        var aggressiveImage = await _imageProcessor.EnhanceAsync(pageImage, _aggressiveOptions, cancellationToken);
-                        ocrResult = await _ocrEngine.ProcessImageAsync(aggressiveImage, cancellationToken);
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(ocrResult.Text))
-                    {
-                        textParts.Add(ocrResult.Text);
-                        totalConfidence += ocrResult.MeanConfidence;
-                        validPages++;
-                    }
-                }
+                var (textParts, confidences) = await ProcessPagesInParallelAsync(pdfPath, pageCount, fileName, cancellationToken, progress);
 
                 if (textParts.Count == 0)
                 {
@@ -151,7 +117,7 @@ public class PdfProcessorService : IPdfProcessor
                 }
 
                 ocrText = string.Join("\n", textParts);
-                ocrConfidence = validPages > 0 ? totalConfidence / validPages : 0;
+                ocrConfidence = confidences.Count > 0 ? confidences.Average() : 0;
 
                 var ocrResultForCache = new OcrResult
                 {
@@ -209,6 +175,107 @@ public class PdfProcessorService : IPdfProcessor
         }
     }
 
+    private async Task<(List<string> Texts, List<float> Confidences)> ProcessPagesInParallelAsync(string pdfPath, int pageCount, string fileName, CancellationToken cancellationToken, IProgress<double>? progress)
+    {
+        var channel = Channel.CreateBounded<(int Index, byte[] Data)>(
+            new BoundedChannelOptions(Math.Max(Environment.ProcessorCount * 2, 8))
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleWriter = true
+            });
+
+        var producer = Task.Run(async () =>
+        {
+            try
+            {
+                int index = 0;
+                await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, 300, cancellationToken))
+                {
+                    await channel.Writer.WriteAsync((index++, pageImage), cancellationToken);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                _logService.Error(ex, $"Erro no produtor de páginas: {fileName}");
+            }
+            finally
+            {
+                channel.Writer.Complete();
+            }
+        }, cancellationToken);
+
+        var textParts = new string[pageCount];
+        var confidences = new float[pageCount];
+        var processedCount = 0;
+        var lastReportedProgress = 20.0;
+        var progressLock = new object();
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1),
+            CancellationToken = cancellationToken
+        };
+
+        await Parallel.ForEachAsync(
+            channel.Reader.ReadAllAsync(cancellationToken),
+            parallelOptions,
+            async (page, _) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (page.Data is null || page.Data.Length == 0) return;
+
+                if (_imageProcessor.IsEmptyPage(page.Data))
+                {
+                    _logService.Debug($"Página vazia: {fileName}");
+                    Interlocked.Increment(ref processedCount);
+                    return;
+                }
+
+                var enhancedImage = await _imageProcessor.EnhanceAsync(page.Data, _defaultOptions, cancellationToken);
+                var ocrResult = await _ocrEngine.ProcessImageAsync(enhancedImage, cancellationToken);
+                if (ocrResult is null) return;
+
+                if (!OcrQualityValidator.IsValidResult(ocrResult))
+                {
+                    _logService.Debug($"Retry agressivo: {fileName}");
+                    var aggressiveImage = await _imageProcessor.EnhanceAsync(page.Data, _aggressiveOptions, cancellationToken);
+                    ocrResult = await _ocrEngine.ProcessImageAsync(aggressiveImage, cancellationToken);
+                    if (ocrResult is null) return;
+                }
+
+                textParts[page.Index] = ocrResult.Text ?? string.Empty;
+                confidences[page.Index] = ocrResult.MeanConfidence;
+
+                var completed = Interlocked.Increment(ref processedCount);
+                var pct = 20 + (double)completed / pageCount * 70;
+                lock (progressLock)
+                {
+                    if (pct > lastReportedProgress)
+                    {
+                        lastReportedProgress = pct;
+                        progress?.Report(pct);
+                    }
+                }
+            });
+
+        await producer;
+
+        var result = new List<string>(pageCount);
+        var resultConfidences = new List<float>(pageCount);
+        for (int i = 0; i < pageCount; i++)
+        {
+            if (!string.IsNullOrWhiteSpace(textParts[i]))
+            {
+                result.Add(textParts[i]);
+                resultConfidences.Add(confidences[i]);
+            }
+        }
+
+        return (result, resultConfidences);
+    }
+
     private async Task<ProcessingResult> RetryProcessingAsync(string pdfPath, string outputFolder, Stopwatch sw, Exception originalEx, CancellationToken cancellationToken)
     {
         var fileName = Path.GetFileName(pdfPath);
@@ -220,17 +287,10 @@ public class PdfProcessorService : IPdfProcessor
                 _logService.Info($"Retry {attempt}/3: {fileName}", pdfPath);
                 await Task.Delay((int)Math.Pow(2, attempt) * 1000, cancellationToken);
 
-                var textParts = new List<string>();
+                var pdfInfo = await _pdfRenderer.GetPdfInfoAsync(pdfPath, cancellationToken);
+                var pageCount = pdfInfo.PageCount;
 
-                int pageCount = 0;
-                await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, 300, cancellationToken))
-                {
-                    pageCount++;
-                    if (pageImage.Length == 0) continue;
-                    var enhancedImage = await _imageProcessor.EnhanceAsync(pageImage, _aggressiveOptions, cancellationToken);
-                    var ocrResult = await _ocrEngine.ProcessImageAsync(enhancedImage, cancellationToken);
-                    if (!string.IsNullOrWhiteSpace(ocrResult.Text)) textParts.Add(ocrResult.Text);
-                }
+                var (textParts, _) = await ProcessPagesInParallelAsync(pdfPath, pageCount, fileName, cancellationToken, null);
 
                 var ocrText = string.Join("\n", textParts);
                 if (string.IsNullOrWhiteSpace(ocrText)) continue;

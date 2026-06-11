@@ -7,23 +7,6 @@ namespace SeparadorDePdf.ImageProcessing;
 
 public class ImageProcessor : IImageProcessor
 {
-    private readonly List<IImageProcessingStep> _steps;
-
-    public ImageProcessor()
-    {
-        _steps = new List<IImageProcessingStep>
-        {
-            new GrayscaleProcessor(),
-            new DeskewProcessor(),
-            new DenoiseProcessor(),
-            new ContrastProcessor(),
-            new BrightnessProcessor(),
-            new ThresholdProcessor(),
-            new SharpenProcessor(),
-            new ResizeProcessor()
-        };
-    }
-
     public async Task<byte[]> EnhanceAsync(byte[] imageData, ImageProcessingOptions options, CancellationToken cancellationToken = default)
     {
         return await Task.Run(() =>
@@ -35,13 +18,11 @@ public class ImageProcessor : IImageProcessor
                 return imageData;
 
             var current = mat.Clone();
-            foreach (var step in _steps)
+            foreach (var step in CreateSteps(options))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!step.IsEnabled)
                     continue;
-
-                ApplyStepOptions(step, options);
                 var processed = step.Process(current);
                 current.Dispose();
                 current = processed;
@@ -58,34 +39,18 @@ public class ImageProcessor : IImageProcessor
         return Processors.EmptyPageDetector.IsEmptyPage(imageData, varianceThreshold);
     }
 
-    private void ApplyStepOptions(IImageProcessingStep step, ImageProcessingOptions options)
+    private static List<IImageProcessingStep> CreateSteps(ImageProcessingOptions options)
     {
-        step.IsEnabled = step switch
+        return new List<IImageProcessingStep>
         {
-            GrayscaleProcessor => options.EnableGrayscale,
-            DeskewProcessor => options.EnableDeskew,
-            DenoiseProcessor => options.EnableDenoise,
-            ContrastProcessor => options.EnableContrast,
-            BrightnessProcessor => options.EnableBrightness,
-            ThresholdProcessor => options.EnableThreshold,
-            SharpenProcessor => options.EnableSharpen,
-            ResizeProcessor => options.EnableResize,
-            _ => step.IsEnabled
+            new GrayscaleProcessor { IsEnabled = options.EnableGrayscale },
+            new DeskewProcessor { IsEnabled = options.EnableDeskew },
+            new DenoiseProcessor { IsEnabled = options.EnableDenoise },
+            new ContrastProcessor { IsEnabled = options.EnableContrast, ClipLimit = options.ContrastClipLimit },
+            new BrightnessProcessor { IsEnabled = options.EnableBrightness, Alpha = options.BrightnessAlpha, Beta = options.BrightnessBeta },
+            new ThresholdProcessor { IsEnabled = options.EnableThreshold },
+            new SharpenProcessor { IsEnabled = options.EnableSharpen },
+            new ResizeProcessor { IsEnabled = options.EnableResize, ScaleFactor = options.ResizeScale, TargetDpi = options.TargetDpi }
         };
-
-        if (step is ContrastProcessor contrast)
-            contrast.ClipLimit = options.ContrastClipLimit;
-
-        if (step is BrightnessProcessor brightness)
-        {
-            brightness.Alpha = options.BrightnessAlpha;
-            brightness.Beta = options.BrightnessBeta;
-        }
-
-        if (step is ResizeProcessor resize)
-        {
-            resize.ScaleFactor = options.ResizeScale;
-            resize.TargetDpi = options.TargetDpi;
-        }
     }
 }
