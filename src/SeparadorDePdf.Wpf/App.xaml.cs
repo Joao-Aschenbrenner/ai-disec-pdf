@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
 using SeparadorDePdf.Core.Interfaces;
@@ -16,7 +17,7 @@ public partial class App : System.Windows.Application
 {
     private ServiceProvider? _serviceProvider;
 
-protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
@@ -26,12 +27,27 @@ protected override void OnStartup(StartupEventArgs e)
 
         SetupGlobalExceptionHandling();
 
+        var log = _serviceProvider.GetRequiredService<ILogService>();
+        log.Info("Aplicacao iniciada");
+
+        try
+        {
+            await _serviceProvider.GetRequiredService<IProcessingHistoryRepository>().InitializeAsync();
+            log.Info("Banco de dados inicializado");
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Erro ao inicializar banco de dados");
+        }
+
         var vm = _serviceProvider.GetRequiredService<ViewModels.MainViewModel>();
+        log.Info("ViewModel criado");
+
         var mainWindow = new Views.MainView { DataContext = vm };
         MainWindow = mainWindow;
         mainWindow.Show();
 
-        _serviceProvider.GetRequiredService<IProcessingHistoryRepository>().InitializeAsync().ConfigureAwait(false);
+        log.Info("Janela principal aberta");
     }
 
     private void SetupGlobalExceptionHandling()
@@ -60,13 +76,13 @@ protected override void OnStartup(StartupEventArgs e)
 
     private static void ConfigureServices(IServiceCollection services)
     {
-    services.AddSingleton<ILogService, LogService>();
-    services.AddSingleton<IImageProcessor, ImageProcessor>();
-    services.AddSingleton<IOcrEngine, TesseractOcrEngine>();
-    services.AddSingleton<IClassificationCache, OcrCache>();
-    services.AddSingleton<RegexDocumentClassifier, RegexDocumentClassifier>();
-    services.AddSingleton<IDocumentClassifier, CompositeClassifier>();
-    services.AddSingleton<IDataExtractor, RegexDataExtractor>();
+        services.AddSingleton<ILogService, LogService>();
+        services.AddSingleton<IImageProcessor, ImageProcessor>();
+        services.AddSingleton<IOcrEngine, TesseractOcrEngine>();
+        services.AddSingleton<IClassificationCache, OcrCache>();
+        services.AddSingleton<RegexDocumentClassifier, RegexDocumentClassifier>();
+        services.AddSingleton<IDocumentClassifier, CompositeClassifier>();
+        services.AddSingleton<IDataExtractor, RegexDataExtractor>();
         services.AddSingleton<IPdfRenderer, PdfRendererService>();
         services.AddSingleton<IFileOrganizer, FileOrganizerService>();
         services.AddSingleton<IProcessingHistoryRepository, ProcessingHistoryRepository>();

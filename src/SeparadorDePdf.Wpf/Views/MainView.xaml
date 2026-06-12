@@ -23,17 +23,6 @@
             </Setter>
         </Style>
 
-        <Style x:Key="TitleText" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="20"/>
-            <Setter Property="FontWeight" Value="Bold"/>
-            <Setter Property="Foreground" Value="#1A237E"/>
-        </Style>
-
-        <Style x:Key="SubtitleText" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Foreground" Value="#666"/>
-        </Style>
-
         <Style x:Key="SectionText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
@@ -41,22 +30,34 @@
             <Setter Property="Margin" Value="0,0,0,8"/>
         </Style>
 
-        <Style x:Key="ActionButton" TargetType="Button">
-            <Setter Property="Height" Value="40"/>
-            <Setter Property="Padding" Value="20,0"/>
+        <Style x:Key="StepBadge" TargetType="Border">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="CornerRadius" Value="14"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,12,0"/>
+        </Style>
+
+        <Style x:Key="StepCard" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="14"/>
+            <Setter Property="Margin" Value="0,0,0,10"/>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="10" ShadowDepth="1" Opacity="0.08" Direction="270"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="StepButton" TargetType="Button">
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="Padding" Value="18,0"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Cursor" Value="Hand"/>
             <Setter Property="BorderThickness" Value="0"/>
-        </Style>
-
-        <Style x:Key="GreenButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
-            <Setter Property="Background" Value="#43A047"/>
-            <Setter Property="Foreground" Value="White"/>
-        </Style>
-
-        <Style x:Key="RedButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
-            <Setter Property="Background" Value="#E53935"/>
-            <Setter Property="Foreground" Value="White"/>
         </Style>
     </Window.Resources>
 
@@ -66,34 +67,37 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Border Background="#3949AB" Padding="24,20">
+        <!-- Header -->
+        <Border Background="#3949AB" Padding="24,16">
             <Grid>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="📄" FontSize="28" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <TextBlock Text="&#x1F4C4;" FontSize="26" VerticalAlignment="Center" Margin="0,0,12,0"/>
                     <StackPanel>
-                        <TextBlock Text="SEPARADOR DE PDF" FontSize="20" FontWeight="Bold" Foreground="White"/>
-                        <TextBlock Text="Organização automática com OCR" FontSize="12" Foreground="#CCFFFFFF"/>
+                        <TextBlock Text="SEPARADOR DE PDF" FontSize="18" FontWeight="Bold" Foreground="White"/>
+                        <TextBlock Text="OCR via Docker API - 3 etapas" FontSize="11" Foreground="#CCFFFFFF"/>
                     </StackPanel>
                 </StackPanel>
-                <TextBlock Text="{Binding StatusText}" FontSize="14" Foreground="White" VerticalAlignment="Center" HorizontalAlignment="Right"
+                <TextBlock Text="{Binding StatusText}" FontSize="13" Foreground="White" VerticalAlignment="Center" HorizontalAlignment="Right"
                            Visibility="{Binding IsProcessing, Converter={StaticResource InvertVisConverter}}"/>
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1" Margin="24">
+        <!-- Main Content -->
+        <Grid Grid.Row="1" Margin="20">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="360"/>
+                <ColumnDefinition Width="320"/>
             </Grid.ColumnDefinitions>
 
-            <Grid Margin="0,0,12,0">
+            <!-- Left: Config + Steps -->
+            <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,16">
+                <!-- Config Card -->
+                <Border Style="{StaticResource CardBorder}" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Text="CONFIGURAÇÃO" Style="{StaticResource SectionText}"/>
                         <Grid>
@@ -101,92 +105,150 @@
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
-                            <Grid Margin="0,0,0,12">
+                            <Grid Margin="0,0,0,10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBox Text="{Binding InputFilePath}" IsReadOnly="True" Padding="12,10" FontSize="13"
+                                <TextBox Text="{Binding InputFilePath}" IsReadOnly="True" Padding="10,8" FontSize="12"
                                          Background="#FAFAFA" BorderBrush="#E0E0E0" Margin="0,0,8,0"/>
                                 <Button Grid.Column="1" Content="Selecionar" Command="{Binding BrowseInputFileCommand}"
-                                        Background="#E8EAF6" Foreground="#3949AB" Padding="16,8" FontWeight="Medium"/>
+                                        Background="#E8EAF6" Foreground="#3949AB" Padding="14,6" FontWeight="Medium" FontSize="12"/>
                             </Grid>
                             <Grid Grid.Row="1">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBox Text="{Binding OutputFolder}" IsReadOnly="True" Padding="12,10" FontSize="13"
+                                <TextBox Text="{Binding OutputFolder}" IsReadOnly="True" Padding="10,8" FontSize="12"
                                          Background="#FAFAFA" BorderBrush="#E0E0E0" Margin="0,0,8,0"/>
                                 <Button Grid.Column="1" Content="Procurar" Command="{Binding BrowseOutputFolderCommand}"
-                                        Background="#E8EAF6" Foreground="#3949AB" Padding="16,8" FontWeight="Medium"/>
+                                        Background="#E8EAF6" Foreground="#3949AB" Padding="14,6" FontWeight="Medium" FontSize="12"/>
                             </Grid>
                         </Grid>
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Row="1" Style="{StaticResource CardBorder}" Margin="0,0,0,16">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-
-                        <Button Style="{StaticResource GreenButton}" Command="{Binding StartProcessingCommand}"
-                                Content="▶ INICIAR" IsEnabled="{Binding IsProcessing, Converter={StaticResource InvertBoolConverter}}"/>
-                        <Button Grid.Column="1" Style="{StaticResource RedButton}" Content="■ PARAR"
-                                Command="{Binding StopProcessingCommand}" IsEnabled="{Binding IsProcessing}" Margin="8,0"/>
-
-                        <ProgressBar Grid.Column="2" Value="{Binding ProgressPercentage}" Minimum="0" Maximum="100"
-                                     Width="40" Height="40" Visibility="{Binding IsProcessing, Converter={StaticResource BoolToVis}}"
-                                     Style="{StaticResource {x:Type ProgressBar}}"/>
-                    </Grid>
-                </Border>
-
-                <Border Grid.Row="2" Style="{StaticResource CardBorder}"
-                        Visibility="{Binding IsProcessing, Converter={StaticResource BoolToVis}}">
+                <!-- Steps -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Grid.Row="1">
                     <StackPanel>
-                        <TextBlock Text="PROGRESSO" Style="{StaticResource SectionText}"/>
-                        <TextBlock Text="{Binding CurrentFile}" FontSize="13" TextTrimming="CharacterEllipsis" Margin="0,0,0,12"/>
-                        <ProgressBar x:Name="ProgressBarControl" Value="{Binding ProgressPercentage}" Minimum="0" Maximum="100" Height="8"
-                                     Background="#E0E0E0" Foreground="#3949AB"/>
-                        <TextBlock Text="{Binding ProgressPercentage, StringFormat={}{0:F0}% concluído}" FontSize="12" Foreground="#666" Margin="0,8,0,12"/>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="✓" Foreground="#43A047" FontWeight="Bold"/>
-                                <TextBlock Text="{Binding SuccessCount, StringFormat={}{0} sucesso}" FontSize="14" Margin="4,0,0,0"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <TextBlock Text="✗" Foreground="#E53935" FontWeight="Bold"/>
-                                <TextBlock Text="{Binding ErrorCount, StringFormat={}{0} erros}" FontSize="14" Margin="4,0,0,0"/>
-                            </StackPanel>
-                        </Grid>
-                    </StackPanel>
-                </Border>
+                        <!-- Step 1: Pre-process -->
+                        <Border Style="{StaticResource StepCard}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
 
-                <Border Grid.Row="2" Style="{StaticResource CardBorder}"
-                        Visibility="{Binding IsProcessing, Converter={StaticResource InvertVisConverter}}">
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                        <TextBlock Text="☁️" FontSize="48" HorizontalAlignment="Center" Opacity="0.3"/>
-                        <TextBlock Text="Selecione um PDF e pasta de destino" FontSize="15" HorizontalAlignment="Center" Margin="0,12,0,0" Opacity="0.5"/>
-                        <TextBlock Text="Depois clique em INICIAR" FontSize="13" HorizontalAlignment="Center" Margin="0,4,0,0" Opacity="0.3"/>
+                                <Border Style="{StaticResource StepBadge}" Background="#E3F2FD">
+                                    <TextBlock Text="1" FontWeight="Bold" FontSize="13" Foreground="#1565C0"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="PRÉ-PROCESSAMENTO" FontWeight="SemiBold" FontSize="13" Foreground="#333"/>
+                                    <TextBlock Text="{Binding Step1Status}" FontSize="11" Foreground="#888" Margin="0,2,0,0"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+
+                                <Button Grid.Column="2" Content="Preparar" Command="{Binding PreProcessCommand}"
+                                        Style="{StaticResource StepButton}"
+                                        Background="#E3F2FD" Foreground="#1565C0"
+                                        IsEnabled="{Binding CanPreProcess}"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- Step 2: OCR -->
+                        <Border Style="{StaticResource StepCard}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Border Style="{StaticResource StepBadge}" Background="#FFF3E0">
+                                    <TextBlock Text="2" FontWeight="Bold" FontSize="13" Foreground="#E65100"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="OCR (DOCKER API)" FontWeight="SemiBold" FontSize="13" Foreground="#333"/>
+                                    <TextBlock Text="{Binding Step2Status}" FontSize="11" Foreground="#888" Margin="0,2,0,0"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+
+                                <Button Grid.Column="2" Content="Processar" Command="{Binding RunOcrCommand}"
+                                        Style="{StaticResource StepButton}"
+                                        Background="#FFF3E0" Foreground="#E65100"
+                                        IsEnabled="{Binding CanRunOcr}"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- Step 3: Classify + ZIP -->
+                        <Border Style="{StaticResource StepCard}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <Border Style="{StaticResource StepBadge}" Background="#E8F5E9">
+                                    <TextBlock Text="3" FontWeight="Bold" FontSize="13" Foreground="#2E7D32"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <TextBlock Text="SEPARAR + ZIP" FontWeight="SemiBold" FontSize="13" Foreground="#333"/>
+                                    <TextBlock Text="{Binding Step3Status}" FontSize="11" Foreground="#888" Margin="0,2,0,0"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+
+                                <Button Grid.Column="2" Content="Separar" Command="{Binding SeparateCommand}"
+                                        Style="{StaticResource StepButton}"
+                                        Background="#E8F5E9" Foreground="#2E7D32"
+                                        IsEnabled="{Binding CanSeparate}"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- Progress Bar (visible when any step is running) -->
+                        <Border Style="{StaticResource StepCard}"
+                                Visibility="{Binding IsProcessing, Converter={StaticResource BoolToVis}}">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,8">
+                                    <TextBlock Text="PROGRESSO GERAL" Style="{StaticResource SectionText}" Margin="0"/>
+                                    <TextBlock Text="{Binding ProgressPercentage, StringFormat={}{0:F0}%}" HorizontalAlignment="Right"
+                                               FontSize="12" FontWeight="Bold" Foreground="#3949AB"/>
+                                </Grid>
+                                <ProgressBar x:Name="ProgressBarControl" Value="{Binding ProgressPercentage}" Minimum="0" Maximum="100" Height="8"
+                                             Background="#E0E0E0" Foreground="#3949AB"/>
+                                <Grid Margin="0,8,0,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#x2714;" Foreground="#43A047" FontWeight="Bold"/>
+                                        <TextBlock Text="{Binding SuccessCount, StringFormat={}{0} sucesso}" FontSize="12" Margin="4,0,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                        <TextBlock Text="&#x2718;" Foreground="#E53935" FontWeight="Bold"/>
+                                        <TextBlock Text="{Binding ErrorCount, StringFormat={}{0} erros}" FontSize="12" Margin="4,0,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
-                </Border>
+                </ScrollViewer>
             </Grid>
 
-            <Border Grid.Column="1" Style="{StaticResource CardBorder}">
+            <!-- Right: Logs -->
+            <Border Grid.Column="1" Style="{StaticResource CardBorder}" Margin="12,0,0,0">
                 <DockPanel>
                     <Grid DockPanel.Dock="Top">
                         <TextBlock Text="LOGS" Style="{StaticResource SectionText}" Margin="0,0,0,8"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <Button Command="{Binding ExportLogsCommand}" Content="Exportar" Padding="8,4" FontSize="12"
+                            <Button Command="{Binding ExportLogsCommand}" Content="Exportar" Padding="8,4" FontSize="11"
                                     Background="Transparent" Foreground="#666" BorderThickness="0" Margin="0,0,4,0"/>
-                            <Button Command="{Binding ClearHistoryCommand}" Content="Limpar" Padding="8,4" FontSize="12"
+                            <Button Command="{Binding ClearHistoryCommand}" Content="Limpar" Padding="8,4" FontSize="11"
                                     Background="Transparent" Foreground="#666" BorderThickness="0"/>
                         </StackPanel>
                     </Grid>
@@ -201,16 +263,16 @@
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Padding="8,6" CornerRadius="6" Background="#FAFAFA">
+                                <Border Padding="8,5" CornerRadius="6" Background="#FAFAFA">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="55"/>
-                                            <ColumnDefinition Width="50"/>
+                                            <ColumnDefinition Width="44"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="{Binding Timestamp, StringFormat={}{0:HH:mm:ss}}"
-                                                   FontFamily="Consolas" FontSize="11" Opacity="0.5"/>
-                                        <Border Grid.Column="1" CornerRadius="4" Padding="4,2" HorizontalAlignment="Left">
+                                                   FontFamily="Consolas" FontSize="10" Opacity="0.5"/>
+                                        <Border Grid.Column="1" CornerRadius="4" Padding="3,1" HorizontalAlignment="Left">
                                             <Border.Style>
                                                 <Style TargetType="Border">
                                                     <Setter Property="Background" Value="#E8F5E9"/>
@@ -227,7 +289,7 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
-                                            <TextBlock Text="{Binding Level}" FontSize="10" FontWeight="Bold">
+                                            <TextBlock Text="{Binding Level}" FontSize="9" FontWeight="Bold">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="#2E7D32"/>
@@ -246,7 +308,7 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                         </Border>
-                                        <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" FontSize="12" Margin="8,0,0,0"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" FontSize="11" Margin="6,0,0,0"/>
                                     </Grid>
                                 </Border>
                             </DataTemplate>

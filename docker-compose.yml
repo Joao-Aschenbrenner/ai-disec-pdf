@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  ocr-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pdf-separator-ocr
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+    environment:
+      - TESSERACT_CMD=/usr/bin/tesseract
+      - TESSERACT_LANG=por+eng
+      - OCR_DPI=300
+      - OCR_MAX_WORKERS=4
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
+
+networks:
+  default:
+    name: pdf-separator-network

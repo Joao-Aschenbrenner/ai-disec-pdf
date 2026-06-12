@@ -1,3 +1,4 @@
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
@@ -20,8 +21,9 @@ public partial class MainView : Window
         var targetValue = e.NewValue;
         var currentValue = _lastProgressValue;
 
-        if (Math.Abs(targetValue - currentValue) < 0.5)
+        if (Math.Abs(targetValue - currentValue) < 0.3)
         {
+            ProgressBarControl.Value = targetValue;
             _lastProgressValue = targetValue;
             return;
         }
@@ -30,8 +32,8 @@ public partial class MainView : Window
         {
             From = currentValue,
             To = targetValue,
-            Duration = new Duration(TimeSpan.FromMilliseconds(300)),
-            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
+            Duration = new Duration(TimeSpan.FromMilliseconds(400)),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
         };
 
         _lastProgressValue = targetValue;

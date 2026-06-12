@@ -1,7 +1,10 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using SeparadorDePdf.Core.Enums;
@@ -18,12 +21,9 @@ public class PythonPdfProcessor : IPdfProcessor
     private readonly IFileOrganizer _fileOrganizer;
     private readonly IProcessingHistoryRepository _historyRepository;
     private readonly ILogService _logService;
+    private readonly HttpClient _http;
 
-    private static string PythonPath =>
-        @"C:\Users\USUARIO\AppData\Local\Programs\Python\Python312\python.exe";
-
-    private static string ScriptPath =>
-        Path.Combine(AppContext.BaseDirectory, "ocr_processor.py");
+    private const string ApiBase = "http://localhost:8000";
 
     public PythonPdfProcessor(
         IDocumentClassifier classifier,
@@ -37,6 +37,7 @@ public class PythonPdfProcessor : IPdfProcessor
         _fileOrganizer = fileOrganizer;
         _historyRepository = historyRepository;
         _logService = logService;
+        _http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
     }
 
     public async Task<ProcessingResult> ProcessAsync(
@@ -49,7 +50,7 @@ public class PythonPdfProcessor : IPdfProcessor
 
         try
         {
-            _logService.Info($"Processando (Python OCR): {fileName}", pdfPath);
+            _logService.Info($"Processando (Docker OCR): {fileName}", pdfPath);
             progress?.Report(2);
 
             if (!File.Exists(pdfPath))
@@ -67,66 +68,19 @@ public class PythonPdfProcessor : IPdfProcessor
 
             progress?.Report(10);
 
-            var scriptDir = Path.GetDirectoryName(ScriptPath) ?? AppContext.BaseDirectory;
-            var scriptFile = ScriptPath;
+            // Step 1: Upload PDF to API
+            _logService.Info($"Enviando PDF para Docker OCR: {fileName}", pdfPath);
+            var jobId = await UploadPdfAsync(pdfPath, cancellationToken);
+            progress?.Report(20);
 
-            if (!File.Exists(scriptFile))
-            {
-                var srcScript = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "src", "PdfProcessorPython", "ocr_processor.py");
-                if (File.Exists(srcScript))
-                    scriptFile = srcScript;
-                else
-                    return ProcessingResult.Fail(pdfPath, $"Script não encontrado: {scriptFile}", sw.Elapsed);
-            }
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = PythonPath,
-                Arguments = $"\"{scriptFile}\" \"{pdfPath}\" --json",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = Path.GetDirectoryName(scriptFile) ?? "."
-            };
-
-            using var process = new Process { StartInfo = psi };
-
-            var stderr = string.Empty;
-            process.ErrorDataReceived += (_, e) =>
-            {
-                if (e.Data != null)
-                    stderr += e.Data + "\n";
-            };
-
-            progress?.Report(15);
-            _logService.Info($"Iniciando OCR Python: {fileName}", pdfPath);
-
-            process.Start();
-            process.BeginErrorReadLine();
-
-            var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
-
-            await process.WaitForExitAsync(cancellationToken);
-
-            if (process.ExitCode != 0)
-            {
-                _logService.Error($"Python OCR falhou (exit {process.ExitCode}): {stderr}", pdfPath);
-                return ProcessingResult.Fail(pdfPath, $"Python OCR falhou: {stderr.Trim()}", sw.Elapsed);
-            }
-
+            // Step 2: Wait for result
+            _logService.Info($"Aguardando resultado OCR: {fileName}", pdfPath);
+            var result = await PollForResultAsync(jobId, progress, cancellationToken);
             progress?.Report(80);
 
-            var jsonResult = JsonSerializer.Deserialize<PythonOcrResult>(stdout);
-            if (jsonResult == null || !jsonResult.Success)
-            {
-                return ProcessingResult.Fail(pdfPath, jsonResult?.Error ?? "Resultado inválido", sw.Elapsed);
-            }
+            _logService.Info($"OCR completo: {result.PageCount} páginas, {result.TotalChars} chars, {result.AvgConfidence}% confiança", pdfPath);
 
-            _logService.Info($"OCR completo: {jsonResult.PageCount} páginas, {jsonResult.TotalChars} chars, {jsonResult.OcrTimeMs}ms OCR", pdfPath);
-
-            var ocrText = jsonResult.TotalText ?? string.Empty;
-            progress?.Report(85);
+            var ocrText = result.TotalText ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(ocrText))
             {
@@ -135,13 +89,14 @@ public class PythonPdfProcessor : IPdfProcessor
                 {
                     FilePath = pdfPath, FileName = fileName, Type = DocumentType.Desconhecido,
                     OcrText = string.Empty, FileHash = fileHash,
-                    PageCount = jsonResult.PageCount
+                    PageCount = result.PageCount
                 };
                 await _fileOrganizer.OrganizeAsync(failDoc, outputFolder, cancellationToken);
                 sw.Stop();
                 return ProcessingResult.Fail(pdfPath, "OCR falhou - texto vazio", sw.Elapsed);
             }
 
+            // Step 3: Classify, extract, organize
             var classification = await _classifier.ClassifyAsync(ocrText, cancellationToken);
             _logService.Info($"Classificado como {classification.Type} (conf: {classification.Confidence:P0}): {fileName}", pdfPath);
 
@@ -152,7 +107,7 @@ public class PythonPdfProcessor : IPdfProcessor
             {
                 FilePath = pdfPath, FileName = fileName, Type = classification.Type,
                 OcrText = ocrText,
-                OcrConfidence = (float)jsonResult.AvgConfidence,
+                OcrConfidence = (float)result.AvgConfidence,
                 ClassificationMethod = classification.Method,
                 ClassificationConfidence = classification.Confidence,
                 NumeroNota = extractedData["NumeroNota"],
@@ -162,7 +117,7 @@ public class PythonPdfProcessor : IPdfProcessor
                 NumeroImposto = extractedData["NumeroImposto"],
                 ChaveAcesso = extractedData["ChaveAcesso"],
                 FileHash = fileHash,
-                PageCount = jsonResult.PageCount
+                PageCount = result.PageCount
             };
 
             await _fileOrganizer.OrganizeAsync(document, outputFolder, cancellationToken);
@@ -188,17 +143,92 @@ public class PythonPdfProcessor : IPdfProcessor
             return ProcessingResult.Fail(pdfPath, ex.Message, sw.Elapsed);
         }
     }
-}
 
-public class PythonOcrResult
-{
-    public bool Success { get; set; }
-    public string? Error { get; set; }
-    public int PageCount { get; set; }
-    public string? TotalText { get; set; }
-    public int TotalChars { get; set; }
-    public double AvgConfidence { get; set; }
-    public int RenderTimeMs { get; set; }
-    public int OcrTimeMs { get; set; }
-    public int TotalTimeMs { get; set; }
+    private async Task<string> UploadPdfAsync(string pdfPath, CancellationToken ct)
+    {
+        using var content = new MultipartFormDataContent();
+        var fileBytes = await File.ReadAllBytesAsync(pdfPath);
+        var fileContent = new ByteArrayContent(fileBytes);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
+        content.Add(fileContent, "file", Path.GetFileName(pdfPath));
+
+        var response = await _http.PostAsync($"{ApiBase}/ocr?dpi=300&languages=por+eng", content, ct);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        var uploadResult = JsonSerializer.Deserialize<UploadResponse>(json);
+        return uploadResult?.JobId ?? throw new InvalidOperationException("No job_id in response");
+    }
+
+    private async Task<OcrApiResult> PollForResultAsync(string jobId, IProgress<double>? progress, CancellationToken ct)
+    {
+        var startTime = Stopwatch.StartNew();
+        const int maxWaitMs = 60 * 60 * 1000; // 1 hour max
+
+        while (startTime.ElapsedMilliseconds < maxWaitMs)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var response = await _http.GetAsync($"{ApiBase}/ocr/{jobId}", ct);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            var result = JsonSerializer.Deserialize<OcrApiResult>(json);
+
+            if (result is null)
+                throw new InvalidOperationException("Invalid response from OCR API");
+
+            if (result.Status == "done")
+            {
+                // Report progress based on page processing (approximate)
+                progress?.Report(75);
+                return result;
+            }
+
+            if (result.Status == "error")
+                throw new InvalidOperationException($"OCR API error: {result.Error}");
+
+            // Estimate progress: assume ~70% of time is OCR processing
+            if (result.PageCount > 0 && result.Status == "processing")
+                progress?.Report(20 + Math.Min(55, (double)result.PageCount / result.PageCount * 55));
+
+            await Task.Delay(2000, ct); // Poll every 2 seconds
+        }
+
+        throw new TimeoutException("OCR processing timed out after 1 hour");
+    }
+
+    private class UploadResponse
+    {
+        [JsonPropertyName("job_id")]
+        public string JobId { get; set; } = "";
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = "";
+    }
+
+    private class OcrApiResult
+    {
+        [JsonPropertyName("job_id")]
+        public string JobId { get; set; } = "";
+        [JsonPropertyName("status")]
+        public string Status { get; set; } = "";
+        [JsonPropertyName("pdf_name")]
+        public string PdfName { get; set; } = "";
+        [JsonPropertyName("page_count")]
+        public int PageCount { get; set; }
+        [JsonPropertyName("total_text")]
+        public string? TotalText { get; set; }
+        [JsonPropertyName("total_chars")]
+        public int TotalChars { get; set; }
+        [JsonPropertyName("avg_confidence")]
+        public double AvgConfidence { get; set; }
+        [JsonPropertyName("render_time_ms")]
+        public int RenderTimeMs { get; set; }
+        [JsonPropertyName("ocr_time_ms")]
+        public int OcrTimeMs { get; set; }
+        [JsonPropertyName("total_time_ms")]
+        public int TotalTimeMs { get; set; }
+        [JsonPropertyName("error")]
+        public string? Error { get; set; }
+    }
 }
