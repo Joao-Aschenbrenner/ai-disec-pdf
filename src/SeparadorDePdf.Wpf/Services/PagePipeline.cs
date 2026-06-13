@@ -214,6 +214,8 @@ public class PagePipeline
                 PagesProcessed = success,
                 PagesFailed = failed
             });
+
+            await Task.Yield();
         }
 
         _logService.Info("[PIPELINE] Detectando agrupamentos...", pdfPath);

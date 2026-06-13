@@ -102,7 +102,7 @@ public class JobManager : IDisposable
                     }
 
                     var now = DateTime.UtcNow;
-                    if ((now - lastProgressReport).TotalMilliseconds >= 500 || p.ProgressPercent >= 100)
+                    if ((now - lastProgressReport).TotalMilliseconds >= 200 || p.ProgressPercent >= 100)
                     {
                         lastProgressReport = now;
                         ReportProgress(job);

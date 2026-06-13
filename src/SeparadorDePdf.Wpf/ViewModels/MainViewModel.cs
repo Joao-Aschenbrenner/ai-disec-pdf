@@ -61,7 +61,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _logFlushTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMilliseconds(300)
+            Interval = TimeSpan.FromMilliseconds(150)
         };
         _logFlushTimer.Tick += FlushLogBuffer;
         _logFlushTimer.Start();
