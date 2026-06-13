@@ -63,14 +63,24 @@ public class PdfRendererService : IPdfRenderer
 
     public async IAsyncEnumerable<byte[]> RenderPagesStreamingAsync(string pdfPath, int dpi = 300, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var threadId = Thread.CurrentThread.ManagedThreadId;
+        _logService?.Info($"[RenderPagesStreamingAsync] Thread={threadId} Starting: {pdfPath}");
+
         PdfDocument? document = null;
         try
         {
+            var openSw = Stopwatch.StartNew();
             document = await Task.Run(() => PdfDocument.Open(pdfPath), cancellationToken);
+            openSw.Stop();
+            _logService?.Info($"[RenderPagesStreamingAsync] Thread={threadId} Document opened in {openSw.ElapsedMilliseconds}ms, Pages={document.NumberOfPages}");
 
             for (int i = 1; i <= document.NumberOfPages; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                var pageThreadId = Thread.CurrentThread.ManagedThreadId;
+                _logService?.Info($"[RenderPagesStreamingAsync] Thread={pageThreadId} Starting render page {i}/{document.NumberOfPages}");
+                var pageSw = Stopwatch.StartNew();
 
                 byte[] pageData;
                 try
@@ -85,6 +95,9 @@ public class PdfRendererService : IPdfRenderer
                     pageData = Array.Empty<byte>();
                 }
 
+                pageSw.Stop();
+                _logService?.Info($"[RenderPagesStreamingAsync] Thread={pageThreadId} Completed render page {i}/{document.NumberOfPages} in {pageSw.ElapsedMilliseconds}ms, Size={pageData.Length} bytes");
+
                 yield return pageData;
             }
         }
@@ -96,6 +109,8 @@ public class PdfRendererService : IPdfRenderer
 
     public async Task<PdfInfo> GetPdfInfoAsync(string pdfPath, CancellationToken cancellationToken = default)
     {
+        var threadId = Thread.CurrentThread.ManagedThreadId;
+        _logService?.Info($"[GetPdfInfoAsync] Thread={threadId} Starting: {pdfPath}");
         var sw = Stopwatch.StartNew();
         var fileInfo = new FileInfo(pdfPath);
 
@@ -103,11 +118,15 @@ public class PdfRendererService : IPdfRenderer
         {
             var pageCount = await Task.Run(() =>
             {
+                var innerThreadId = Thread.CurrentThread.ManagedThreadId;
+                _logService?.Info($"[GetPdfInfoAsync] Task.Run Thread={innerThreadId} Opening PDF");
                 using var document = PdfDocument.Open(pdfPath);
+                _logService?.Info($"[GetPdfInfoAsync] Task.Run Thread={innerThreadId} PDF opened, Pages={document.NumberOfPages}");
                 return document.NumberOfPages;
             }, cancellationToken);
 
             sw.Stop();
+            _logService?.Info($"[GetPdfInfoAsync] Thread={threadId} Completed in {sw.ElapsedMilliseconds}ms, Pages={pageCount}, Size={fileInfo.Length}");
             return new PdfInfo
             {
                 FilePath = pdfPath,
@@ -120,6 +139,7 @@ public class PdfRendererService : IPdfRenderer
         catch (Exception ex)
         {
             sw.Stop();
+            _logService?.Info($"[GetPdfInfoAsync] Thread={threadId} Failed in {sw.ElapsedMilliseconds}ms");
             _logService?.Error(ex, $"Falha ao obter info do PDF: {pdfPath}");
             return new PdfInfo
             {
@@ -134,11 +154,18 @@ public class PdfRendererService : IPdfRenderer
 
     public async Task<int> GetPageCountAsync(string pdfPath, CancellationToken cancellationToken = default)
     {
-        return await Task.Run(() =>
+        var threadId = Thread.CurrentThread.ManagedThreadId;
+        _logService?.Info($"[GetPageCountAsync] Thread={threadId} Starting: {pdfPath}");
+        var sw = Stopwatch.StartNew();
+
+        var result = await Task.Run(() =>
         {
+            var innerThreadId = Thread.CurrentThread.ManagedThreadId;
+            _logService?.Info($"[GetPageCountAsync] Task.Run Thread={innerThreadId} Opening PDF");
             try
             {
                 using var document = PdfDocument.Open(pdfPath);
+                _logService?.Info($"[GetPageCountAsync] Task.Run Thread={innerThreadId} PDF opened, Pages={document.NumberOfPages}");
                 return document.NumberOfPages;
             }
             catch (Exception ex)
@@ -147,12 +174,22 @@ public class PdfRendererService : IPdfRenderer
                 return 0;
             }
         }, cancellationToken);
+
+        sw.Stop();
+        _logService?.Info($"[GetPageCountAsync] Thread={threadId} Completed in {sw.ElapsedMilliseconds}ms, Pages={result}");
+        return result;
     }
 
     public async Task<bool> IsValidPdfAsync(string pdfPath, CancellationToken cancellationToken = default)
     {
-        return await Task.Run(() =>
+        var threadId = Thread.CurrentThread.ManagedThreadId;
+        _logService?.Info($"[IsValidPdfAsync] Thread={threadId} Starting: {pdfPath}");
+        var sw = Stopwatch.StartNew();
+
+        var result = await Task.Run(() =>
         {
+            var innerThreadId = Thread.CurrentThread.ManagedThreadId;
+            _logService?.Info($"[IsValidPdfAsync] Task.Run Thread={innerThreadId} Validating PDF");
             try
             {
                 if (!File.Exists(pdfPath))
@@ -162,6 +199,7 @@ public class PdfRendererService : IPdfRenderer
                     return false;
 
                 using var document = PdfDocument.Open(pdfPath);
+                _logService?.Info($"[IsValidPdfAsync] Task.Run Thread={innerThreadId} PDF opened, Pages={document.NumberOfPages}");
                 return document.NumberOfPages > 0;
             }
             catch (Exception ex)
@@ -170,5 +208,9 @@ public class PdfRendererService : IPdfRenderer
                 return false;
             }
         }, cancellationToken);
+
+        sw.Stop();
+        _logService?.Info($"[IsValidPdfAsync] Thread={threadId} Completed in {sw.ElapsedMilliseconds}ms, Valid={result}");
+        return result;
     }
 }

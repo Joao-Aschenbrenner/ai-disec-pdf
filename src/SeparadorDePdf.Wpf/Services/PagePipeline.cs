@@ -56,13 +56,15 @@ public class PagePipeline
         string outputFolder,
         int dpi,
         IProgress<PagePipelineProgress>? progress,
-        CancellationToken ct)
+        CancellationToken ct,
+        int pageCount = 0)
     {
         AuditLog.Clear();
         var swTotal = Stopwatch.StartNew();
         _logService.Info($"[PIPELINE] Iniciando processamento: {Path.GetFileName(pdfPath)}", pdfPath);
 
-        var pageCount = await _pdfRenderer.GetPageCountAsync(pdfPath, ct);
+        if (pageCount <= 0)
+            pageCount = await _pdfRenderer.GetPageCountAsync(pdfPath, ct);
         _logService.Info($"[PIPELINE] PDF tem {pageCount} páginas", pdfPath);
 
         progress?.Report(new PagePipelineProgress

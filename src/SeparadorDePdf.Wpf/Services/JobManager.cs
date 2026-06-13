@@ -111,7 +111,7 @@ public class JobManager : IDisposable
             });
 
             var groups = await _pagePipeline.ProcessAllPagesAsync(
-                job.InputFilePath, job.TempFolder, OcrDpi, pageProgress, ct);
+                job.InputFilePath, job.TempFolder, OcrDpi, pageProgress, ct, job.TotalPages);
 
             if (ct.IsCancellationRequested) { SetCancelled(job); return; }
 
@@ -215,8 +215,13 @@ public class JobManager : IDisposable
         if (!File.Exists(job.InputFilePath))
             throw new InvalidOperationException("Arquivo PDF não encontrado");
 
-        if (!await _pdfRenderer.IsValidPdfAsync(job.InputFilePath, ct))
-            throw new InvalidOperationException("Arquivo PDF inválido ou corrompido");
+        job.Step1Status = "Verificando integridade...";
+        ReportProgress(job);
+
+        var pdfInfo = await _pdfRenderer.GetPdfInfoAsync(job.InputFilePath, ct);
+
+        if (!pdfInfo.IsValid)
+            throw new InvalidOperationException($"Arquivo PDF inválido ou corrompido: {pdfInfo.ErrorMessage ?? "erro desconhecido"}");
 
         if (!_ocrEngine.IsAvailable)
             throw new InvalidOperationException(
@@ -224,10 +229,10 @@ public class JobManager : IDisposable
                 "Certifique-se de que a pasta tessdata/ existe com os arquivos por.traineddata e eng.traineddata.");
 
         job.OverallProgress = 5;
-        job.Step1Status = "Obtendo metadados...";
+        job.Step1Status = "Contando páginas...";
         ReportProgress(job);
 
-        var pageCount = await _pdfRenderer.GetPageCountAsync(job.InputFilePath, ct);
+        var pageCount = pdfInfo.PageCount;
         job.TotalPages = pageCount;
         job.OverallProgress = 10;
         job.Step1Status = $"{pageCount} páginas encontradas";
