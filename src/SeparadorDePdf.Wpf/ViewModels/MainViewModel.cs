@@ -297,10 +297,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         GroupsCreated = 0;
         EstimatedTimeRemaining = "";
         ElapsedTime = "";
-        Step1Status = "Validando...";
+        Step1Status = "Iniciando...";
         Step2Status = "";
         Step3Status = "";
-        IsStep1Active = false;
+        IsStep1Active = true;
         IsStep2Active = false;
         IsStep3Active = false;
         ResetProgress();
