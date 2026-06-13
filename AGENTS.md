@@ -11,7 +11,7 @@
 ## Checklist de Deploy WPF
 
 - [ ] `dotnet build SeparadorDePdf.sln` passa
-- [ ] `dotnet test` passa (187 testes)
+- [ ] `dotnet test` passa (282 testes)
 - [ ] `dotnet publish ... -o publish_wpf` executado
 - [ ] `tessdata` copiado para `publish_wpf`
 - [ ] Processo antigo morto (`Get-Process SeparadorDePdf.Wpf | Stop-Process -Force`)
@@ -29,6 +29,20 @@ Get-Process SeparadorDePdf.Wpf -ErrorAction SilentlyContinue | Stop-Process -For
 Start-Sleep 1
 Copy-Item publish_nonSF\tessdata publish_wpf\tessdata -Recurse -Force
 Start-Process publish_wpf\SeparadorDePdf.Wpf.exe
+```
+
+## Quality Gate (Fase 3B)
+
+Antes de publish, validar:
+1. Todos os 282 testes passam (`dotnet test`)
+2. Golden files passam (10 tipos documentais)
+3. Performance: classificação <100ms/página, extração <50ms/página, agrupamento 500 páginas <100ms
+
+```powershell
+# Quality gate completo
+dotnet test tests/SeparadorDePdf.Tests/SeparadorDePdf.Tests.csproj --no-restore --verbosity quiet
+# Benchmarks (opcional, ~3 min)
+dotnet run --project src/SeparadorDePdf.Benchmarks/SeparadorDePdf.Benchmarks.csproj -c Release
 ```
 
 ## Atualizar Atalho

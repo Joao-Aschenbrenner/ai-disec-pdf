@@ -1,0 +1,8 @@
+{
+  "tipo": "Recibo",
+  "numero": null,
+  "nome": "JOAO SANTOS",
+  "valor": "1200.00",
+  "needsReview": false,
+  "ocrText": "RECIBO\nRECEBEMOS DE JOAO SANTOS\nO valor de R$ 1.200,00\nReferente a prestacao de servicos\nData: 01/01/2024"
+}

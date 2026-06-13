@@ -23,4 +23,10 @@
     <ProjectReference Include="..\..\src\SeparadorDePdf.Services\SeparadorDePdf.Services.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="GoldenFiles\**\expected.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>

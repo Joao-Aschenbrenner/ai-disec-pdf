@@ -92,15 +92,18 @@ public class RegexDocumentClassifier : IDocumentClassifier
             new() { Type = DocumentType.PlanilhaBalanco, Keyword = "PATRIMONIAL", Score = 3 },
 
             new() { Type = DocumentType.Holerite, Keyword = "HOLERITE", Score = 5 },
+            new() { Type = DocumentType.Holerite, Keyword = "CONTRACHEQUE", Score = 5 },
             new() { Type = DocumentType.Holerite, Keyword = "RECIBO DE PAGAMENTO", Score = 4 },
             new() { Type = DocumentType.Holerite, Keyword = "VENCIMENTOS", Score = 3 },
             new() { Type = DocumentType.Holerite, Keyword = "DESCONTOS", Score = 3 },
             new() { Type = DocumentType.Holerite, Keyword = "FOLHA DE PAGAMENTO", Score = 4 },
             new() { Type = DocumentType.Holerite, Keyword = "REMUNERAÇÃO", Score = 3 },
+            new() { Type = DocumentType.Holerite, Keyword = "REMUNERACAO", Score = 3 },
             new() { Type = DocumentType.Holerite, Keyword = "RENDIMENTO", Score = 2 },
             new() { Type = DocumentType.Holerite, Keyword = "INSS", Score = 2 },
             new() { Type = DocumentType.Holerite, Keyword = "FGTS", Score = 2 },
             new() { Type = DocumentType.Holerite, Keyword = "SALÁRIO", Score = 2 },
+            new() { Type = DocumentType.Holerite, Keyword = "SALARIO", Score = 2 },
             new() { Type = DocumentType.Holerite, Keyword = "ADIANTAMENTO", Score = 2 },
 
             new() { Type = DocumentType.Imposto, Keyword = "DARF", Score = 5 },

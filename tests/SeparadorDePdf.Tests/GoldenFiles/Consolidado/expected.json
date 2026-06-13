@@ -1,0 +1,9 @@
+{
+  "tipo": "Desconhecido",
+  "numero": null,
+  "nome": null,
+  "valor": null,
+  "needsReview": true,
+  "reviewReason": "Consolidado: 8 CNPJs detectados (limite: 5)",
+  "ocrText": "DOCUMENTO CONSOLIDADO\nCNPJ: 11.111.111/0001-11\nCNPJ: 22.222.222/0002-22\nCNPJ: 33.333.333/0003-33\nCNPJ: 44.444.444/0004-44\nCNPJ: 55.555.555/0005-55\nCNPJ: 66.666.666/0006-66\nCNPJ: 77.777.777/0007-77\nCNPJ: 88.888.888/0008-88\nR$ 1.000,00\nR$ 2.000,00\nR$ 3.000,00\nR$ 4.000,00\nR$ 5.000,00\nR$ 6.000,00\nR$ 7.000,00\nR$ 8.000,00\nR$ 9.000,00\nR$ 10.000,00\nR$ 11.000,00"
+}

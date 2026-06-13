@@ -1,0 +1,8 @@
+{
+  "tipo": "Contrato",
+  "numero": "456",
+  "nome": "EMPRESA ABC",
+  "valor": "50000.00",
+  "needsReview": false,
+  "ocrText": "CONTRATO DE LOCAÇÃO DE IMÓVEL\nCONTRATO N° 456\nCONTRATANTE: EMPRESA ABC\nCLÁUSULA PRIMEIRA: Objeto\nValor Total R$ 50.000,00\nPRAZO DE VIGÊNCIA: 12 meses"
+}
