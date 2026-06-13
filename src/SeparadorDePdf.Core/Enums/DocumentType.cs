@@ -6,5 +6,10 @@ public enum DocumentType
     PlanilhaBalanco,
     Holerite,
     Imposto,
+    Ferias,
+    Recibo,
+    Guia,
+    Contrato,
+    Servico,
     Desconhecido
 }

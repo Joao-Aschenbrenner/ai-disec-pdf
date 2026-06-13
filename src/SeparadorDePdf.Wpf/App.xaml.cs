@@ -3,13 +3,14 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Extensions.DependencyInjection;
-using SeparadorDePdf.Core.Interfaces;
 using SeparadorDePdf.Classifiers;
+using SeparadorDePdf.Core.Interfaces;
 using SeparadorDePdf.Extractors;
 using SeparadorDePdf.ImageProcessing;
 using SeparadorDePdf.Ocr;
 using SeparadorDePdf.Services;
 using SeparadorDePdf.Utils;
+using SeparadorDePdf.Wpf.Services;
 
 namespace SeparadorDePdf.Wpf;
 
@@ -89,6 +90,9 @@ public partial class App : System.Windows.Application
         services.AddSingleton<IPdfProcessor, PythonPdfProcessor>();
         services.AddSingleton<IBatchProcessor, BatchProcessingService>();
         services.AddSingleton<IFolderWatcher, FolderWatcherService>();
+        services.AddSingleton<IGroupDetector, GroupDetector>();
+        services.AddSingleton<IConsolidatedDocumentDetector, ConsolidatedDocumentDetector>();
+        services.AddSingleton<JobManager>();
         services.AddSingleton<ViewModels.MainViewModel>();
     }
 

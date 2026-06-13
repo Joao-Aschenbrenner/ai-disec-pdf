@@ -2,9 +2,9 @@ using System.Text.RegularExpressions;
 
 namespace SeparadorDePdf.Extractors;
 
-public static class HoleriteExtractor
+public static class FeriasExtractor
 {
-    private static readonly Regex NomeRegex = new(@"(?:NOME|FUNCION[ÁA]RIO|EMPREGADO|SERVIDOR)[:\s]+([A-ZÀ-Ú ]{3,50})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex NomeRegex = new(@"(?:NOME|FUNCION[ÁA]RIO|EMPREGADO|BENEFICI[ÁA]RIO)[:\s]+([A-ZÀ-Ú ]{3,50})", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static string? ExtractNome(string text)
     {
