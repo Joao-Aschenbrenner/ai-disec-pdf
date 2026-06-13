@@ -215,7 +215,7 @@ public class JobManager : IDisposable
         if (!File.Exists(job.InputFilePath))
             throw new InvalidOperationException("Arquivo PDF não encontrado");
 
-        if (!_pdfRenderer.IsValidPdf(job.InputFilePath))
+        if (!await _pdfRenderer.IsValidPdfAsync(job.InputFilePath, ct))
             throw new InvalidOperationException("Arquivo PDF inválido ou corrompido");
 
         if (!_ocrEngine.IsAvailable)

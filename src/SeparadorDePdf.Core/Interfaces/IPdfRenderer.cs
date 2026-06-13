@@ -8,5 +8,5 @@ public interface IPdfRenderer
     IAsyncEnumerable<byte[]> RenderPagesStreamingAsync(string pdfPath, int dpi = 300, CancellationToken cancellationToken = default);
     Task<PdfInfo> GetPdfInfoAsync(string pdfPath, CancellationToken cancellationToken = default);
     Task<int> GetPageCountAsync(string pdfPath, CancellationToken cancellationToken = default);
-    bool IsValidPdf(string pdfPath);
+    Task<bool> IsValidPdfAsync(string pdfPath, CancellationToken cancellationToken = default);
 }

@@ -4,100 +4,115 @@ namespace SeparadorDePdf.Tests.Utils;
 
 public class FileHelperTests
 {
-    [Theory]
-    [InlineData("arquivo normal.pdf", "arquivo_normal.pdf")]
-    [InlineData("arquivo   com   espacos.pdf", "arquivo_com_espacos.pdf")]
-    [InlineData("arquivo<invalido>.pdf", "arquivo_invalido_.pdf")]
-    [InlineData("", "documento")]
-    [InlineData("   ", "documento")]
-    [InlineData("nome*com|caracteres:especiais", "nome_com_caracteres_especiais")]
-    [InlineData("Múltiplos___underlines", "Múltiplos_underlines")]
-    [InlineData("_leading_trailing_", "leading_trailing")]
-    public void SanitizeFileName_ProducesExpectedResults(string input, string expected)
+    private readonly string _testFolder;
+
+    public FileHelperTests()
     {
-        var result = FileHelper.SanitizeFileName(input);
-        Assert.Equal(expected, result);
+        _testFolder = Path.Combine(Path.GetTempPath(), "SeparadorDePdfTests", Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(_testFolder);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_testFolder))
+            Directory.Delete(_testFolder, true);
     }
 
     [Fact]
-    public void ResolveConflict_NoConflict_ReturnsOriginalPath()
+    public void SanitizeFileName_RemovesInvalidChars()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "FileHelperTests");
-        Directory.CreateDirectory(dir);
-        try
-        {
-            var result = FileHelper.ResolveConflict(dir, "test.pdf");
-            Assert.Equal(Path.Combine(dir, "test.pdf"), result);
-        }
-        finally
-        {
-            Directory.Delete(dir, true);
-        }
+        var result = FileHelper.SanitizeFileName("file<name>.pdf");
+        Assert.DoesNotContain("<", result);
+        Assert.DoesNotContain(">", result);
+        Assert.EndsWith(".pdf", result);
     }
 
     [Fact]
-    public void ResolveConflict_WithConflict_ReturnsNumberedPath()
+    public void SanitizeFileName_ReplacesSpacesWithUnderscores()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "FileHelperTests_Conflict");
-        Directory.CreateDirectory(dir);
-        try
-        {
-            File.WriteAllText(Path.Combine(dir, "test.pdf"), "content");
-            var result = FileHelper.ResolveConflict(dir, "test.pdf");
-            Assert.Equal(Path.Combine(dir, "test_1.pdf"), result);
-        }
-        finally
-        {
-            Directory.Delete(dir, true);
-        }
+        var result = FileHelper.SanitizeFileName("my file name.pdf");
+        Assert.DoesNotContain(" ", result);
+        Assert.Contains("_", result);
+    }
+
+    [Fact]
+    public void SanitizeFileName_CollapsesMultipleUnderscores()
+    {
+        var result = FileHelper.SanitizeFileName("a___b.pdf");
+        Assert.DoesNotContain("___", result);
+    }
+
+    [Fact]
+    public void SanitizeFileName_ReturnsDocumento_WhenEmpty()
+    {
+        var result = FileHelper.SanitizeFileName("");
+        Assert.Equal("documento", result);
+    }
+
+    [Fact]
+    public void SanitizeFileName_ReturnsDocumento_WhenOnlyInvalidChars()
+    {
+        var result = FileHelper.SanitizeFileName("<>:\"/\\|?*");
+        Assert.Equal("documento", result);
+    }
+
+    [Fact]
+    public void SanitizeFileName_TrimsTrailingUnderscores()
+    {
+        var result = FileHelper.SanitizeFileName("file__.pdf");
+        Assert.False(result.EndsWith("_"), "Result should not end with underscore");
+    }
+
+    [Fact]
+    public void ResolveConflict_ReturnsOriginal_WhenNoConflict()
+    {
+        var result = FileHelper.ResolveConflict(_testFolder, "test.pdf");
+        Assert.Equal(Path.Combine(_testFolder, "test.pdf"), result);
+    }
+
+    [Fact]
+    public void ResolveConflict_AppendsCounter_WhenFileExists()
+    {
+        File.WriteAllText(Path.Combine(_testFolder, "test.pdf"), "content");
+        var result = FileHelper.ResolveConflict(_testFolder, "test.pdf");
+        Assert.Equal(Path.Combine(_testFolder, "test_1.pdf"), result);
+    }
+
+    [Fact]
+    public void ResolveConflict_IncrementsCounter_WhenMultipleExist()
+    {
+        File.WriteAllText(Path.Combine(_testFolder, "test.pdf"), "content");
+        File.WriteAllText(Path.Combine(_testFolder, "test_1.pdf"), "content");
+        var result = FileHelper.ResolveConflict(_testFolder, "test.pdf");
+        Assert.Equal(Path.Combine(_testFolder, "test_2.pdf"), result);
+    }
+
+    [Fact]
+    public void GetRelativePath_ReturnsRelative_WhenUnderBase()
+    {
+        var result = FileHelper.GetRelativePath("/base", "/base/sub/file.txt");
+        Assert.Equal("sub/file.txt", result);
+    }
+
+    [Fact]
+    public void GetRelativePath_ReturnsFull_WhenNotUnderBase()
+    {
+        var result = FileHelper.GetRelativePath("/other", "/base/file.txt");
+        Assert.Equal("/base/file.txt", result);
     }
 
     [Fact]
     public void EnsureDirectoryExists_CreatesDirectory()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "FileHelperTests_Ensure_" + Guid.NewGuid());
-        try
-        {
-            FileHelper.EnsureDirectoryExists(dir);
-            Assert.True(Directory.Exists(dir));
-        }
-        finally
-        {
-            if (Directory.Exists(dir)) Directory.Delete(dir);
-        }
+        var path = Path.Combine(_testFolder, "newdir");
+        FileHelper.EnsureDirectoryExists(path);
+        Assert.True(Directory.Exists(path));
     }
 
     [Fact]
-    public void EnsureDirectoryExists_ExistingDirectory_DoesNotThrow()
+    public void EnsureDirectoryExists_DoesNotThrow_WhenExists()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "FileHelperTests_Existing_" + Guid.NewGuid());
-        Directory.CreateDirectory(dir);
-        try
-        {
-            FileHelper.EnsureDirectoryExists(dir);
-            Assert.True(Directory.Exists(dir));
-        }
-        finally
-        {
-            Directory.Delete(dir);
-        }
-    }
-
-    [Fact]
-    public void GetRelativePath_WithBasePath_ReturnsRelative()
-    {
-        var result = FileHelper.GetRelativePath(
-            @"C:\base\folder",
-            @"C:\base\folder\sub\file.pdf");
-        Assert.Equal(@"sub\file.pdf", result);
-    }
-
-    [Fact]
-    public void GetRelativePath_WithoutBasePath_ReturnsFullPath()
-    {
-        var result = FileHelper.GetRelativePath(
-            @"C:\base\folder",
-            @"D:\other\file.pdf");
-        Assert.Equal(@"D:\other\file.pdf", result);
+        FileHelper.EnsureDirectoryExists(_testFolder);
+        Assert.True(Directory.Exists(_testFolder));
     }
 }

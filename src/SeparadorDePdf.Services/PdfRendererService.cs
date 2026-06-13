@@ -149,23 +149,26 @@ public class PdfRendererService : IPdfRenderer
         }, cancellationToken);
     }
 
-    public bool IsValidPdf(string pdfPath)
+    public async Task<bool> IsValidPdfAsync(string pdfPath, CancellationToken cancellationToken = default)
     {
-        try
+        return await Task.Run(() =>
         {
-            if (!File.Exists(pdfPath))
-                return false;
+            try
+            {
+                if (!File.Exists(pdfPath))
+                    return false;
 
-            if (new FileInfo(pdfPath).Length == 0)
-                return false;
+                if (new FileInfo(pdfPath).Length == 0)
+                    return false;
 
-            using var document = PdfDocument.Open(pdfPath);
-            return document.NumberOfPages > 0;
-        }
-        catch (Exception ex)
-        {
-            _logService?.Error(ex, $"Falha ao validar PDF: {pdfPath}");
-            return false;
-        }
+                using var document = PdfDocument.Open(pdfPath);
+                return document.NumberOfPages > 0;
+            }
+            catch (Exception ex)
+            {
+                _logService?.Error(ex, $"Falha ao validar PDF: {pdfPath}");
+                return false;
+            }
+        }, cancellationToken);
     }
 }

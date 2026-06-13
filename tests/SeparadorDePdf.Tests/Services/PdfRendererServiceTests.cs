@@ -79,13 +79,13 @@ public class PdfRendererServiceTests
     }
 
     [Fact]
-    public void IsValidPdf_ValidFile_ReturnsTrue()
+    public async Task IsValidPdfAsync_ValidFile_ReturnsTrue()
     {
         var pdfPath = CreateMinimalPdf();
         try
         {
             var service = new PdfRendererService(_logMock.Object);
-            Assert.True(service.IsValidPdf(pdfPath));
+            Assert.True(await service.IsValidPdfAsync(pdfPath));
         }
         finally
         {
@@ -94,20 +94,20 @@ public class PdfRendererServiceTests
     }
 
     [Fact]
-    public void IsValidPdf_NonExistentFile_ReturnsFalse()
+    public async Task IsValidPdfAsync_NonExistentFile_ReturnsFalse()
     {
         var service = new PdfRendererService(_logMock.Object);
-        Assert.False(service.IsValidPdf(@"C:\nonexistent.pdf"));
+        Assert.False(await service.IsValidPdfAsync(@"C:\nonexistent.pdf"));
     }
 
     [Fact]
-    public void IsValidPdf_EmptyFile_ReturnsFalse()
+    public async Task IsValidPdfAsync_EmptyFile_ReturnsFalse()
     {
         var pdfPath = Path.GetTempFileName();
         try
         {
             var service = new PdfRendererService(_logMock.Object);
-            Assert.False(service.IsValidPdf(pdfPath));
+            Assert.False(await service.IsValidPdfAsync(pdfPath));
         }
         finally
         {
@@ -140,14 +140,14 @@ public class PdfRendererServiceTests
     }
 
     [Fact]
-    public void IsValidPdf_InvalidHeader_ReturnsFalse()
+    public async Task IsValidPdfAsync_InvalidHeader_ReturnsFalse()
     {
         var pdfPath = Path.GetTempFileName();
         try
         {
             File.WriteAllText(pdfPath, "NOT_A_PDF");
             var service = new PdfRendererService(_logMock.Object);
-            Assert.False(service.IsValidPdf(pdfPath));
+            Assert.False(await service.IsValidPdfAsync(pdfPath));
         }
         finally
         {
