@@ -55,7 +55,7 @@ public class LogService : ILogService
                 _logs.RemoveAt(0);
         }
 
-        LogAdded?.Invoke(this, entry);
+        Task.Run(() => LogAdded?.Invoke(this, entry));
     }
 
     public IReadOnlyList<LogEntry> GetLogs()

@@ -208,15 +208,13 @@ public class JobManager : IDisposable
     {
         var sw = Stopwatch.StartNew();
         job.CurrentStep = JobStep.PreProcessing;
-        job.Step1Status = "Validando arquivo...";
-        _logService.Info($"[PRE-PROCESS] Iniciando: {job.FileName}", job.InputFilePath);
+        job.Step1Status = "Iniciando...";
         ReportProgress(job);
 
         if (!File.Exists(job.InputFilePath))
             throw new InvalidOperationException("Arquivo PDF não encontrado");
 
-        job.Step1Status = "Verificando integridade...";
-        ReportProgress(job);
+        _logService.Info($"[PRE-PROCESS] Thread={Thread.CurrentThread.ManagedThreadId} Carregando PDF: {job.FileName}", job.InputFilePath);
 
         var pdfInfo = await _pdfRenderer.GetPdfInfoAsync(job.InputFilePath, ct);
 
@@ -228,16 +226,12 @@ public class JobManager : IDisposable
                 "Tesseract OCR não está disponível. " +
                 "Certifique-se de que a pasta tessdata/ existe com os arquivos por.traineddata e eng.traineddata.");
 
-        job.OverallProgress = 5;
-        job.Step1Status = "Contando páginas...";
-        ReportProgress(job);
-
         var pageCount = pdfInfo.PageCount;
         job.TotalPages = pageCount;
         job.OverallProgress = 10;
-        job.Step1Status = $"{pageCount} páginas encontradas";
-        job.Step2Status = $"0/{pageCount} páginas processadas";
-        _logService.Info($"[PRE-PROCESS] PDF válido: {pageCount} páginas", job.InputFilePath);
+        job.Step1Status = $"{pageCount} páginas";
+        job.Step2Status = $"Processando {pageCount}...";
+        _logService.Info($"[PRE-PROCESS] PDF válido: {pageCount} páginas em {sw.ElapsedMilliseconds}ms", job.InputFilePath);
         ReportProgress(job);
     }
 
