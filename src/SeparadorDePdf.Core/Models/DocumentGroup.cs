@@ -17,6 +17,7 @@ public class DocumentGroup
     public NeedsReviewReason? ReviewReasonCode { get; set; }
     public List<PageResult> Pages { get; set; } = new();
     public string FileName { get; set; } = string.Empty;
+    public string? SavedFilePath { get; set; }
 
     public int PageCount => Pages.Count;
 

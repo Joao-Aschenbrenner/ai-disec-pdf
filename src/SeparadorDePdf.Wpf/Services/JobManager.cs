@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,7 +44,7 @@ public class JobManager : IDisposable
         _ocrEngine = ocrEngine;
     }
 
-    public void StartJob(string inputFilePath, string outputFolder)
+    public void StartJob(string inputFilePath)
     {
         if (IsRunning) return;
 
@@ -52,7 +53,6 @@ public class JobManager : IDisposable
         var job = new JobInfo
         {
             InputFilePath = inputFilePath,
-            OutputFolder = outputFolder,
             CurrentStep = JobStep.PreProcessing
         };
         CurrentJob = job;
@@ -73,6 +73,8 @@ public class JobManager : IDisposable
 
         try
         {
+            Directory.CreateDirectory(job.TempFolder);
+
             await PreProcessAsync(job, ct);
             if (ct.IsCancellationRequested) { SetCancelled(job); return; }
 
@@ -109,9 +111,16 @@ public class JobManager : IDisposable
             });
 
             var groups = await _pagePipeline.ProcessAllPagesAsync(
-                job.InputFilePath, job.OutputFolder, OcrDpi, pageProgress, ct);
+                job.InputFilePath, job.TempFolder, OcrDpi, pageProgress, ct);
 
             if (ct.IsCancellationRequested) { SetCancelled(job); return; }
+
+            job.Step3Status = "Criando arquivo ZIP...";
+            ReportProgress(job);
+
+            var zipPath = Path.Combine(job.TempFolder, "resultado.zip");
+            CreateZipFromGroups(groups, zipPath, ct);
+            job.ZipPath = zipPath;
 
             swTotal.Stop();
             var totalPages = groups.Sum(g => g.PageCount);
@@ -139,7 +148,7 @@ public class JobManager : IDisposable
                         DocumentType = group.DocumentType,
                         Status = group.NeedsReview ? ProcessingStatus.Error : ProcessingStatus.Completed,
                         NewFileName = group.FileName,
-                        DestinationFolder = job.OutputFolder,
+                        DestinationFolder = job.TempFolder,
                         ProcessedAt = DateTime.UtcNow
                     });
                 }
@@ -150,7 +159,7 @@ public class JobManager : IDisposable
             var pagesPerSec = totalMs > 0 ? (double)totalPages / totalMs * 1000 : 0;
             job.ResultSummary = $"{groups.Count} documentos ({totalPages} páginas) em {job.ElapsedTime} ({pagesPerSec:F1} págs/s)";
             job.Step1Status = $"{totalPages} páginas lidas";
-            job.Step3Status = $"{groups.Count} documentos salvos, {reviewCount} para revisão";
+            job.Step3Status = $"Pronto! Clique em BAIXAR para salvar o ZIP";
             _logService.Info($"[JOB] Concluído: {job.ResultSummary}", job.InputFilePath);
         }
         catch (OperationCanceledException)
@@ -174,6 +183,26 @@ public class JobManager : IDisposable
         }
     }
 
+    private static void CreateZipFromGroups(System.Collections.Generic.List<DocumentGroup> groups, string zipPath, CancellationToken ct)
+    {
+        if (File.Exists(zipPath))
+            File.Delete(zipPath);
+
+        using var zip = ZipFile.Open(zipPath, ZipArchiveMode.Create);
+        foreach (var group in groups)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (string.IsNullOrEmpty(group.SavedFilePath) || !File.Exists(group.SavedFilePath))
+                continue;
+
+            var entryName = FileHelper.SanitizeFileName(group.FileName);
+            if (!entryName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+                entryName += ".pdf";
+
+            zip.CreateEntryFromFile(group.SavedFilePath, entryName, CompressionLevel.Optimal);
+        }
+    }
+
     private async Task PreProcessAsync(JobInfo job, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -184,9 +213,6 @@ public class JobManager : IDisposable
 
         if (!File.Exists(job.InputFilePath))
             throw new InvalidOperationException("Arquivo PDF não encontrado");
-
-        if (!Directory.Exists(job.OutputFolder))
-            throw new InvalidOperationException("Pasta de destino não existe");
 
         if (!_pdfRenderer.IsValidPdf(job.InputFilePath))
             throw new InvalidOperationException("Arquivo PDF inválido ou corrompido");

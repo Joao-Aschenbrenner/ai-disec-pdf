@@ -265,6 +265,7 @@ public class PagePipeline
 
             var destPath = await SaveGroupAsPdfAsync(groupPageImages, outputFolder, group.FileName, ct);
             group.FileName = Path.GetFileName(destPath);
+            group.SavedFilePath = destPath;
 
             foreach (var page in group.Pages)
                 page.DestinationPath = destPath;
@@ -289,10 +290,11 @@ public class PagePipeline
         await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, dpi, ct))
         {
             pageIndex++;
-            if (pageIndex >= startPage && pageIndex <= endPage)
+            int zeroBased = pageIndex - 1;
+            if (zeroBased >= startPage && zeroBased <= endPage)
             {
                 images.Add(pageImage);
-                if (pageIndex >= endPage) break;
+                if (zeroBased >= endPage) break;
             }
         }
         return images;

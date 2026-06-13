@@ -17,8 +17,8 @@ public partial class JobInfo : ObservableObject
 {
     public string JobId { get; } = Guid.NewGuid().ToString("N")[..12];
     public string InputFilePath { get; set; } = string.Empty;
-    public string OutputFolder { get; set; } = string.Empty;
     public string FileName => System.IO.Path.GetFileName(InputFilePath);
+    public string TempFolder => System.IO.Path.Combine(System.IO.Path.GetTempPath(), "SeparadorDePdf", JobId);
 
     [ObservableProperty] private JobStep _currentStep = JobStep.Idle;
     [ObservableProperty] private double _overallProgress;
@@ -36,4 +36,5 @@ public partial class JobInfo : ObservableObject
     [ObservableProperty] private int _groupsCreated;
     [ObservableProperty] private string? _errorMessage;
     [ObservableProperty] private string? _resultSummary;
+    [ObservableProperty] private string? _zipPath;
 }

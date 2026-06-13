@@ -90,7 +90,7 @@
                 <!-- Config + Start -->
                 <Border Style="{StaticResource CardBorder}" Margin="0,0,0,10" Padding="18">
                     <StackPanel>
-                        <TextBlock Text="1. SELECIONE O PDF" FontSize="12" FontWeight="Bold" Foreground="#3949AB" Margin="0,0,0,8"/>
+                        <TextBlock Text="SELECIONE O PDF" FontSize="12" FontWeight="Bold" Foreground="#3949AB" Margin="0,0,0,8"/>
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -99,20 +99,6 @@
                             <TextBox Text="{Binding InputFilePath}" IsReadOnly="True" Padding="10,8" FontSize="12"
                                      Background="#FAFAFA" BorderBrush="#E0E0E0" Margin="0,0,8,0"/>
                             <Button Grid.Column="1" Content="PDF" Command="{Binding BrowseInputFileCommand}"
-                                    Width="80" Height="34" Background="#E8EAF6" Foreground="#3949AB"
-                                    FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand"
-                                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InvertBoolConverter}}"/>
-                        </Grid>
-
-                        <TextBlock Text="2. SELECIONE A PASTA DE DESTINO" FontSize="12" FontWeight="Bold" Foreground="#3949AB" Margin="0,4,0,8"/>
-                        <Grid Margin="0,0,0,6">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBox Text="{Binding OutputFolder}" IsReadOnly="True" Padding="10,8" FontSize="12"
-                                     Background="#FAFAFA" BorderBrush="#E0E0E0" Margin="0,0,8,0"/>
-                            <Button Grid.Column="1" Content="PASTA" Command="{Binding BrowseOutputFolderCommand}"
                                     Width="80" Height="34" Background="#E8EAF6" Foreground="#3949AB"
                                     FontWeight="Bold" FontSize="11" BorderThickness="0" Cursor="Hand"
                                     IsEnabled="{Binding IsProcessing, Converter={StaticResource InvertBoolConverter}}"/>
@@ -140,6 +126,11 @@
                                                    Visibility="{Binding EstimatedTimeRemaining, Converter={StaticResource StringNotEmptyToVis}}"/>
                                     </StackPanel>
                                 </StackPanel>
+                                <Button Content="&#x2B07;  BAIXAR ZIP" Command="{Binding DownloadZipCommand}"
+                                        Height="42" Padding="28,0" FontWeight="Bold" FontSize="14" Cursor="Hand" BorderThickness="0"
+                                        Background="#2E7D32" Foreground="White"
+                                        Visibility="{Binding CanDownload, Converter={StaticResource BoolToVis}}"
+                                        Grid.Column="1"/>
                             </Grid>
                         </Border>
                     </StackPanel>
