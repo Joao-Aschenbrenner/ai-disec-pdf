@@ -59,6 +59,7 @@ public class PagePipeline
         CancellationToken ct)
     {
         AuditLog.Clear();
+        var swTotal = Stopwatch.StartNew();
         _logService.Info($"[PIPELINE] Iniciando processamento: {Path.GetFileName(pdfPath)}", pdfPath);
 
         var pageCount = await _pdfRenderer.GetPageCountAsync(pdfPath, ct);
@@ -68,158 +69,193 @@ public class PagePipeline
         {
             TotalPages = pageCount,
             CurrentPage = 0,
-            Status = "Processando páginas...",
+            Status = "Renderizando páginas...",
             Step = PipelineStep.PreProcessing
         });
 
-        var pageResults = new List<PageResult>();
-
+        var swRender = Stopwatch.StartNew();
+        var allPageImages = new List<byte[]>(pageCount);
         await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, dpi, ct))
         {
-            int pageNum = pageResults.Count + 1;
             ct.ThrowIfCancellationRequested();
-
-            var sw = Stopwatch.StartNew();
-
-            var result = new PageResult { PageNumber = pageNum };
-
-            try
-            {
-                if (pageImage.Length == 0)
-                {
-                    result.ErrorMessage = "Falha ao renderizar página";
-                    result.Success = false;
-                    AddAudit(pageNum, "Render", DecisionReason.EmptyOcr, "Página vazia");
-                    pageResults.Add(result);
-                    continue;
-                }
-
-                var processedImage = pageImage;
-                if (_imageProcessor is not null)
-                {
-                    try
-                    {
-                        processedImage = await _imageProcessor.EnhanceAsync(pageImage, ImageProcessingOptions.Default, ct);
-                        AddAudit(pageNum, "PreProcessing", DecisionReason.NewDocument, "Imagem pré-processada");
-                    }
-                    catch (Exception ex)
-                    {
-                        _logService.Warning($"[PIPELINE] Página {pageNum} - pré-processamento falhou, usando original: {ex.Message}", pdfPath);
-                    }
-                }
-
-                var imageHash = ComputeHash(processedImage);
-                OcrResult? cachedOcr = null;
-
-                if (_ocrCache is not null)
-                {
-                    cachedOcr = await _ocrCache.GetAsync(imageHash);
-                    if (cachedOcr is not null)
-                        AddAudit(pageNum, "OCR", DecisionReason.FallbackUsed, $"Cache hit ({cachedOcr.Text.Length} chars)");
-                }
-
-                OcrResult ocrResult;
-                if (cachedOcr is not null)
-                {
-                    ocrResult = cachedOcr;
-                }
-                else
-                {
-                    ocrResult = await _ocrEngine.ProcessImageAsync(processedImage, ct);
-
-                    if (_ocrCache is not null)
-                        await _ocrCache.SetAsync(imageHash, ocrResult);
-                }
-
-                result.OcrText = ocrResult.Text;
-                result.OcrConfidence = ocrResult.MeanConfidence;
-                sw.Stop();
-
-                if (string.IsNullOrWhiteSpace(ocrResult.Text))
-                {
-                    result.Classification = DocumentType.Desconhecido;
-                    result.NeedsReview = true;
-                    result.ReviewReason = "OCR vazio";
-                    AddAudit(pageNum, "OCR", DecisionReason.EmptyOcr, "Texto OCR vazio");
-                }
-                else
-                {
-                    if (_consolidatedDetector.IsConsolidated(ocrResult.Text))
-                    {
-                        var reason = _consolidatedDetector.GetConsolidatedReason(ocrResult.Text);
-                        result.Classification = DocumentType.Desconhecido;
-                        result.NeedsReview = true;
-                        result.ReviewReason = $"Consolidado: {reason}";
-                        AddAudit(pageNum, "Classify", DecisionReason.ConsolidatedPage, reason ?? "Página consolidada");
-                    }
-                    else
-                    {
-                        var classification = await Task.Run(() => _classifier.ClassifyAsync(ocrResult.Text, ct), ct);
-                        result.Classification = classification.Type;
-                        result.ClassificationConfidence = classification.Confidence;
-
-                        var data = await Task.Run(() => _extractor.Extract(ocrResult.Text, classification.Type), ct);
-                        result.Numero = data["NumeroNota"] ?? data["NumeroImposto"] ?? data["NumeroGuia"] ?? data["NumeroContrato"];
-                        result.Nome = data["NomePessoa"] ?? data["Contribuinte"] ?? data["Parte"] ?? data["Prestador"] ?? data["CnpjEmitente"] ?? data["Cpf"] ?? data["Cnpj"];
-                        result.Valor = data["Valor"];
-
-                        AddAudit(pageNum, "Classify", GetDecisionReason(result), BuildDecisionDetail(result));
-                    }
-
-                    if (ocrResult.MeanConfidence < 75f)
-                    {
-                        result.NeedsReview = true;
-                        result.ReviewReason = $"Baixa confiança OCR: {ocrResult.MeanConfidence:F0}%";
-                        AddAudit(pageNum, "Review", DecisionReason.LowConfidence, result.ReviewReason);
-                    }
-                    else if (result.ClassificationConfidence < 0.4f && !result.NeedsReview)
-                    {
-                        result.NeedsReview = true;
-                        result.ReviewReason = $"Classificação incerta: {result.Classification} ({result.ClassificationConfidence:P0})";
-                        AddAudit(pageNum, "Review", DecisionReason.LowConfidence, result.ReviewReason);
-                    }
-                    else if (!result.HasAllFields && ocrResult.Text.Length > 100 && !result.NeedsReview)
-                    {
-                        result.NeedsReview = true;
-                        result.ReviewReason = "Campos insuficientes extraídos";
-                        AddAudit(pageNum, "Review", DecisionReason.FallbackUsed, result.ReviewReason);
-                    }
-                }
-
-                result.Success = true;
-                result.ProcessingTimeMs = sw.ElapsedMilliseconds;
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                sw.Stop();
-                result.ErrorMessage = ex.Message;
-                result.Success = false;
-                result.ProcessingTimeMs = sw.ElapsedMilliseconds;
-                AddAudit(pageNum, "Error", DecisionReason.UnknownDocument, ex.Message);
-                _logService.Error($"[PIPELINE] Página {pageNum} - Erro: {ex.Message}", pdfPath);
-            }
-
-            pageResults.Add(result);
-
-            var success = pageResults.Count(r => r.Success);
-            var failed = pageResults.Count(r => !r.Success);
-
+            allPageImages.Add(pageImage);
             progress?.Report(new PagePipelineProgress
             {
                 TotalPages = pageCount,
-                CurrentPage = pageNum,
-                Status = $"Página {pageNum}/{pageCount}",
-                Step = PipelineStep.Ocr,
-                PagesProcessed = success,
-                PagesFailed = failed
+                CurrentPage = allPageImages.Count,
+                Status = $"Renderizando {allPageImages.Count}/{pageCount}...",
+                Step = PipelineStep.PreProcessing
+            });
+        }
+        swRender.Stop();
+        _logService.Info($"[PIPELINE] Renderização concluída: {allPageImages.Count} páginas em {swRender.ElapsedMilliseconds}ms", pdfPath);
+
+        progress?.Report(new PagePipelineProgress
+        {
+            TotalPages = pageCount,
+            CurrentPage = 0,
+            Status = $"Processando {pageCount} páginas (4 workers)...",
+            Step = PipelineStep.Ocr
+        });
+
+        var pageResults = new PageResult[pageCount];
+        int completedCount = 0;
+        int successCount = 0;
+        int failedCount = 0;
+        var syncLock = new object();
+
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = 4,
+            CancellationToken = ct
+        };
+
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, pageCount),
+            parallelOptions,
+            async (pageIndex, token) =>
+            {
+                var sw = Stopwatch.StartNew();
+                var result = new PageResult { PageNumber = pageIndex + 1 };
+                var pageImage = allPageImages[pageIndex];
+
+                try
+                {
+                    if (pageImage.Length == 0)
+                    {
+                        result.ErrorMessage = "Falha ao renderizar página";
+                        result.Success = false;
+                        AddAudit(pageIndex + 1, "Render", DecisionReason.EmptyOcr, "Página vazia");
+                    }
+                    else
+                    {
+                        var processedImage = pageImage;
+                        if (_imageProcessor is not null)
+                        {
+                            try
+                            {
+                                processedImage = await _imageProcessor.EnhanceAsync(pageImage, ImageProcessingOptions.Default, token);
+                            }
+                            catch { /* usa original */ }
+                        }
+
+                        var imageHash = ComputeHash(processedImage);
+                        OcrResult? cachedOcr = null;
+
+                        if (_ocrCache is not null)
+                            cachedOcr = await _ocrCache.GetAsync(imageHash);
+
+                        OcrResult ocrResult;
+                        if (cachedOcr is not null)
+                        {
+                            ocrResult = cachedOcr;
+                        }
+                        else
+                        {
+                            ocrResult = await _ocrEngine.ProcessImageAsync(processedImage, token);
+                            if (_ocrCache is not null)
+                                await _ocrCache.SetAsync(imageHash, ocrResult);
+                        }
+
+                        result.OcrText = ocrResult.Text;
+                        result.OcrConfidence = ocrResult.MeanConfidence;
+                        sw.Stop();
+
+                        if (string.IsNullOrWhiteSpace(ocrResult.Text))
+                        {
+                            result.Classification = DocumentType.Desconhecido;
+                            result.NeedsReview = true;
+                            result.ReviewReason = "OCR vazio";
+                            AddAudit(pageIndex + 1, "OCR", DecisionReason.EmptyOcr, "Texto OCR vazio");
+                        }
+                        else
+                        {
+                            if (_consolidatedDetector.IsConsolidated(ocrResult.Text))
+                            {
+                                var reason = _consolidatedDetector.GetConsolidatedReason(ocrResult.Text);
+                                result.Classification = DocumentType.Desconhecido;
+                                result.NeedsReview = true;
+                                result.ReviewReason = $"Consolidado: {reason}";
+                                AddAudit(pageIndex + 1, "Classify", DecisionReason.ConsolidatedPage, reason ?? "Página consolidada");
+                            }
+                            else
+                            {
+                                var classification = await Task.Run(() => _classifier.ClassifyAsync(ocrResult.Text, token), token);
+                                result.Classification = classification.Type;
+                                result.ClassificationConfidence = classification.Confidence;
+
+                                var data = await Task.Run(() => _extractor.Extract(ocrResult.Text, classification.Type), token);
+                                result.Numero = data["NumeroNota"] ?? data["NumeroImposto"] ?? data["NumeroGuia"] ?? data["NumeroContrato"];
+                                result.Nome = data["NomePessoa"] ?? data["Contribuinte"] ?? data["Parte"] ?? data["Prestador"] ?? data["CnpjEmitente"] ?? data["Cpf"] ?? data["Cnpj"];
+                                result.Valor = data["Valor"];
+
+                                AddAudit(pageIndex + 1, "Classify", GetDecisionReason(result), BuildDecisionDetail(result));
+                            }
+
+                            if (ocrResult.MeanConfidence < 75f)
+                            {
+                                result.NeedsReview = true;
+                                result.ReviewReason = $"Baixa confiança OCR: {ocrResult.MeanConfidence:F0}%";
+                                AddAudit(pageIndex + 1, "Review", DecisionReason.LowConfidence, result.ReviewReason);
+                            }
+                            else if (result.ClassificationConfidence < 0.4f && !result.NeedsReview)
+                            {
+                                result.NeedsReview = true;
+                                result.ReviewReason = $"Classificação incerta: {result.Classification} ({result.ClassificationConfidence:P0})";
+                                AddAudit(pageIndex + 1, "Review", DecisionReason.LowConfidence, result.ReviewReason);
+                            }
+                            else if (!result.HasAllFields && ocrResult.Text.Length > 100 && !result.NeedsReview)
+                            {
+                                result.NeedsReview = true;
+                                result.ReviewReason = "Campos insuficientes extraídos";
+                                AddAudit(pageIndex + 1, "Review", DecisionReason.FallbackUsed, result.ReviewReason);
+                            }
+                        }
+
+                        result.Success = true;
+                        result.ProcessingTimeMs = sw.ElapsedMilliseconds;
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    sw.Stop();
+                    result.ErrorMessage = ex.Message;
+                    result.Success = false;
+                    result.ProcessingTimeMs = sw.ElapsedMilliseconds;
+                    AddAudit(pageIndex + 1, "Error", DecisionReason.UnknownDocument, ex.Message);
+                }
+
+                pageResults[pageIndex] = result;
+
+                lock (syncLock)
+                {
+                    completedCount++;
+                    if (result.Success) successCount++;
+                    else failedCount++;
+                }
+
+                if (completedCount % 5 == 0 || completedCount == pageCount)
+                {
+                    progress?.Report(new PagePipelineProgress
+                    {
+                        TotalPages = pageCount,
+                        CurrentPage = completedCount,
+                        Status = $"Página {completedCount}/{pageCount} (4 workers)",
+                        Step = PipelineStep.Ocr,
+                        PagesProcessed = successCount,
+                        PagesFailed = failedCount
+                    });
+                }
             });
 
-            await Task.Yield();
-        }
+        swTotal.Stop();
+        _logService.Info($"[PIPELINE] OCR paralelo concluído: {completedCount} páginas em {swTotal.ElapsedMilliseconds}ms ({successCount} ok, {failedCount} falhas)", pdfPath);
+
+        var pageResultsList = pageResults.ToList();
 
         _logService.Info("[PIPELINE] Detectando agrupamentos...", pdfPath);
-        var groups = _groupDetector.DetectGroups(pageResults);
+        var groups = _groupDetector.DetectGroups(pageResultsList);
 
         progress?.Report(new PagePipelineProgress
         {
@@ -227,8 +263,8 @@ public class PagePipeline
             CurrentPage = pageCount,
             Status = "Salvando documentos...",
             Step = PipelineStep.Saving,
-            PagesProcessed = pageResults.Count(r => r.Success),
-            PagesFailed = pageResults.Count(r => !r.Success),
+            PagesProcessed = successCount,
+            PagesFailed = failedCount,
             GroupsCreated = groups.Count
         });
 
@@ -252,7 +288,6 @@ public class PagePipeline
                 $"Grupo {g + 1}/{groups.Count}: {group.PageCount} páginas, tipo={group.DocumentType}, arquivo={group.FileName}");
         }
 
-        var successCount = pageResults.Count(r => r.Success);
         var reviewCount = groups.Count(g => g.NeedsReview);
         _logService.Info($"[PIPELINE] Finalizado: {successCount} páginas, {groups.Count} documentos, {reviewCount} para revisão", pdfPath);
 
