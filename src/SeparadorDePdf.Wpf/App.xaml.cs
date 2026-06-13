@@ -92,6 +92,7 @@ public partial class App : System.Windows.Application
         services.AddSingleton<IFolderWatcher, FolderWatcherService>();
         services.AddSingleton<IGroupDetector, GroupDetector>();
         services.AddSingleton<IConsolidatedDocumentDetector, ConsolidatedDocumentDetector>();
+        services.AddSingleton<Services.PagePipeline>();
         services.AddSingleton<JobManager>();
         services.AddSingleton<ViewModels.MainViewModel>();
     }
