@@ -1,9 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using SeparadorDePdf.Core.Interfaces;
@@ -17,6 +20,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly JobManager _jobManager;
     private readonly ILogService _logService;
+    private readonly DispatcherTimer _logFlushTimer;
+    private readonly List<LogEntry> _logBuffer = new();
+    private readonly object _logBufferLock = new();
+    private bool _logBufferDirty;
 
     [ObservableProperty] private string _inputFilePath = string.Empty;
     [ObservableProperty] private bool _isProcessing;
@@ -48,6 +55,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _logService.LogAdded += OnLogAdded;
         _jobManager.ProgressChanged += OnJobProgress;
         _jobManager.JobCompleted += OnJobCompleted;
+
+        _logFlushTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(300)
+        };
+        _logFlushTimer.Tick += FlushLogBuffer;
+        _logFlushTimer.Start();
     }
 
     private void OnJobProgress(object? sender, JobInfo job)
@@ -76,7 +90,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 JobStep.Processing => "Processando...",
                 _ => StatusText
             };
-        });
+        }, DispatcherPriority.Background);
     }
 
     private void OnJobCompleted(object? sender, JobInfo job)
@@ -108,7 +122,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     StatusText = $"Erro: {job.ErrorMessage}";
                     break;
             }
-        });
+
+            FlushLogBufferNow();
+        }, DispatcherPriority.Normal);
     }
 
     [RelayCommand(CanExecute = nameof(CanStartJob))]
@@ -229,11 +245,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnLogAdded(object? sender, LogEntry entry)
     {
+        lock (_logBufferLock)
+        {
+            _logBuffer.Add(entry);
+            _logBufferDirty = true;
+        }
+    }
+
+    private void FlushLogBuffer(object? sender, EventArgs e)
+    {
+        FlushLogBufferNow();
+    }
+
+    private void FlushLogBufferNow()
+    {
+        LogEntry[] entries;
+        lock (_logBufferLock)
+        {
+            if (!_logBufferDirty || _logBuffer.Count == 0)
+                return;
+            entries = _logBuffer.ToArray();
+            _logBuffer.Clear();
+            _logBufferDirty = false;
+        }
+
         Application.Current.Dispatcher.BeginInvoke(() =>
         {
-            Logs.Add(entry);
-            if (Logs.Count > 5000) Logs.RemoveAt(0);
-        });
+            foreach (var entry in entries)
+                Logs.Add(entry);
+            while (Logs.Count > 5000)
+                Logs.RemoveAt(0);
+        }, DispatcherPriority.Background);
     }
 
     private void ResetState()
@@ -273,6 +315,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _logFlushTimer.Stop();
+        _logFlushTimer.Tick -= FlushLogBuffer;
         _jobManager.ProgressChanged -= OnJobProgress;
         _jobManager.JobCompleted -= OnJobCompleted;
         _logService.LogAdded -= OnLogAdded;

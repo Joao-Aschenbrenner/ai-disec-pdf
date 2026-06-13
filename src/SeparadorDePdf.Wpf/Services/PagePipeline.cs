@@ -80,7 +80,6 @@ public class PagePipeline
             ct.ThrowIfCancellationRequested();
 
             var sw = Stopwatch.StartNew();
-            _logService.Info($"[PIPELINE] Página {pageNum}/{pageCount} - iniciando", pdfPath);
 
             var result = new PageResult { PageNumber = pageNum };
 
@@ -91,7 +90,6 @@ public class PagePipeline
                     result.ErrorMessage = "Falha ao renderizar página";
                     result.Success = false;
                     AddAudit(pageNum, "Render", DecisionReason.EmptyOcr, "Página vazia");
-                    _logService.Warning($"[PIPELINE] Página {pageNum} - renderização falhou", pdfPath);
                     pageResults.Add(result);
                     continue;
                 }
@@ -127,16 +125,6 @@ public class PagePipeline
                 }
                 else
                 {
-                    progress?.Report(new PagePipelineProgress
-                    {
-                        TotalPages = pageCount,
-                        CurrentPage = pageNum,
-                        Status = $"Página {pageNum}/{pageCount} - OCR...",
-                        Step = PipelineStep.Ocr,
-                        PagesProcessed = pageResults.Count(r => r.Success),
-                        PagesFailed = pageResults.Count(r => !r.Success)
-                    });
-
                     ocrResult = await _ocrEngine.ProcessImageAsync(processedImage, ct);
 
                     if (_ocrCache is not null)
@@ -146,7 +134,6 @@ public class PagePipeline
                 result.OcrText = ocrResult.Text;
                 result.OcrConfidence = ocrResult.MeanConfidence;
                 sw.Stop();
-                _logService.Info($"[PIPELINE] Página {pageNum} - OCR: {ocrResult.Text.Length} chars, conf: {ocrResult.MeanConfidence:F0}% ({sw.ElapsedMilliseconds}ms)", pdfPath);
 
                 if (string.IsNullOrWhiteSpace(ocrResult.Text))
                 {
@@ -154,7 +141,6 @@ public class PagePipeline
                     result.NeedsReview = true;
                     result.ReviewReason = "OCR vazio";
                     AddAudit(pageNum, "OCR", DecisionReason.EmptyOcr, "Texto OCR vazio");
-                    _logService.Warning($"[PIPELINE] Página {pageNum} - OCR vazio, marcado para revisão", pdfPath);
                 }
                 else
                 {
@@ -165,24 +151,12 @@ public class PagePipeline
                         result.NeedsReview = true;
                         result.ReviewReason = $"Consolidado: {reason}";
                         AddAudit(pageNum, "Classify", DecisionReason.ConsolidatedPage, reason ?? "Página consolidada");
-                        _logService.Warning($"[PIPELINE] Página {pageNum} - Consolidado detectado: {reason}", pdfPath);
                     }
                     else
                     {
-                        progress?.Report(new PagePipelineProgress
-                        {
-                            TotalPages = pageCount,
-                            CurrentPage = pageNum,
-                            Status = $"Página {pageNum}/{pageCount} - Classificando...",
-                            Step = PipelineStep.Classifying,
-                            PagesProcessed = pageResults.Count(r => r.Success),
-                            PagesFailed = pageResults.Count(r => !r.Success)
-                        });
-
                         var classification = await Task.Run(() => _classifier.ClassifyAsync(ocrResult.Text, ct), ct);
                         result.Classification = classification.Type;
                         result.ClassificationConfidence = classification.Confidence;
-                        _logService.Info($"[PIPELINE] Página {pageNum} - Classificado: {classification.Type} (conf: {classification.Confidence:P0})", pdfPath);
 
                         var data = await Task.Run(() => _extractor.Extract(ocrResult.Text, classification.Type), ct);
                         result.Numero = data["NumeroNota"] ?? data["NumeroImposto"] ?? data["NumeroGuia"] ?? data["NumeroContrato"];
@@ -190,7 +164,6 @@ public class PagePipeline
                         result.Valor = data["Valor"];
 
                         AddAudit(pageNum, "Classify", GetDecisionReason(result), BuildDecisionDetail(result));
-                        _logService.Info($"[PIPELINE] Página {pageNum} - Extraído: nº={result.Numero ?? "(n/a)"}, nome={result.Nome ?? "(n/a)"}, valor={result.Valor ?? "(n/a)"}", pdfPath);
                     }
 
                     if (ocrResult.MeanConfidence < 75f)
@@ -229,15 +202,22 @@ public class PagePipeline
 
             pageResults.Add(result);
 
-            progress?.Report(new PagePipelineProgress
+            if (pageNum % 20 == 0 || pageNum == pageCount)
             {
-                TotalPages = pageCount,
-                CurrentPage = pageNum,
-                Status = $"Página {pageNum}/{pageCount} - Concluída",
-                Step = PipelineStep.Complete,
-                PagesProcessed = pageResults.Count(r => r.Success),
-                PagesFailed = pageResults.Count(r => !r.Success)
-            });
+                var success = pageResults.Count(r => r.Success);
+                var failed = pageResults.Count(r => !r.Success);
+                _logService.Info($"[PIPELINE] Progresso: {pageNum}/{pageCount} páginas ({success} ok, {failed} falhas)", pdfPath);
+
+                progress?.Report(new PagePipelineProgress
+                {
+                    TotalPages = pageCount,
+                    CurrentPage = pageNum,
+                    Status = $"Página {pageNum}/{pageCount}",
+                    Step = PipelineStep.Ocr,
+                    PagesProcessed = success,
+                    PagesFailed = failed
+                });
+            }
         }
 
         _logService.Info("[PIPELINE] Detectando agrupamentos...", pdfPath);
@@ -272,8 +252,6 @@ public class PagePipeline
 
             AddAudit(group.StartPage + 1, "Save", DecisionReason.FallbackUsed,
                 $"Grupo {g + 1}/{groups.Count}: {group.PageCount} páginas, tipo={group.DocumentType}, arquivo={group.FileName}");
-
-            _logService.Info($"[PIPELINE] Grupo {g + 1}/{groups.Count}: {group.PageCount} páginas → {group.FileName}", pdfPath);
         }
 
         var successCount = pageResults.Count(r => r.Success);
