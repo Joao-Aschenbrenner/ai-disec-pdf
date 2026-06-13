@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -21,6 +22,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly JobManager _jobManager;
     private readonly ILogService _logService;
     private readonly DispatcherTimer _logFlushTimer;
+    private readonly DispatcherTimer _uiKeepAliveTimer;
     private readonly List<LogEntry> _logBuffer = new();
     private readonly object _logBufferLock = new();
     private bool _logBufferDirty;
@@ -65,6 +67,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         };
         _logFlushTimer.Tick += FlushLogBuffer;
         _logFlushTimer.Start();
+
+        _uiKeepAliveTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(50)
+        };
+        _uiKeepAliveTimer.Tick += (s, e) =>
+        {
+            if (IsProcessing)
+            {
+                var frame = new DispatcherFrame();
+                Dispatcher.PushFrame(frame);
+            }
+        };
+        _uiKeepAliveTimer.Start();
     }
 
     private void OnJobProgress(object? sender, JobInfo job)
@@ -331,6 +347,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _logFlushTimer.Stop();
         _logFlushTimer.Tick -= FlushLogBuffer;
+        _uiKeepAliveTimer.Stop();
         _jobManager.ProgressChanged -= OnJobProgress;
         _jobManager.JobCompleted -= OnJobCompleted;
         _logService.LogAdded -= OnLogAdded;
