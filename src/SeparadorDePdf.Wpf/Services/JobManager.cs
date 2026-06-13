@@ -69,6 +69,7 @@ public class JobManager : IDisposable
     {
         var swTotal = Stopwatch.StartNew();
         var progressSync = new object();
+        var lastProgressReport = DateTime.MinValue;
 
         try
         {
@@ -98,7 +99,12 @@ public class JobManager : IDisposable
                         job.EstimatedTimeRemaining = remaining > 0 ? FormatTime(TimeSpan.FromSeconds(remaining)) : "";
                     }
 
-                    ReportProgress(job);
+                    var now = DateTime.UtcNow;
+                    if ((now - lastProgressReport).TotalMilliseconds >= 500 || p.ProgressPercent >= 100)
+                    {
+                        lastProgressReport = now;
+                        ReportProgress(job);
+                    }
                 }
             });
 

@@ -52,7 +52,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnJobProgress(object? sender, JobInfo job)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        Application.Current.Dispatcher.BeginInvoke(() =>
         {
             IsProcessing = true;
             CanCancel = true;
@@ -80,7 +80,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnJobCompleted(object? sender, JobInfo job)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        Application.Current.Dispatcher.BeginInvoke(() =>
         {
             IsProcessing = false;
             CanCancel = false;
@@ -206,7 +206,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnLogAdded(object? sender, LogEntry entry)
     {
-        Application.Current.Dispatcher.Invoke(() =>
+        Application.Current.Dispatcher.BeginInvoke(() =>
         {
             Logs.Add(entry);
             if (Logs.Count > 5000) Logs.RemoveAt(0);

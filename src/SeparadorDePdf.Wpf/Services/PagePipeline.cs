@@ -68,39 +68,19 @@ public class PagePipeline
         {
             TotalPages = pageCount,
             CurrentPage = 0,
-            Status = "Renderizando páginas...",
+            Status = "Processando páginas...",
             Step = PipelineStep.PreProcessing
         });
 
-        var pageImages = new List<byte[]>();
-        await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, dpi, ct))
-        {
-            pageImages.Add(pageImage);
-            ct.ThrowIfCancellationRequested();
-        }
-
-        _logService.Info($"[PIPELINE] {pageImages.Count} páginas renderizadas", pdfPath);
-
         var pageResults = new List<PageResult>();
 
-        for (int i = 0; i < pageImages.Count; i++)
+        await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, dpi, ct))
         {
-            int pageNum = i + 1;
-            var pageImage = pageImages[i];
+            int pageNum = pageResults.Count + 1;
             ct.ThrowIfCancellationRequested();
 
             var sw = Stopwatch.StartNew();
             _logService.Info($"[PIPELINE] Página {pageNum}/{pageCount} - iniciando", pdfPath);
-
-            progress?.Report(new PagePipelineProgress
-            {
-                TotalPages = pageCount,
-                CurrentPage = pageNum,
-                Status = $"Página {pageNum}/{pageCount} - Pré-processando...",
-                Step = PipelineStep.PreProcessing,
-                PagesProcessed = pageResults.Count(r => r.Success),
-                PagesFailed = pageResults.Count(r => !r.Success)
-            });
 
             var result = new PageResult { PageNumber = pageNum };
 
@@ -280,9 +260,8 @@ public class PagePipeline
             ct.ThrowIfCancellationRequested();
 
             group.FileName = BuildGroupFileName(group, g + 1);
-            var groupPageImages = new List<byte[]>();
-            for (int p = group.StartPage; p <= group.EndPage && p < pageImages.Count; p++)
-                groupPageImages.Add(pageImages[p]);
+
+            var groupPageImages = await RenderPagesForGroupAsync(pdfPath, dpi, group.StartPage, group.EndPage, ct);
 
             var destPath = await SaveGroupAsPdfAsync(groupPageImages, outputFolder, group.FileName, ct);
             group.FileName = Path.GetFileName(destPath);
@@ -301,6 +280,22 @@ public class PagePipeline
         _logService.Info($"[PIPELINE] Finalizado: {successCount} páginas, {groups.Count} documentos, {reviewCount} para revisão", pdfPath);
 
         return groups;
+    }
+
+    private async Task<List<byte[]>> RenderPagesForGroupAsync(string pdfPath, int dpi, int startPage, int endPage, CancellationToken ct)
+    {
+        var images = new List<byte[]>();
+        int pageIndex = 0;
+        await foreach (var pageImage in _pdfRenderer.RenderPagesStreamingAsync(pdfPath, dpi, ct))
+        {
+            pageIndex++;
+            if (pageIndex >= startPage && pageIndex <= endPage)
+            {
+                images.Add(pageImage);
+                if (pageIndex >= endPage) break;
+            }
+        }
+        return images;
     }
 
     private async Task<string> SaveGroupAsPdfAsync(List<byte[]> pageImages, string outputFolder, string fileName, CancellationToken ct)
