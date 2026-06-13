@@ -202,22 +202,18 @@ public class PagePipeline
 
             pageResults.Add(result);
 
-            if (pageNum % 20 == 0 || pageNum == pageCount)
-            {
-                var success = pageResults.Count(r => r.Success);
-                var failed = pageResults.Count(r => !r.Success);
-                _logService.Info($"[PIPELINE] Progresso: {pageNum}/{pageCount} páginas ({success} ok, {failed} falhas)", pdfPath);
+            var success = pageResults.Count(r => r.Success);
+            var failed = pageResults.Count(r => !r.Success);
 
-                progress?.Report(new PagePipelineProgress
-                {
-                    TotalPages = pageCount,
-                    CurrentPage = pageNum,
-                    Status = $"Página {pageNum}/{pageCount}",
-                    Step = PipelineStep.Ocr,
-                    PagesProcessed = success,
-                    PagesFailed = failed
-                });
-            }
+            progress?.Report(new PagePipelineProgress
+            {
+                TotalPages = pageCount,
+                CurrentPage = pageNum,
+                Status = $"Página {pageNum}/{pageCount}",
+                Step = PipelineStep.Ocr,
+                PagesProcessed = success,
+                PagesFailed = failed
+            });
         }
 
         _logService.Info("[PIPELINE] Detectando agrupamentos...", pdfPath);

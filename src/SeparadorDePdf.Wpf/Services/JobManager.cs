@@ -115,6 +115,7 @@ public class JobManager : IDisposable
 
             if (ct.IsCancellationRequested) { SetCancelled(job); return; }
 
+            job.CurrentStep = JobStep.Saving;
             job.Step3Status = "Criando arquivo ZIP...";
             ReportProgress(job);
 

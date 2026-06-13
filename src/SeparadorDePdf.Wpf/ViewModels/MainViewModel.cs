@@ -35,6 +35,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _statusText = "Pronto";
     [ObservableProperty] private bool _canCancel;
     [ObservableProperty] private bool _canDownload;
+    [ObservableProperty] private bool _isStep1Active;
+    [ObservableProperty] private bool _isStep2Active;
+    [ObservableProperty] private bool _isStep3Active;
 
     [ObservableProperty] private string _step1Status = "Aguardando PDF...";
     [ObservableProperty] private string _step2Status = "";
@@ -84,10 +87,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             EstimatedTimeRemaining = job.EstimatedTimeRemaining;
             ElapsedTime = job.ElapsedTime;
 
+            IsStep1Active = job.CurrentStep == JobStep.PreProcessing;
+            IsStep2Active = job.CurrentStep == JobStep.Processing;
+            IsStep3Active = job.CurrentStep == JobStep.Saving;
+
             StatusText = job.CurrentStep switch
             {
                 JobStep.PreProcessing => "Pré-processando...",
                 JobStep.Processing => "Processando...",
+                JobStep.Saving => "Salvando...",
                 _ => StatusText
             };
         }, DispatcherPriority.Background);
@@ -99,6 +107,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             IsProcessing = false;
             CanCancel = false;
+            IsStep1Active = false;
+            IsStep2Active = false;
+            IsStep3Active = false;
             ProgressPercentage = job.OverallProgress;
             SuccessCount = job.SuccessCount;
             ErrorCount = job.ErrorCount;
@@ -289,6 +300,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         Step1Status = "Validando...";
         Step2Status = "";
         Step3Status = "";
+        IsStep1Active = false;
+        IsStep2Active = false;
+        IsStep3Active = false;
         ResetProgress();
     }
 

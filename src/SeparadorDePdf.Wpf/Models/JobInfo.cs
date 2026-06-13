@@ -8,6 +8,7 @@ public enum JobStep
     Idle,
     PreProcessing,
     Processing,
+    Saving,
     Completed,
     Failed,
     Cancelled
