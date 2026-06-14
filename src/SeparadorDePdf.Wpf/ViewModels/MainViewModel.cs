@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Timers;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -23,6 +24,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ILogService _logService;
     private readonly DispatcherTimer _logFlushTimer;
     private readonly DispatcherTimer _uiKeepAliveTimer;
+    private readonly System.Timers.Timer _spinnerTimer;
     private readonly List<LogEntry> _logBuffer = new();
     private readonly object _logBufferLock = new();
     private bool _logBufferDirty;
@@ -50,6 +52,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _pipelineStatusMessage = "";
     [ObservableProperty] private string _estimatedTimeRemaining = "";
     [ObservableProperty] private string _elapsedTime = "";
+    [ObservableProperty] private int _spinnerAngle;
 
     public ObservableCollection<LogEntry> Logs { get; } = new();
 
@@ -81,6 +84,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         };
         _uiKeepAliveTimer.Start();
+
+        _spinnerTimer = new System.Timers.Timer(50);
+        _spinnerTimer.Elapsed += (s, e) =>
+        {
+            if (IsProcessing)
+            {
+                SpinnerAngle = (SpinnerAngle + 15) % 360;
+            }
+        };
+        _spinnerTimer.Start();
     }
 
     private void OnJobProgress(object? sender, JobInfo job)
@@ -348,6 +361,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _logFlushTimer.Stop();
         _logFlushTimer.Tick -= FlushLogBuffer;
         _uiKeepAliveTimer.Stop();
+        _spinnerTimer.Stop();
+        _spinnerTimer.Dispose();
         _jobManager.ProgressChanged -= OnJobProgress;
         _jobManager.JobCompleted -= OnJobCompleted;
         _logService.LogAdded -= OnLogAdded;

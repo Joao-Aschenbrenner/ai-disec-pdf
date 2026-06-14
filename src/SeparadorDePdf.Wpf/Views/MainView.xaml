@@ -166,23 +166,34 @@
                                     <TextBlock Text="PRÉ-PROCESSAMENTO" FontWeight="SemiBold" FontSize="13" Foreground="#333"/>
                                     <TextBlock Text="{Binding Step1Status}" FontSize="11" Foreground="#888" Margin="0,2,0,0"
                                                TextTrimming="CharacterEllipsis"/>
+                                    <ProgressBar IsIndeterminate="True" Height="3" Background="#E3F2FD" Foreground="#1565C0" Margin="0,4,0,0">
+                                        <ProgressBar.Style>
+                                            <Style TargetType="ProgressBar">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsStep1Active}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ProgressBar.Style>
+                                    </ProgressBar>
                                 </StackPanel>
                                 <Ellipse Grid.Column="2" Width="18" Height="18" StrokeThickness="2" StrokeDashArray="4 2"
-                                         Stroke="#1565C0" RenderTransformOrigin="0.5,0.5"
-                                         Visibility="{Binding IsStep1Active, Converter={StaticResource BoolToVis}}">
+                                         Stroke="#1565C0" RenderTransformOrigin="0.5,0.5">
                                     <Ellipse.RenderTransform>
-                                        <RotateTransform/>
+                                        <RotateTransform Angle="{Binding SpinnerAngle}"/>
                                     </Ellipse.RenderTransform>
-                                    <Ellipse.Triggers>
-                                        <EventTrigger RoutedEvent="Loaded">
-                                            <BeginStoryboard>
-                                                <Storyboard RepeatBehavior="Forever">
-                                                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                                     From="0" To="360" Duration="0:0:1.2"/>
-                                                </Storyboard>
-                                            </BeginStoryboard>
-                                        </EventTrigger>
-                                    </Ellipse.Triggers>
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsStep1Active}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
                                 </Ellipse>
                             </Grid>
                         </Border>
@@ -248,21 +259,20 @@
                                     </Grid>
                                 </StackPanel>
                                 <Ellipse Grid.Column="2" Width="18" Height="18" StrokeThickness="2" StrokeDashArray="4 2"
-                                         Stroke="#E65100" RenderTransformOrigin="0.5,0.5"
-                                         Visibility="{Binding IsStep2Active, Converter={StaticResource BoolToVis}}">
+                                         Stroke="#E65100" RenderTransformOrigin="0.5,0.5">
                                     <Ellipse.RenderTransform>
-                                        <RotateTransform/>
+                                        <RotateTransform Angle="{Binding SpinnerAngle}"/>
                                     </Ellipse.RenderTransform>
-                                    <Ellipse.Triggers>
-                                        <EventTrigger RoutedEvent="Loaded">
-                                            <BeginStoryboard>
-                                                <Storyboard RepeatBehavior="Forever">
-                                                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                                     From="0" To="360" Duration="0:0:1.2"/>
-                                                </Storyboard>
-                                            </BeginStoryboard>
-                                        </EventTrigger>
-                                    </Ellipse.Triggers>
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsStep2Active}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
                                 </Ellipse>
                             </Grid>
                         </Border>
@@ -294,6 +304,18 @@
                                     <TextBlock Text="AGRUPAR + ZIP" FontWeight="SemiBold" FontSize="13" Foreground="#333"/>
                                     <TextBlock Text="{Binding Step3Status}" FontSize="11" Foreground="#888" Margin="0,2,0,0"
                                                TextTrimming="CharacterEllipsis"/>
+                                    <ProgressBar IsIndeterminate="True" Height="3" Background="#E8F5E9" Foreground="#2E7D32" Margin="0,4,0,0">
+                                        <ProgressBar.Style>
+                                            <Style TargetType="ProgressBar">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsStep3Active}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </ProgressBar.Style>
+                                    </ProgressBar>
                                     <Grid Margin="0,4,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -318,21 +340,20 @@
                                     </Grid>
                                 </StackPanel>
                                 <Ellipse Grid.Column="2" Width="18" Height="18" StrokeThickness="2" StrokeDashArray="4 2"
-                                         Stroke="#2E7D32" RenderTransformOrigin="0.5,0.5"
-                                         Visibility="{Binding IsStep3Active, Converter={StaticResource BoolToVis}}">
+                                         Stroke="#2E7D32" RenderTransformOrigin="0.5,0.5">
                                     <Ellipse.RenderTransform>
-                                        <RotateTransform/>
+                                        <RotateTransform Angle="{Binding SpinnerAngle}"/>
                                     </Ellipse.RenderTransform>
-                                    <Ellipse.Triggers>
-                                        <EventTrigger RoutedEvent="Loaded">
-                                            <BeginStoryboard>
-                                                <Storyboard RepeatBehavior="Forever">
-                                                    <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                                     From="0" To="360" Duration="0:0:1.2"/>
-                                                </Storyboard>
-                                            </BeginStoryboard>
-                                        </EventTrigger>
-                                    </Ellipse.Triggers>
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsStep3Active}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
                                 </Ellipse>
                             </Grid>
                         </Border>
