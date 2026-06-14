@@ -68,8 +68,6 @@ public class JobManager : IDisposable
     private async Task RunPipelineAsync(JobInfo job, CancellationToken ct)
     {
         var swTotal = Stopwatch.StartNew();
-        var progressSync = new object();
-        var lastProgressReport = DateTime.MinValue;
 
         try
         {
@@ -79,39 +77,11 @@ public class JobManager : IDisposable
             if (ct.IsCancellationRequested) { SetCancelled(job); return; }
 
             job.CurrentStep = JobStep.Processing;
+            job.Step2Status = "Processando OCR...";
             ReportProgress(job);
 
-            var pageProgress = new Progress<PagePipelineProgress>(p =>
-            {
-                lock (progressSync)
-                {
-                    job.TotalPages = p.TotalPages;
-                    job.PagesProcessed = p.PagesProcessed;
-                    job.PagesFailed = p.PagesFailed;
-                    job.PipelineStatusMessage = p.Status;
-                    job.OverallProgress = p.ProgressPercent;
-
-                    var elapsed = swTotal.Elapsed;
-                    job.ElapsedTime = FormatTime(elapsed);
-
-                    if (p.CurrentPage > 0 && elapsed.TotalSeconds > 5)
-                    {
-                        var secPerPage = elapsed.TotalSeconds / p.CurrentPage;
-                        var remaining = (p.TotalPages - p.CurrentPage) * secPerPage;
-                        job.EstimatedTimeRemaining = remaining > 0 ? FormatTime(TimeSpan.FromSeconds(remaining)) : "";
-                    }
-
-                    var now = DateTime.UtcNow;
-                    if ((now - lastProgressReport).TotalMilliseconds >= 200 || p.ProgressPercent >= 100)
-                    {
-                        lastProgressReport = now;
-                        ReportProgress(job);
-                    }
-                }
-            });
-
             var groups = await _pagePipeline.ProcessAllPagesAsync(
-                job.InputFilePath, job.TempFolder, OcrDpi, pageProgress, ct, job.TotalPages);
+                job.InputFilePath, job.TempFolder, OcrDpi, null, ct, job.TotalPages);
 
             if (ct.IsCancellationRequested) { SetCancelled(job); return; }
 
