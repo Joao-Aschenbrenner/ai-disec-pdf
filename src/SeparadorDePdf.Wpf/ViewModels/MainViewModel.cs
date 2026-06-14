@@ -53,6 +53,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _estimatedTimeRemaining = "";
     [ObservableProperty] private string _elapsedTime = "";
     [ObservableProperty] private int _spinnerAngle;
+    [ObservableProperty] private bool _showLoadingDots = true;
 
     public ObservableCollection<LogEntry> Logs { get; } = new();
 
@@ -91,6 +92,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (IsProcessing)
             {
                 SpinnerAngle = (SpinnerAngle + 15) % 360;
+                ShowLoadingDots = !ShowLoadingDots;
             }
         };
         _spinnerTimer.Start();

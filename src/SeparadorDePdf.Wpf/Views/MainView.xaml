@@ -166,18 +166,21 @@
                                     <TextBlock Text="PRÉ-PROCESSAMENTO" FontWeight="SemiBold" FontSize="13" Foreground="#333"/>
                                     <TextBlock Text="{Binding Step1Status}" FontSize="11" Foreground="#888" Margin="0,2,0,0"
                                                TextTrimming="CharacterEllipsis"/>
-                                    <ProgressBar IsIndeterminate="True" Height="3" Background="#E3F2FD" Foreground="#1565C0" Margin="0,4,0,0">
-                                        <ProgressBar.Style>
-                                            <Style TargetType="ProgressBar">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsStep1Active}" Value="True">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ProgressBar.Style>
-                                    </ProgressBar>
+                                     <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <TextBlock Text="{Binding Step1Status}" FontSize="11" Foreground="#1565C0" FontWeight="SemiBold"/>
+                                        <TextBlock FontSize="11" Foreground="#1565C0" FontWeight="SemiBold">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value=""/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ShowLoadingDots}" Value="True">
+                                                            <Setter Property="Text" Value="..."/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
                                 </StackPanel>
                                 <Ellipse Grid.Column="2" Width="18" Height="18" StrokeThickness="2" StrokeDashArray="4 2"
                                          Stroke="#1565C0" RenderTransformOrigin="0.5,0.5">
@@ -304,18 +307,21 @@
                                     <TextBlock Text="AGRUPAR + ZIP" FontWeight="SemiBold" FontSize="13" Foreground="#333"/>
                                     <TextBlock Text="{Binding Step3Status}" FontSize="11" Foreground="#888" Margin="0,2,0,0"
                                                TextTrimming="CharacterEllipsis"/>
-                                    <ProgressBar IsIndeterminate="True" Height="3" Background="#E8F5E9" Foreground="#2E7D32" Margin="0,4,0,0">
-                                        <ProgressBar.Style>
-                                            <Style TargetType="ProgressBar">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsStep3Active}" Value="True">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ProgressBar.Style>
-                                    </ProgressBar>
+                                     <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                        <TextBlock Text="{Binding Step3Status}" FontSize="11" Foreground="#2E7D32" FontWeight="SemiBold"/>
+                                        <TextBlock FontSize="11" Foreground="#2E7D32" FontWeight="SemiBold">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value=""/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding ShowLoadingDots}" Value="True">
+                                                            <Setter Property="Text" Value="..."/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
                                     <Grid Margin="0,4,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
