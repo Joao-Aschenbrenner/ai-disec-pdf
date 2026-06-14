@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Pdfium.Net" Version="1.0.12" />
     <PackageReference Include="PdfPig" Version="0.1.14" />
     <PackageReference Include="PdfPig.Rendering.Skia" Version="0.1.14.2" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.27" />
