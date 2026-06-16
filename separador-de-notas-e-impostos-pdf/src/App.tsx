@@ -27,6 +27,7 @@ import { motion, AnimatePresence } from "motion/react";
 
 import { ExtractedMetadata, SplitPage } from "./types";
 import { sanitizeFilename, generatePageFilename } from "./utils/fileHelpers";
+import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 
 const MAX_CONCURRENT_REQUESTS = 3; // Process 3 pages at a time to prevent rate-limiting
 
@@ -150,13 +151,14 @@ export default function App() {
   // Callback to trigger backend OCR on page index
   const processSinglePage = async (idx: number, page: SplitPage): Promise<SplitPage> => {
     try {
+      const imageBase64 = await pdfBase64ToJpeg(page.base64);
       const response = await fetch("/api/extract", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          pdfBase64: page.base64,
+          pdfBase64: imageBase64,
           originalName: page.originalFileName,
           pageIndex: idx,
         }),
@@ -397,9 +399,9 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-end hidden md:flex">
             <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Motor Inteligente</span>
-            <span className="text-emerald-400 text-xs font-semibold flex items-center gap-1.5 mt-0.5">
-              <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span> Gemini 3.5 Flash ativo
-            </span>
+              <span className="text-emerald-400 text-xs font-semibold flex items-center gap-1.5 mt-0.5">
+                <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span> NVIDIA Llama Vision ativo
+              </span>
           </div>
 
           {selectedFile && (
@@ -873,7 +875,7 @@ export default function App() {
       {/* Visual Footer */}
       <footer className="py-8 bg-slate-900/20 border-t border-slate-900 text-center mt-12 px-4.5">
         <p className="text-xs text-slate-500 font-medium">
-          DocSplit AI • Desenvolvido com Gemini 3.5 Flash & pdf-lib • 100% Client-Side Zipping para máxima confidencialidade fiscal.
+          DocSplit AI • Desenvolvido com NVIDIA Llama Vision & pdf-lib • 100% Client-Side Zipping para máxima confidencialidade fiscal.
         </p>
       </footer>
     </div>

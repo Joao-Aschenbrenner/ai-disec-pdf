@@ -6,10 +6,16 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    optimizeDeps: {
+      exclude: ["pdfjs-dist"],
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
+    },
+    build: {
+      target: "esnext",
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.

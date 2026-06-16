@@ -1,17 +1,51 @@
 {
-  "name": "react-example",
+  "name": "docsplit-ai",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "DocSplit AI - Separador Inteligente de Notas e Impostos PDF",
   "type": "module",
+  "main": "electron/main.cjs",
   "scripts": {
-    "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "dev": "tsx bin/dev-server.ts",
+    "build": "vite build && esbuild bin/dev-server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
+    "electron:dev": "NODE_ENV=development npx electron .",
+    "electron:build": "npm run build && npx electron-builder",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
   },
+  "build": {
+    "appId": "com.docsplit-ai.app",
+    "productName": "DocSplit AI",
+    "asar": false,
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": null
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    },
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  },
   "dependencies": {
-    "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "dotenv": "^17.2.3",
@@ -20,6 +54,7 @@
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.0.379",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^6.2.3"
@@ -29,6 +64,8 @@
     "@types/jszip": "^3.4.0",
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
+    "electron": "^34.0.0",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
