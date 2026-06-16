@@ -1,8 +1,0 @@
-{
-  "tipo": "Servico",
-  "numero": null,
-  "nome": "CLINICA SAO PAULO",
-  "valor": "800.00",
-  "needsReview": false,
-  "ocrText": "NOTA DE SERVICO\nPRESTADOR: CLINICA SAO PAULO\nCNPJ: 11.222.333/0001-44\nServico Medico\nValor: R$ 800,00"
-}

@@ -1,8 +1,0 @@
-{
-  "tipo": "Imposto",
-  "numero": "12345678",
-  "nome": "11222333000144",
-  "valor": "2500.00",
-  "needsReview": false,
-  "ocrText": "DARF - DOCUMENTO DE ARRECADAÇÃO\nDOCUMENTO: 12345678\nCNPJ: 11.222.333/0001-44\nValor: R$ 2.500,00\nRECEITA FEDERAL"
-}

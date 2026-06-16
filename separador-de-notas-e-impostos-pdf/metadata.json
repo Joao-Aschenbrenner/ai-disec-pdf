@@ -1,0 +1,6 @@
+{
+  "name": "Separador de Notas e Impostos PDF",
+  "description": "Separa e renomeia automaticamente páginas de PDFs escaneados identificando notas fiscais, impostos, darfs e valores usando inteligência artificial.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
