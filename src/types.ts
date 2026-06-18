@@ -3,6 +3,7 @@ export interface ExtractedMetadata {
   notaNumber: string | null;
   companyName: string | null;
   valor: number | null;
+  pessoaNome: string | null;
   documentType: 'nota_fiscal' | 'imposto' | 'darf' | 'extrato' | 'planilha' | 'folha_pagamento' | 'outros';
 }
 

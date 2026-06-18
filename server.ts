@@ -136,13 +136,13 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const prompt = `Analise este documento PDF (uma única página) e retorne SOMENTE um JSON.
 
 REGRAS:
-- Se for NOTA FISCAL (fatura, NF-e, NFS-e, cupom, CT-e, recibo): {"isNotaFiscal":true, "notaNumber":"NUMERO", "companyName":"EMPRESA", "valor":NUMERO, "documentType":"nota_fiscal"}
-- Se for EXTRATO BANCÁRIO: {"isNotaFiscal":false, "notaNumber":null, "companyName":"BANCO", "valor":NUMERO, "documentType":"extrato"}
-- Se for DARF: {"isNotaFiscal":false, "notaNumber":null, "companyName":"darf", "valor":NUMERO, "documentType":"darf"}
-- Se for FOLHA DE PAGAMENTO/holerite: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":NUMERO, "documentType":"folha_pagamento"}
-- Se for PLANILHA/TABELA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "documentType":"planilha"}
-- Se for outro imposto/guia/boleto/taxa: {"isNotaFiscal":false, "notaNumber":null, "companyName":"TRIBUTO", "valor":NUMERO, "documentType":"imposto"}
-- Se não encaixar em nada acima: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "documentType":"outros"}
+- Se for NOTA FISCAL (fatura, NF-e, NFS-e, cupom, CT-e, recibo): {"isNotaFiscal":true, "notaNumber":"NUMERO", "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":null, "documentType":"nota_fiscal"}
+- Se for EXTRATO BANCÁRIO: {"isNotaFiscal":false, "notaNumber":null, "companyName":"BANCO", "valor":NUMERO, "pessoaNome":null, "documentType":"extrato"}
+- Se for DARF: {"isNotaFiscal":false, "notaNumber":null, "companyName":"darf", "valor":NUMERO, "pessoaNome":null, "documentType":"darf"}
+- Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"} — extraia o NOME COMPLETO do funcionário do holerite.
+- Se for PLANILHA/TABELA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"planilha"}
+- Se for outro imposto/guia/boleto/taxa: {"isNotaFiscal":false, "notaNumber":null, "companyName":"TRIBUTO", "valor":NUMERO, "pessoaNome":null, "documentType":"imposto"}
+- Se não encaixar em nada acima: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"outros"}
 
 IMPORTANTE: Se a página contiver MAIS DE UM documento (ex: 2 holerites lado a lado, ou um holerite em cima e outro embaixo), retorne um ARRAY de objetos: [{...documento1...}, {...documento2...}].
 

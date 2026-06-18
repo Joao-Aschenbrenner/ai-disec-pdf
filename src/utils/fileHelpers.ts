@@ -35,11 +35,15 @@ export function generatePageFilename(
   } else {
     identifiesPart = metadata.documentType === "extrato" ? "extrato"
       : metadata.documentType === "planilha" ? "planilha"
-      : metadata.documentType === "folha_pagamento" ? "folha_pagamento"
+      : metadata.documentType === "folha_pagamento" ? "FOPAG"
       : metadata.documentType === "darf" ? "darf"
       : "imposto";
 
-    if (metadata.documentType === "darf") {
+    if (metadata.documentType === "folha_pagamento") {
+      // Inclui nome do funcionário no lugar do companyName quando disponível
+      const nomePessoa = metadata.pessoaNome ? sanitizeFilename(metadata.pessoaNome) : "";
+      companyPart = nomePessoa || companyPart || "funcionario";
+    } else if (metadata.documentType === "darf") {
       companyPart = companyPart || "darf";
     } else if (metadata.documentType === "extrato") {
       companyPart = companyPart || "banco";

@@ -506,7 +506,8 @@ export default function App() {
   const impostoCount = splitPages.filter(p => p.metadata?.documentType === "imposto").length;
   const darfCount = splitPages.filter(p => p.metadata?.documentType === "darf").length;
   const extratoCount = splitPages.filter(p => p.metadata?.documentType === "extrato").length;
-  const outrosCount = splitPages.filter(p => p.metadata?.documentType === "outros" || p.metadata?.documentType === "planilha" || p.metadata?.documentType === "folha_pagamento").length;
+  const folhaPagamentoCount = splitPages.filter(p => p.metadata?.documentType === "folha_pagamento").length;
+  const outrosCount = splitPages.filter(p => p.metadata?.documentType === "outros" || p.metadata?.documentType === "planilha").length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 antialiased font-sans flex flex-col selection:bg-indigo-500/30 selection:text-indigo-200">
@@ -734,7 +735,7 @@ export default function App() {
           {selectedFile && splitPages.length > 0 && (
             <>
               {/* Bento Row Metrics Grid */}
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                 <div className="bg-slate-900 border border-slate-800/80 p-4.5 rounded-2xl shadow-lg shadow-black/20 hover:border-slate-700 transition-colors">
                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Invoices (NF-e)</p>
                   <p className="text-2xl font-extrabold text-indigo-400 mt-1.5">{notaFiscalCount}</p>
@@ -750,6 +751,10 @@ export default function App() {
                 <div className="bg-slate-900 border border-slate-800/80 p-4.5 rounded-2xl shadow-lg shadow-black/20 hover:border-slate-700 transition-colors">
                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Extratos</p>
                   <p className="text-2xl font-extrabold text-cyan-400 mt-1.5">{extratoCount}</p>
+                </div>
+                <div className="bg-slate-900 border border-amber-800/50 p-4.5 rounded-2xl shadow-lg shadow-black/20 hover:border-amber-700 transition-colors">
+                  <p className="text-[9px] font-bold text-amber-400 uppercase tracking-widest">FOPAG / Holerites</p>
+                  <p className="text-2xl font-extrabold text-amber-400 mt-1.5">{folhaPagamentoCount}</p>
                 </div>
                 <div className="bg-slate-900 border border-slate-800/80 p-4.5 rounded-2xl shadow-lg shadow-black/20 hover:border-slate-700 transition-colors">
                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Outros / Recibos</p>
@@ -902,22 +907,39 @@ export default function App() {
                               </div>
 
                               {/* Issuer or agency provider */}
-                              <div className="flex flex-col gap-1.5 md:col-span-5">
+                              <div className="flex flex-col gap-1.5 md:col-span-3">
                                 <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
                                   <Briefcase className="w-3.5 h-3.5 text-indigo-400" />
-                                  Emitente {page.metadata.isNotaFiscal ? "/ Razão Social" : "/ Nome Guia"}
+                                  {page.metadata.documentType === "folha_pagamento" ? "Empregador" : "Emitente"}
                                 </label>
                                 <input
                                   type="text"
                                   value={page.metadata.companyName || ""}
-                                  placeholder="Ex: Receita Federal"
+                                  placeholder={page.metadata.documentType === "folha_pagamento" ? "Ex: Empresa Ltda" : "Ex: Receita Federal"}
                                   onChange={(e) => handleManualMetadataEdit(idx, "companyName", e.target.value)}
                                   className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
                                 />
                               </div>
 
+                              {/* Employee / Person Name (visible for folha_pagamento) */}
+                              {page.metadata.documentType === "folha_pagamento" && (
+                                <div className="flex flex-col gap-1.5 md:col-span-3">
+                                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                    <Briefcase className="w-3.5 h-3.5 text-amber-400" />
+                                    Nome do Funcionário
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={page.metadata.pessoaNome || ""}
+                                    placeholder="Ex: João Silva"
+                                    onChange={(e) => handleManualMetadataEdit(idx, "pessoaNome", e.target.value)}
+                                    className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500"
+                                  />
+                                </div>
+                              )}
+
                               {/* Real Transaction Decimal Value */}
-                              <div className="flex flex-col gap-1.5 md:col-span-4">
+                              <div className="flex flex-col gap-1.5 md:col-span-3">
                                 <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
                                   <DollarSign className="w-3.5 h-3.5 text-indigo-400" />
                                   Valor total líquido R$
@@ -933,7 +955,7 @@ export default function App() {
                               </div>
 
                               {/* Manual layout name editor */}
-                              <div className="flex flex-col gap-1.5 md:col-span-8">
+                              <div className="flex flex-col gap-1.5 md:col-span-6">
                                 <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">
                                   Ajustar nome do arquivo físico resultante
                                 </span>
