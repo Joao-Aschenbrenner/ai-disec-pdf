@@ -32,7 +32,12 @@ import { ExtractedMetadata, SplitPage } from "./types";
 import { sanitizeFilename, generatePageFilename } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 
-const MAX_CONCURRENT_REQUESTS = 3; // Process 3 pages at a time to prevent rate-limiting
+const MAX_CONCURRENT_REQUESTS = 10;
+
+let pageIdCounter = 0;
+function nextPageId(): string {
+  return `p${pageIdCounter++}`;
+}
 
 export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -144,6 +149,7 @@ export default function App() {
         const customFilename = `${cleanBaseOrig}_pag${i + 1}.pdf`;
 
         pages.push({
+          id: nextPageId(),
           index: i,
           base64,
           blobUrl,
@@ -169,7 +175,7 @@ export default function App() {
   };
 
   // Callback to trigger backend OCR on page index
-  const processSinglePage = async (idx: number, page: SplitPage): Promise<SplitPage> => {
+  const processSinglePage = async (id: string, page: SplitPage): Promise<SplitPage> => {
     try {
       const imageBase64 = await pdfBase64ToJpeg(page.base64);
       const response = await fetch("/api/extract", {
@@ -180,69 +186,72 @@ export default function App() {
         body: JSON.stringify({
           pdfBase64: imageBase64,
           originalName: page.originalFileName,
-          pageIndex: idx,
+          pageIndex: page.index,
         }),
       });
 
       if (!response.ok) {
         const errJson = await response.json();
-        throw new Error(errJson.error || "Erro de requisição.");
+        const err = new Error(errJson.error || "Erro de requisição.") as any;
+        err.retryAfter = errJson.retryAfter;
+        throw err;
       }
 
       const result = await response.json();
 
       // Handle multiple documents per page (array response)
       if (result._multiple && Array.isArray(result.documents)) {
-        // Use first document for this page, expand remaining as new pages
         const docs = result.documents;
         const firstMeta = docs[0] as ExtractedMetadata;
-        let customFilename = generatePageFilename(page.originalFileName, idx, firstMeta);
+        let filename = generatePageFilename(page.originalFileName, page.index, firstMeta);
         if (removeOriginalName) {
-          customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
+          filename = filename.substring(filename.indexOf("_pag") + 1);
         }
-        // If there are extra docs, emit them via callback to insert after this page
-        if (docs.length > 1) {
-          setTimeout(() => {
-            const extraPages: SplitPage[] = docs.slice(1).map((meta: ExtractedMetadata, i: number) => ({
-              ...page,
-              base64: page.base64,
-              status: "success" as const,
-              metadata: meta,
-              customFilename: generatePageFilename(page.originalFileName, idx + i + 1, meta),
-            }));
-            setSplitPages(prev => {
-              const next = [...prev];
-              next.splice(idx + 1, 0, ...extraPages);
-              return next;
-            });
-          }, 0);
-        }
+        const extraPages: SplitPage[] = docs.slice(1).map((meta: ExtractedMetadata, i: number) => {
+          let extraFilename = generatePageFilename(page.originalFileName, page.index + i + 1, meta);
+          if (removeOriginalName) {
+            extraFilename = extraFilename.substring(extraFilename.indexOf("_pag") + 1);
+          }
+          return {
+            ...page,
+            id: nextPageId(),
+            base64: page.base64,
+            status: "success" as const,
+            metadata: meta,
+            customFilename: extraFilename,
+          };
+        });
         return {
+          id,
           ...page,
           status: "success",
           metadata: firstMeta,
-          customFilename,
-        };
+          customFilename: filename,
+          _extraPages: extraPages,
+        } as SplitPage & { _extraPages?: SplitPage[] };
       }
 
       const metadata = result as ExtractedMetadata;
-      let customFilename = generatePageFilename(page.originalFileName, idx, metadata);
+      let customFilename = generatePageFilename(page.originalFileName, page.index, metadata);
       if (removeOriginalName) {
         customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
       }
 
       return {
+        id,
         ...page,
         status: "success",
         metadata,
         customFilename,
       };
     } catch (err: any) {
-      console.error(`Page ${idx + 1} processing failed:`, err);
+      console.error(`Page ${page.index + 1} processing failed:`, err);
       return {
+        id,
         ...page,
         status: "failed",
-        error: err.message || "Erro de processamento da rede inteligente",
+        error: err.message || "Erro de processamento",
+        retryAfter: err.retryAfter,
       };
     }
   };
@@ -256,45 +265,90 @@ export default function App() {
     const updatedPages = splitPages.map(p => ({
       ...p,
       status: (p.status === "success" ? "success" : "pending") as "success" | "pending",
-      error: undefined
+      error: undefined,
+      retryAfter: undefined,
     }));
     setSplitPages(updatedPages);
 
     // Process queued items with a concurrency control limit
-    const queue = [...updatedPages.keys()].filter(idx => updatedPages[idx].status !== "success");
+    const queue = updatedPages.filter(p => p.status !== "success");
+    // Track retry count per page id
+    const retries: Record<string, number> = {};
     
     // Simple async pool loop
     const activePromises: Promise<void>[] = [];
     
-    for (const idx of queue) {
-      // Check if another slot is available, wait if the pool is full
-      if (activePromises.length >= MAX_CONCURRENT_REQUESTS) {
-        await Promise.race(activePromises);
+    while (queue.length > 0 || activePromises.length > 0) {
+      // Fill pool up to the limit
+      while (queue.length > 0 && activePromises.length < MAX_CONCURRENT_REQUESTS) {
+        const page = queue.shift()!;
+        
+        // Update item status in UI to 'processing'
+        setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
+
+        const process = async () => {
+          const result = await processSinglePage(page.id, page);
+          
+          // Handle extra pages from multi-document
+          const extraPages = (result as any)._extraPages as SplitPage[] | undefined;
+          if (extraPages && extraPages.length > 0) {
+            setSplitPages(prev => {
+              const idx = prev.findIndex(p => p.id === page.id);
+              if (idx === -1) return prev;
+              const next = [...prev];
+              next.splice(idx + 1, 0, ...extraPages);
+              return next;
+            });
+          }
+
+          // Auto-retry failed pages with backoff
+          if (result.status === "failed") {
+            const attempt = (retries[page.id] || 0) + 1;
+            retries[page.id] = attempt;
+            
+            if (attempt < 3) {
+              let delayMs = 2000 * attempt; // 2s, 4s, 6s
+              if (result.retryAfter) {
+                const match = result.retryAfter.match(/(\d+)/);
+                if (match) delayMs = parseInt(match[1]) * 1000;
+              }
+              console.log(`[retry] ${page.id} tentativa ${attempt + 1} em ${delayMs}ms`);
+              await new Promise(r => setTimeout(r, delayMs));
+              // Re-process
+              const retryResult = await processSinglePage(page.id, page);
+              // Handle extra pages from retry
+              const retryExtra = (retryResult as any)._extraPages as SplitPage[] | undefined;
+              if (retryExtra && retryExtra.length > 0) {
+                setSplitPages(prev => {
+                  const idx = prev.findIndex(p => p.id === page.id);
+                  if (idx === -1) return prev;
+                  const next = [...prev];
+                  next.splice(idx + 1, 0, ...retryExtra);
+                  return next;
+                });
+              }
+              setSplitPages(prev => prev.map(p => p.id === page.id ? retryResult : p));
+            } else {
+              setSplitPages(prev => prev.map(p => p.id === page.id ? result : p));
+            }
+          } else {
+            setSplitPages(prev => prev.map(p => p.id === page.id ? result : p));
+          }
+
+          // Remove self from active list
+          const idx = activePromises.indexOf(promise);
+          if (idx !== -1) activePromises.splice(idx, 1);
+        };
+
+        const promise = process();
+        activePromises.push(promise);
       }
 
-      // Update item status in UI to 'processing'
-      setSplitPages(prev => {
-        const next = [...prev];
-        next[idx] = { ...next[idx], status: "processing" };
-        return next;
-      });
-
-      // Start processing
-      const pPromise = processSinglePage(idx, updatedPages[idx]).then(result => {
-        setSplitPages(prev => {
-          const next = [...prev];
-          next[idx] = result;
-          return next;
-        });
-        // Remove self from active list
-        activePromises.splice(activePromises.indexOf(pPromise), 1);
-      });
-
-      activePromises.push(pPromise);
+      if (activePromises.length > 0) {
+        await Promise.race(activePromises);
+      }
     }
 
-    // Wait for remaining items
-    await Promise.all(activePromises);
     setIsProcessing(false);
   };
 
@@ -446,7 +500,7 @@ export default function App() {
   const totalPages = splitPages.length;
   const processedCount = splitPages.filter(p => p.status === "success").length;
   const failedCount = splitPages.filter(p => p.status === "failed").length;
-  const pendingCount = splitPages.filter(p => p.status === "pending" || p.status === "processing").length;
+  const pendingCount = splitPages.filter(p => p.status === "pending" || p.status === "processing" || p.status === "failed").length;
   
   const notaFiscalCount = splitPages.filter(p => p.metadata?.documentType === "nota_fiscal").length;
   const impostoCount = splitPages.filter(p => p.metadata?.documentType === "imposto").length;
@@ -583,7 +637,7 @@ export default function App() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3 mt-3">
+                <div className="grid grid-cols-3 gap-3 mt-3">
                   <button
                     onClick={processAllPages}
                     disabled={isProcessing || pendingCount === 0}
@@ -598,10 +652,28 @@ export default function App() {
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4 text-amber-400" />
-                        Identificar & Organizar Páginas
+                        {failedCount > 0 ? `Re-processar (${failedCount} falhas)` : "Identificar & Organizar Páginas"}
                       </>
                     )}
                   </button>
+                  {failedCount > 0 && !isProcessing && (
+                    <button
+                      onClick={async () => {
+                        setIsProcessing(true);
+                        const failed = splitPages.filter(p => p.status === "failed");
+                        for (const page of failed) {
+                          setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
+                          const res = await processSinglePage(page.id, page);
+                          setSplitPages(prev => prev.map(p => p.id === page.id ? res : p));
+                        }
+                        setIsProcessing(false);
+                      }}
+                      className="py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition-all shadow-lg active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Re-tentar {failedCount}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -899,17 +971,9 @@ export default function App() {
                               </div>
                               <button
                                 onClick={async () => {
-                                  setSplitPages(prev => {
-                                    const next = [...prev];
-                                    next[idx] = { ...next[idx], status: "processing" };
-                                    return next;
-                                  });
-                                  const res = await processSinglePage(idx, page);
-                                  setSplitPages(prev => {
-                                    const next = [...prev];
-                                    next[idx] = res;
-                                    return next;
-                                  });
+                                  setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
+                                  const res = await processSinglePage(page.id, page);
+                                  setSplitPages(prev => prev.map(p => p.id === page.id ? res : p));
                                 }}
                                 className="px-3 py-1 bg-rose-900 hover:bg-rose-800 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                               >

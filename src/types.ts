@@ -7,6 +7,7 @@ export interface ExtractedMetadata {
 }
 
 export interface SplitPage {
+  id: string;
   index: number;
   base64: string;
   blobUrl: string;
@@ -14,5 +15,6 @@ export interface SplitPage {
   customFilename: string;
   status: 'pending' | 'processing' | 'success' | 'failed';
   error?: string;
+  retryAfter?: string;
   metadata?: ExtractedMetadata;
 }
