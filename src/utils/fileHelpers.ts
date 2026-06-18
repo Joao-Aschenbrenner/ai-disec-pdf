@@ -22,32 +22,32 @@ export function generatePageFilename(
   index: number,
   metadata: ExtractedMetadata
 ): string {
-  const baseOriginal = sanitizeFilename(originalFilename.replace(/\.pdf$/i, ""));
-  
   const isInvoice = metadata.isNotaFiscal || metadata.documentType === "nota_fiscal";
-  
+
   let identifiesPart = "";
   let companyPart = sanitizeFilename(metadata.companyName || "");
 
   if (isInvoice) {
-    // If it is a Nota Fiscal, use the notaNumber if available, or "nota_sem_numero"
     identifiesPart = sanitizeFilename(metadata.notaNumber || "nota") || "nota";
     if (!companyPart) {
       companyPart = "empresa-desconhecida";
     }
   } else {
-    // If it's a tax / slip (not a nota fiscal)
-    identifiesPart = "imposto";
-    
-    // Handle fallbacks for DARF or other tax slips without explicit names
+    identifiesPart = metadata.documentType === "extrato" ? "extrato"
+      : metadata.documentType === "planilha" ? "planilha"
+      : metadata.documentType === "folha_pagamento" ? "folha_pagamento"
+      : metadata.documentType === "darf" ? "darf"
+      : "imposto";
+
     if (metadata.documentType === "darf") {
       companyPart = companyPart || "darf";
+    } else if (metadata.documentType === "extrato") {
+      companyPart = companyPart || "banco";
     } else {
-      companyPart = companyPart || "taxa_or_guia";
+      companyPart = companyPart || identifiesPart || "documento";
     }
   }
 
-  // Format value cleanly. E.g. 1500.50 -> 1500.50. If null, use "0.00"
   let valorPart = "0.00";
   if (metadata.valor !== null && metadata.valor !== undefined) {
     valorPart = parseFloat(metadata.valor.toString()).toFixed(2);
@@ -55,6 +55,5 @@ export function generatePageFilename(
     valorPart = "sem_valor";
   }
 
-  // Final format: [nome_original_pagina]_[nota/imposto]_[empresa/darf]_[valor].pdf
-  return `${baseOriginal}_pag${index + 1}_${identifiesPart}_${companyPart}_${valorPart}.pdf`;
+  return `pag${index + 1}_${identifiesPart}_${companyPart}_${valorPart}.pdf`;
 }

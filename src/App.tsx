@@ -1,4 +1,4 @@
-import { useState, useRef, ChangeEvent, DragEvent } from "react";
+import { useState, useRef, useEffect, ChangeEvent, DragEvent } from "react";
 import { PDFDocument } from "pdf-lib";
 import JSZip from "jszip";
 import { 
@@ -12,7 +12,8 @@ import {
   Trash2, 
   Check, 
   ChevronRight, 
-  Eye, 
+  Eye,
+  EyeOff,
   FileCheck, 
   Sparkles,
   Info,
@@ -21,7 +22,9 @@ import {
   Hash,
   X,
   FileDown,
-  FileCode
+  FileCode,
+  Settings,
+  Cog
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -41,6 +44,23 @@ export default function App() {
   
   // Custom user parameters to adjust original filename prefixing
   const [removeOriginalName, setRemoveOriginalName] = useState(false);
+
+  // Settings state
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsProvider, setSettingsProvider] = useState("GOOGLE");
+  const [settingsApiKey, setSettingsApiKey] = useState("");
+  const [currentProvider, setCurrentProvider] = useState("GOOGLE");
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+
+  // Carrega settings ao montar
+  useEffect(() => {
+    fetch("/api/settings").then(r => r.json()).then(s => {
+      if (s.provider) setCurrentProvider(s.provider);
+      if (s.provider) setSettingsProvider(s.provider);
+      if (s.apiKey) setSettingsApiKey(s.apiKey);
+    }).catch(() => {});
+  }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -169,12 +189,44 @@ export default function App() {
         throw new Error(errJson.error || "Erro de requisição.");
       }
 
-      const metadata: ExtractedMetadata = await response.json();
-      
-      // Generate standard professional file name
+      const result = await response.json();
+
+      // Handle multiple documents per page (array response)
+      if (result._multiple && Array.isArray(result.documents)) {
+        // Use first document for this page, expand remaining as new pages
+        const docs = result.documents;
+        const firstMeta = docs[0] as ExtractedMetadata;
+        let customFilename = generatePageFilename(page.originalFileName, idx, firstMeta);
+        if (removeOriginalName) {
+          customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
+        }
+        // If there are extra docs, emit them via callback to insert after this page
+        if (docs.length > 1) {
+          setTimeout(() => {
+            const extraPages: SplitPage[] = docs.slice(1).map((meta: ExtractedMetadata, i: number) => ({
+              ...page,
+              base64: page.base64,
+              status: "success" as const,
+              metadata: meta,
+              customFilename: generatePageFilename(page.originalFileName, idx + i + 1, meta),
+            }));
+            setSplitPages(prev => {
+              const next = [...prev];
+              next.splice(idx + 1, 0, ...extraPages);
+              return next;
+            });
+          }, 0);
+        }
+        return {
+          ...page,
+          status: "success",
+          metadata: firstMeta,
+          customFilename,
+        };
+      }
+
+      const metadata = result as ExtractedMetadata;
       let customFilename = generatePageFilename(page.originalFileName, idx, metadata);
-      
-      // Handle the setting: remove original file name prefix
       if (removeOriginalName) {
         customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
       }
@@ -367,6 +419,29 @@ export default function App() {
     });
   };
 
+  // Save settings to server
+  const saveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: settingsProvider, apiKey: settingsApiKey }),
+      });
+      if (res.ok) {
+        setCurrentProvider(settingsProvider);
+        setShowSettings(false);
+      } else {
+        const err = await res.json();
+        alert("Erro ao salvar: " + (err.error || "desconhecido"));
+      }
+    } catch (e: any) {
+      alert("Erro de conexão: " + e.message);
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
   // Statistical calculations
   const totalPages = splitPages.length;
   const processedCount = splitPages.filter(p => p.status === "success").length;
@@ -376,12 +451,14 @@ export default function App() {
   const notaFiscalCount = splitPages.filter(p => p.metadata?.documentType === "nota_fiscal").length;
   const impostoCount = splitPages.filter(p => p.metadata?.documentType === "imposto").length;
   const darfCount = splitPages.filter(p => p.metadata?.documentType === "darf").length;
-  const outrosCount = splitPages.filter(p => p.metadata?.documentType === "outros").length;
+  const extratoCount = splitPages.filter(p => p.metadata?.documentType === "extrato").length;
+  const outrosCount = splitPages.filter(p => p.metadata?.documentType === "outros" || p.metadata?.documentType === "planilha" || p.metadata?.documentType === "folha_pagamento").length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 antialiased font-sans flex flex-col selection:bg-indigo-500/30 selection:text-indigo-200">
       {/* Bento-styled Sticky Header */}
-      <header className="sticky top-4 mx-4 md:mx-8 z-40 bg-slate-900/80 backdrop-blur-md border border-slate-800/80 py-4.5 px-6 md:px-10 rounded-2xl flex justify-between items-center shadow-2xl shadow-indigo-950/20 mt-4 transition-all">
+      <div className="sticky top-0 z-40 pt-3 pb-1 px-3 md:px-6">
+        <header className="bg-slate-900/80 backdrop-blur-md border border-slate-800/80 py-4.5 px-6 md:px-10 rounded-2xl flex justify-between items-center shadow-2xl shadow-indigo-950/20 transition-all">
         <div className="flex items-center gap-3">
           <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-500/20">
             <FileCheck className="w-5.5 h-5.5" id="logo-icon" />
@@ -400,9 +477,17 @@ export default function App() {
           <div className="flex flex-col items-end hidden md:flex">
             <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Motor Inteligente</span>
               <span className="text-emerald-400 text-xs font-semibold flex items-center gap-1.5 mt-0.5">
-                <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span> NVIDIA Llama Vision ativo
+                <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span> {currentProvider} ativo
               </span>
           </div>
+
+          <button
+            onClick={() => { setSettingsProvider(currentProvider); setShowSettings(true); }}
+            className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-indigo-950/30 rounded-lg transition-all border border-transparent hover:border-indigo-900/30 cursor-pointer"
+            title="Configurações de API"
+          >
+            <Cog className="w-4.5 h-4.5" />
+          </button>
 
           {selectedFile && (
             <button 
@@ -416,8 +501,9 @@ export default function App() {
           )}
         </div>
       </header>
+      </div>
 
-      <main className="max-w-[1600px] w-full mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start flex-1">
+      <main className="max-w-[1600px] w-full mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         
         {/* LEFT COLUMN: Upload, Settings and Side PDF display (Bento Grid columns) */}
         <section className="col-span-1 lg:col-span-12 xl:col-span-5 flex flex-col gap-6 h-full">
@@ -576,7 +662,7 @@ export default function App() {
           {selectedFile && splitPages.length > 0 && (
             <>
               {/* Bento Row Metrics Grid */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 <div className="bg-slate-900 border border-slate-800/80 p-4.5 rounded-2xl shadow-lg shadow-black/20 hover:border-slate-700 transition-colors">
                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Invoices (NF-e)</p>
                   <p className="text-2xl font-extrabold text-indigo-400 mt-1.5">{notaFiscalCount}</p>
@@ -588,6 +674,10 @@ export default function App() {
                 <div className="bg-slate-900 border border-slate-800/80 p-4.5 rounded-2xl shadow-lg shadow-black/20 hover:border-slate-700 transition-colors">
                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Guias DARF</p>
                   <p className="text-2xl font-extrabold text-amber-400 mt-1.5">{darfCount}</p>
+                </div>
+                <div className="bg-slate-900 border border-slate-800/80 p-4.5 rounded-2xl shadow-lg shadow-black/20 hover:border-slate-700 transition-colors">
+                  <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Extratos</p>
+                  <p className="text-2xl font-extrabold text-cyan-400 mt-1.5">{extratoCount}</p>
                 </div>
                 <div className="bg-slate-900 border border-slate-800/80 p-4.5 rounded-2xl shadow-lg shadow-black/20 hover:border-slate-700 transition-colors">
                   <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Outros / Recibos</p>
@@ -674,9 +764,13 @@ export default function App() {
                                 </span>
                               )}
                               {page.status === "failed" && (
-                                <span className="text-[10px] font-bold bg-rose-950/50 border border-rose-900/30 text-rose-400 px-2.5 py-1 rounded-md flex items-center gap-1" title={page.error}>
+                                <span className="text-[10px] font-bold bg-rose-950/50 border border-rose-900/30 text-rose-400 px-2.5 py-1 rounded-md flex items-center gap-1 cursor-help" title={page.error}>
                                   <AlertCircle className="w-3.5 h-3.5" />
-                                  Falhou
+                                  {page.error?.includes("Cota") || page.error?.includes("requisições")
+                                    ? "Cota excedida"
+                                    : page.error?.includes("Chave")
+                                    ? "Sem chave"
+                                    : "Falhou"}
                                 </span>
                               )}
 
@@ -692,7 +786,7 @@ export default function App() {
 
                           {/* Editable extracted metadata details (Rendered upon success) */}
                           {hasResult && page.metadata && (
-                            <div className="bg-slate-950 border border-slate-850 rounded-xl p-4 grid grid-cols-1 md:grid-cols-12 gap-4">
+                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-12 gap-4">
                               
                               {/* Document Type Picker */}
                               <div className="flex flex-col gap-1.5 md:col-span-4">
@@ -707,18 +801,21 @@ export default function App() {
                                     handleManualMetadataEdit(idx, "documentType", typeVal);
                                     handleManualMetadataEdit(idx, "isNotaFiscal", typeVal === "nota_fiscal");
                                   }}
-                                  className="text-xs bg-slate-900/85 border border-slate-805 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
+                                  className="text-xs bg-slate-900/85 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
                                 >
                                   <option value="nota_fiscal">Nota Fiscal (INVOICE)</option>
                                   <option value="imposto">Imposto / Guia de Taxa</option>
                                   <option value="darf">DARF (Federais)</option>
-                                  <option value="outros">Guia de Consumo / Outros</option>
+                                  <option value="extrato">Extrato Bancário</option>
+                                  <option value="planilha">Planilha / Tabela</option>
+                                  <option value="folha_pagamento">Folha de Pagamento</option>
+                                  <option value="outros">Outros</option>
                                 </select>
                               </div>
 
                               {/* Number detail (defaults imposto for non-NF) */}
                               <div className="flex flex-col gap-1.5 md:col-span-3">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-space flex items-center gap-1.5">
+                                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
                                   <Hash className="w-3.5 h-3.5 text-indigo-400" />
                                   Número {page.metadata.isNotaFiscal ? "da Nota" : "(Imposto)"}
                                 </label>
@@ -728,7 +825,7 @@ export default function App() {
                                   value={page.metadata.isNotaFiscal ? (page.metadata.notaNumber || "") : "imposto"}
                                   placeholder="Sem número"
                                   onChange={(e) => handleManualMetadataEdit(idx, "notaNumber", e.target.value)}
-                                  className="text-xs bg-slate-900 border border-slate-805 disabled:bg-slate-900/50 disabled:text-slate-600 disabled:border-slate-900 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
+                                  className="text-xs bg-slate-900 border border-slate-700 disabled:bg-slate-900/50 disabled:text-slate-600 disabled:border-slate-900 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
                                 />
                               </div>
 
@@ -743,7 +840,7 @@ export default function App() {
                                   value={page.metadata.companyName || ""}
                                   placeholder="Ex: Receita Federal"
                                   onChange={(e) => handleManualMetadataEdit(idx, "companyName", e.target.value)}
-                                  className="text-xs bg-slate-900 border border-slate-805 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
+                                  className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
                                 />
                               </div>
 
@@ -759,7 +856,7 @@ export default function App() {
                                   value={page.metadata.valor !== null ? page.metadata.valor : ""}
                                   placeholder="0.00"
                                   onChange={(e) => handleManualMetadataEdit(idx, "valor", e.target.value ? parseFloat(e.target.value) : null)}
-                                  className="text-xs bg-slate-900 border border-slate-805 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
+                                  className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
                                 />
                               </div>
 
@@ -772,7 +869,7 @@ export default function App() {
                                   type="text"
                                   value={page.customFilename}
                                   onChange={(e) => handleManualFilenameDirectEdit(idx, e.target.value)}
-                                  className="text-xs bg-slate-900 border border-slate-805 rounded-lg p-2.5 font-mono text-slate-300 focus:outline-hidden focus:border-indigo-500"
+                                  className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-mono text-slate-300 focus:outline-hidden focus:border-indigo-500"
                                 />
                               </div>
                             </div>
@@ -780,11 +877,28 @@ export default function App() {
 
                           {/* Failure Retry Box style */}
                           {page.status === "failed" && (
-                            <div className="flex items-center justify-between p-3.5 bg-rose-950/40 border border-rose-900/30 text-rose-300 rounded-xl">
-                              <span className="text-xs font-semibold">{page.error}</span>
+                            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-rose-950/40 border border-rose-900/30 text-rose-300 rounded-xl">
+                              <div className="flex-1 min-w-0">
+                                <span className="text-xs font-semibold block">
+                                  {page.error?.includes("Cota") || page.error?.includes("Muitas requisições")
+                                    ? "⚠️ " + page.error
+                                    : page.error?.includes("Chave")
+                                    ? "🔑 " + page.error
+                                    : page.error}
+                                </span>
+                                {(page.error?.includes("Cota") || page.error?.includes("requisições")) && (
+                                  <span className="text-[11px] text-rose-400/60 mt-1 block">
+                                    Tente novamente em alguns minutos ou escolha outro provedor nas configurações ⚙️
+                                  </span>
+                                )}
+                                {page.error?.includes("Chave") && (
+                                  <span className="text-[11px] text-rose-400/60 mt-1 block">
+                                    Vá em Configurações ⚙️ e adicione uma chave válida
+                                  </span>
+                                )}
+                              </div>
                               <button
                                 onClick={async () => {
-                                  // Retry single page
                                   setSplitPages(prev => {
                                     const next = [...prev];
                                     next[idx] = { ...next[idx], status: "processing" };
@@ -797,7 +911,7 @@ export default function App() {
                                     return next;
                                   });
                                 }}
-                                className="px-3 py-1 bg-rose-900 hover:bg-rose-800 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 cursor-pointer"
+                                className="px-3 py-1 bg-rose-900 hover:bg-rose-800 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                               >
                                 <RefreshCw className="w-3.5 h-3.5" />
                                 Re-tentar
@@ -849,7 +963,7 @@ export default function App() {
                   </div>
                   <div>
                     <h4 className="text-xs font-bold text-slate-200">Regras Inteligentes de Nomes</h4>
-                    <p className="text-[12px] text-slate-405 leading-normal mt-0.5">
+                    <p className="text-[12px] text-slate-400 leading-normal mt-0.5">
                       Para Notas, vira: <code className="bg-slate-900 text-indigo-300 px-1 py-0.5 rounded-md text-[11px] font-mono">nome_n°nota_empresa_valor.pdf</code>.
                       Se não for nota, o número é substituído por <code className="bg-slate-900 text-indigo-300 px-1 py-0.5 rounded-md text-[11px] font-mono">imposto</code>, ou <code className="bg-slate-900 text-indigo-300 px-1 py-0.5 rounded-md text-[11px] font-mono">imposto_darf</code> no emissor.
                     </p>
@@ -878,6 +992,93 @@ export default function App() {
           DocSplit AI • Desenvolvido com NVIDIA Llama Vision & pdf-lib • 100% Client-Side Zipping para máxima confidencialidade fiscal.
         </p>
       </footer>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowSettings(false)}>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md shadow-2xl mx-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Cog className="w-4.5 h-4.5 text-indigo-400" />
+                Configurações de API
+              </h3>
+              <button onClick={() => setShowSettings(false)} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Provedor de IA</label>
+                <select
+                  value={settingsProvider}
+                  onChange={e => setSettingsProvider(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
+                >
+                  <option value="GOOGLE">Google Gemini Flash 2.0 (grátis) 🎉</option>
+                  <option value="NVIDIA">NVIDIA (Llama Vision)</option>
+                  <option value="OPENAI">OpenAI (GPT-4o)</option>
+                  <option value="ANTHROPIC">Anthropic (Claude 3 Sonnet)</option>
+                  <option value="MISTRAL">Mistral (Mistral Vision)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Chave de API</label>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type={showApiKey ? "text" : "password"}
+                      value={settingsApiKey}
+                      onChange={e => setSettingsApiKey(e.target.value)}
+                      placeholder={settingsApiKey ? "Chave salva. Digite para trocar." : "Cole sua chave aqui"}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowApiKey(!showApiKey)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-slate-300 cursor-pointer"
+                      tabIndex={-1}
+                    >
+                      {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  {settingsApiKey && (
+                    <button
+                      onClick={() => setSettingsApiKey("")}
+                      className="px-3 py-2.5 text-xs font-bold text-rose-400 bg-rose-950/30 border border-rose-900/30 hover:bg-rose-950/50 rounded-xl transition-all cursor-pointer shrink-0"
+                      title="Remover chave"
+                    >
+                      Remover
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1.5">
+                  {settingsApiKey
+                    ? "Chave salva em ~/.docsplit-ai/settings.json"
+                    : "Sua chave fica salva localmente no disco."}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setShowSettings(false)}
+                className="flex-1 px-4 py-2.5 text-sm font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={saveSettings}
+                disabled={savingSettings}
+                className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all disabled:opacity-50 cursor-pointer"
+              >
+                {savingSettings ? "Salvando..." : "Salvar"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

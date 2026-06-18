@@ -1,50 +1,43 @@
 const { app, BrowserWindow } = require("electron");
 const path = require("path");
-const { spawn, fork } = require("child_process");
+
+// Carrega .env antes de qualquer coisa
+try {
+  const dotenv = require("dotenv");
+  dotenv.config({ path: path.join(__dirname, "..", ".env") });
+} catch (e) {
+  console.warn("[main] dotenv not available, using existing env");
+}
 
 let mainWindow = null;
-let serverProcess = null;
 
-const PORT = 3000;
-const isDev = process.env.NODE_ENV !== "production";
+const PORT = 3001;
+const isDev = process.env.NODE_ENV === "development";
 
-function startServer() {
-  return new Promise((resolve, reject) => {
-    if (isDev) {
-      const serverPath = path.join(__dirname, "..", "bin", "dev-server.ts");
-      serverProcess = spawn("npx.cmd", ["tsx", serverPath], {
-        stdio: "pipe",
-        env: { ...process.env, PORT: String(PORT), NODE_ENV: "development" },
-        shell: true,
-      });
-    } else {
-      const serverPath = path.join(__dirname, "..", "dist", "server.cjs");
-      serverProcess = fork(serverPath, [], {
-        env: { ...process.env, PORT: String(PORT), NODE_ENV: "production" },
-        stdio: "pipe",
-      });
-    }
+app.commandLine.appendSwitch("disable-gpu");
+app.commandLine.appendSwitch("no-sandbox");
 
-    let started = false;
-    const onData = (data) => {
-      const text = data.toString();
-      console.log("[server]", text);
-      if (!started && text.includes("Server running")) {
-        started = true;
-        resolve();
-      }
-    };
+async function startServer() {
+  if (isDev) {
+    console.log("[main] Dev mode - using Vite dev server");
+    return true;
+  }
 
-    if (serverProcess.stdout) serverProcess.stdout.on("data", onData);
-    if (serverProcess.stderr) serverProcess.stderr.on("data", onData);
-    serverProcess.on("error", reject);
-    serverProcess.on("exit", (code) => {
-      if (!started) reject(new Error(`Server exited with code ${code}`));
-    });
-    setTimeout(() => {
-      if (!started) { started = true; resolve(); }
-    }, 10000);
-  });
+  // Muda o diretório de trabalho para a raiz da app (onde está .env e dist/)
+  const appDir = path.join(__dirname, "..");
+  process.chdir(appDir);
+  console.log("[main] Working directory:", process.cwd());
+
+  try {
+    const serverPath = path.join(appDir, "dist", "server-module.cjs");
+    console.log("[main] Loading server from:", serverPath);
+    const { startServer } = require(serverPath);
+    await startServer(PORT, false);
+    return true;
+  } catch (err) {
+    console.error("[main] Failed to start server:", err);
+    return false;
+  }
 }
 
 function createWindow() {
@@ -54,29 +47,47 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "DocSplit AI - Separador Inteligente de PDF",
+    show: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       nodeIntegration: false,
+      contextIsolation: true,
     },
   });
 
   mainWindow.loadURL(`http://localhost:${PORT}`);
+  mainWindow.webContents.on("did-fail-load", (event, errorCode, errorDescription) => {
+    console.error("[main] Failed to load:", errorCode, errorDescription);
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    console.log("[main] Page loaded successfully");
+  });
   if (isDev) mainWindow.webContents.openDevTools({ mode: "detach" });
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 
+console.log("[main] NODE_ENV:", process.env.NODE_ENV, "isDev:", isDev);
+
 app.whenReady().then(async () => {
-  await startServer();
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+  try {
+    console.log("[main] Starting server in main process...");
+    const ok = await startServer();
+    if (ok) {
+      console.log("[main] Server started. Creating window...");
+      createWindow();
+      app.on("activate", () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      });
+    } else {
+      console.error("[main] Server failed, quitting.");
+      app.quit();
+    }
+  } catch (err) {
+    console.error("[main] App error:", err);
+    app.quit();
+  }
 });
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
-});
-
-app.on("will-quit", () => {
-  if (serverProcess) serverProcess.kill();
 });
