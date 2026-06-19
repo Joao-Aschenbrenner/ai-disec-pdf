@@ -147,7 +147,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
 REGRAS:
 - Se for NOTA FISCAL (fatura, NF-e, NFS-e, cupom, CT-e, recibo): {"isNotaFiscal":true, "notaNumber":"NUMERO", "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":null, "documentType":"nota_fiscal"}
-  IMPORTANTE para NFS-e: companyName deve ser a RAZÃO SOCIAL do prestador/emitente. NUNCA use "Secretaria da Fazenda", "Sefaz", "Prefeitura Municipal" ou nome de órgão público/sistema. Ignore cabeçalhos do sistema emissor.
+  IMPORTANTE para NFS-e: NFS-e tem DOIS campos de razão social — "Prestador do Serviço" (emitente) e "Tomador do Serviço" (cliente). companyName DEVE ser a RAZÃO SOCIAL do PRESTADOR (emitente), NUNCA do tomador. Procure "Prestador", "Emitente", "Dados do Prestador". Ignore "Tomador", "Cliente", "Contratante", "Dados do Tomador". NUNCA use "Secretaria da Fazenda", "Sefaz", "Prefeitura Municipal" ou nome de órgão público/sistema como companyName.
 - Se for EXTRATO BANCÁRIO: {"isNotaFiscal":false, "notaNumber":null, "companyName":"BANCO", "valor":NUMERO, "pessoaNome":null, "documentType":"extrato"}
 - Se for DARF: {"isNotaFiscal":false, "notaNumber":null, "companyName":"darf", "valor":NUMERO, "pessoaNome":null, "documentType":"darf"}
 - Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"} — extraia o NOME COMPLETO do funcionário do holerite.
