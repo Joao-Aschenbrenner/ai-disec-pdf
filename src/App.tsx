@@ -50,6 +50,7 @@ declare global {
 }
 import { sanitizeFilename, generatePageFilename, generateCombinedFilename } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
+import { version as appVersion } from "../package.json";
 
 const MAX_CONCURRENT_REQUESTS = 10;
 
@@ -81,11 +82,16 @@ export default function App() {
   // Modal states
   const [showSettings, setShowSettings] = useState(false);
   const [showDocModal, setShowDocModal] = useState(false);
-  const [settingsProvider, setSettingsProvider] = useState("GOOGLE");
+  const [settingsProvider, setSettingsProvider] = useState("NVIDIA");
   const [settingsApiKey, setSettingsApiKey] = useState("");
-  const [currentProvider, setCurrentProvider] = useState("GOOGLE");
+  const [currentProvider, setCurrentProvider] = useState("NVIDIA");
   const [savingSettings, setSavingSettings] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+
+  // Reprocess correction dialog
+  const [showCorrection, setShowCorrection] = useState(false);
+  const [correctionPageId, setCorrectionPageId] = useState<string | null>(null);
+  const [correctionFields, setCorrectionFields] = useState<Record<string, boolean>>({});
 
   // Carrega settings ao montar
   useEffect(() => {
@@ -244,7 +250,7 @@ export default function App() {
   };
 
   // Callback to trigger backend OCR on page index
-  const processSinglePage = async (id: string, page: SplitPage): Promise<SplitPage> => {
+  const processSinglePage = async (id: string, page: SplitPage, correction?: string): Promise<SplitPage> => {
     try {
       const imageBase64 = await pdfBase64ToJpeg(page.base64);
       const response = await fetch("/api/extract", {
@@ -256,6 +262,7 @@ export default function App() {
           pdfBase64: imageBase64,
           originalName: page.originalFileName,
           pageIndex: page.index,
+          ...(correction ? { correction } : {}),
         }),
       });
 
@@ -588,8 +595,8 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-end hidden md:flex">
             <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Motor Inteligente</span>
-              <span className="text-emerald-400 text-xs font-semibold flex items-center gap-1.5 mt-0.5">
-                <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span> {currentProvider} ativo
+              <span className={`text-xs font-semibold flex items-center gap-1.5 mt-0.5 ${settingsApiKey ? "text-emerald-400" : "text-slate-500"}`}>
+                <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${settingsApiKey ? "bg-emerald-500" : "bg-slate-600"}`}></span> {settingsApiKey ? `${currentProvider} ativo` : "Sem chave de API"}
               </span>
           </div>
 
@@ -1073,6 +1080,19 @@ export default function App() {
                                   onChange={(e) => handleManualFilenameDirectEdit(idx, e.target.value)}
                                   className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-mono text-slate-300 focus:outline-hidden focus:border-indigo-500" />
                               </div>
+                              <div className="flex justify-end mt-3">
+                                <button
+                                  onClick={() => {
+                                    setCorrectionPageId(page.id);
+                                    setCorrectionFields({});
+                                    setShowCorrection(true);
+                                  }}
+                                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                  Reprocessar página
+                                </button>
+                              </div>
                             </div>
                           )}
 
@@ -1189,7 +1209,7 @@ export default function App() {
       {/* Visual Footer */}
       <footer className="py-8 bg-slate-900/20 border-t border-slate-900 text-center mt-12 px-4.5">
         <p className="text-xs text-slate-500 font-medium">
-          AI Disec PDF v1.1.0 • 8 provedores de IA • 100% processamento local.
+          AI Disec PDF v{appVersion} • 8 provedores de IA • 100% processamento local.
         </p>
       </footer>
 
@@ -1224,8 +1244,8 @@ export default function App() {
                 <h4 className="font-bold text-white text-base mb-2">Provedores de IA</h4>
                 <p>São 8 provedores disponíveis. Escolha em Configurações (ícone de engrenagem):</p>
                 <ul className="list-disc list-inside space-y-1 text-slate-400 mt-1">
-                  <li><strong className="text-slate-200">Google Gemini Flash</strong> — Grátis, rápido, suporta imagens</li>
                   <li><strong className="text-slate-200">NVIDIA Llama Vision</strong> — Modelo Meta Llama 90B</li>
+                  <li><strong className="text-slate-200">Google Gemini Flash</strong> — Rápido, suporta imagens</li>
                   <li><strong className="text-slate-200">OpenAI GPT-4o</strong> — Modelo multimodal da OpenAI</li>
                   <li><strong className="text-slate-200">Anthropic Claude</strong> — Claude 3 Sonnet</li>
                   <li><strong className="text-slate-200">Mistral Vision</strong> — Mistral multimodal</li>
@@ -1291,13 +1311,13 @@ export default function App() {
                   onChange={e => setSettingsProvider(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
                 >
-                  <option value="GOOGLE">Google Gemini Flash 2.0 (grátis) 🎉</option>
                   <option value="NVIDIA">NVIDIA (Llama Vision)</option>
+                  <option value="GOOGLE">Google Gemini Flash 2.0</option>
                   <option value="OPENAI">OpenAI (GPT-4o)</option>
                   <option value="ANTHROPIC">Anthropic (Claude 3 Sonnet)</option>
                   <option value="MISTRAL">Mistral (Mistral Vision)</option>
                   <option value="OPENROUTER">OpenRouter (Gemini Flash via API)</option>
-                  <option value="GROQ">Groq (Llama Vision, grátis)</option>
+                  <option value="GROQ">Groq (Llama Vision)</option>
                   <option value="CEREBRAS">Cerebras (texto apenas, sem visão)</option>
                 </select>
               </div>
@@ -1505,6 +1525,67 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Reprocess correction dialog */}
+      {showCorrection && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowCorrection(false)}>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <RefreshCw className="w-4.5 h-4.5 text-amber-400" />
+                Reprocessar página
+              </h3>
+              <button onClick={() => setShowCorrection(false)} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-300 mb-4">Quais campos estão incorretos? Selecione abaixo:</p>
+            <div className="space-y-2 mb-5">
+              {[
+                { key: "documentType", label: "Tipo de documento" },
+                { key: "companyName", label: "Nome da empresa/emitente" },
+                { key: "pessoaNome", label: "Nome do funcionário" },
+                { key: "valor", label: "Valor" },
+                { key: "notaNumber", label: "Número da nota" },
+              ].map(field => (
+                <label key={field.key} className="flex items-center gap-3 p-3 bg-slate-950 border border-slate-800 rounded-xl cursor-pointer hover:border-slate-700 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={!!correctionFields[field.key]}
+                    onChange={e => setCorrectionFields(prev => ({ ...prev, [field.key]: e.target.checked }))}
+                    className="w-4 h-4 accent-amber-500 cursor-pointer"
+                  />
+                  <span className="text-sm text-slate-200 font-medium">{field.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowCorrection(false)}
+                className="flex-1 px-4 py-2.5 text-sm font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={async () => {
+                  const selected = Object.entries(correctionFields).filter(([, v]) => v).map(([k]) => k);
+                  if (selected.length === 0) { alert("Selecione ao menos um campo."); return; }
+                  setShowCorrection(false);
+                  const page = splitPages.find(p => p.id === correctionPageId);
+                  if (!page) return;
+                  setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
+                  const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
+                  const res = await processSinglePage(page.id, page, correctionMsg);
+                  setSplitPages(prev => prev.map(p => p.id === correctionPageId ? res : p));
+                }}
+                className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-all cursor-pointer"
+              >
+                Reprocessar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

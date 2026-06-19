@@ -114,7 +114,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
   app.post("/api/extract", async (req, res) => {
     try {
-      const { pdfBase64, originalName, pageIndex } = req.body;
+      const { pdfBase64, originalName, pageIndex, correction } = req.body;
 
       if (!pdfBase64) {
         return res.status(400).json({ error: "Faltando dados do PDF (pdfBase64)." });
@@ -165,7 +165,9 @@ REGRAS:
 IMPORTANTE: Se a página contiver MAIS DE UM documento (ex: 2 holerites lado a lado, ou um holerite em cima e outro embaixo), retorne um ARRAY de objetos: [{...documento1...}, {...documento2...}].
 
 Se não encontrar valor, coloque null. Não invente números.
-NÃO escreva NADA antes ou depois do JSON. NÃO use markdown. NÃO use **. A resposta deve COMEÇAR com { ou [ e TERMINAR com } ou ].`;
+NÃO escreva NADA antes ou depois do JSON. NÃO use markdown. NÃO use **. A resposta deve COMEÇAR com { ou [ e TERMINAR com } ou ].
+
+${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento com atenção especial nestes campos.\n` : ""}`;
 
 // Seleciona provedor de IA
        const provider = settings.provider || "GOOGLE";
@@ -350,9 +352,9 @@ app.get("/api/settings", (req, res) => {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
       return res.json(data);
     }
-    return res.json({ provider: "GOOGLE", apiKey: "" });
+    return res.json({ provider: "NVIDIA", apiKey: "" });
   } catch {
-    return res.json({ provider: "GOOGLE", apiKey: "" });
+    return res.json({ provider: "NVIDIA", apiKey: "" });
   }
 });
 
@@ -379,7 +381,7 @@ function getSettings() {
       return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
     }
   } catch {}
-  return { provider: "GOOGLE", apiKey: "" };
+  return { provider: "NVIDIA", apiKey: "" };
 }
 
 // ─── Upload Logs API ──────────────────────────────────
