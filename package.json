@@ -12,6 +12,8 @@
     "start": "node dist/server.cjs",
     "electron:dev": "npx cross-env NODE_ENV=development npx electron .",
     "electron:build": "npm run build && npx electron-builder",
+    "electron:publish": "npm run build && npx electron-builder --publish always",
+    "release": "npm run build && npx electron-builder --win --publish always",
     "test": "vitest run --config vite.config.test.ts",
     "test:watch": "vitest --config vite.config.test.ts",
     "clean": "if (Test-Path dist) { Remove-Item -Recurse -Force dist }",
@@ -50,6 +52,12 @@
       "installerIcon": "assets/icon.png",
       "uninstallerIcon": "assets/icon.png",
       "installerHeaderIcon": "assets/icon.png"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Joao-Aschenbrenner",
+      "repo": "ai-disec-pdf",
+      "private": true
     }
   },
   "dependencies": {
@@ -57,6 +65,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "canvas": "^3.2.3",
     "dotenv": "^17.2.3",
+    "electron-updater": "^6.8.9",
     "express": "^4.21.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.546.0",

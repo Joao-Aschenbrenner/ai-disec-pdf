@@ -3,6 +3,7 @@ import { generatePageFilename, sanitizeFilename } from "../src/utils/fileHelpers
 import { ExtractedMetadata, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "../src/types";
 import { fixJSON } from "../server/server";
 import { PDFDocument } from "pdf-lib";
+import JSZip from "jszip";
 
 function makeMeta(type: string, overrides?: Partial<ExtractedMetadata>): ExtractedMetadata {
   const base: ExtractedMetadata = {
@@ -102,6 +103,65 @@ describe("Performance: PDF split (10 pages)", () => {
     expect(elapsed).toBeLessThan(5000);
     console.log(`  PDF 10 pages split: ${elapsed.toFixed(0)}ms`);
   });
+});
+
+async function createPdf(count: number): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  for (let i = 0; i < count; i++) doc.addPage([595, 842]);
+  return doc.save();
+}
+
+async function splitPdf(bytes: Uint8Array): Promise<Uint8Array[]> {
+  const doc = await PDFDocument.load(bytes);
+  const pages: Uint8Array[] = [];
+  for (let i = 0; i < doc.getPageCount(); i++) {
+    const single = await PDFDocument.create();
+    const [copied] = await single.copyPages(doc, [i]);
+    single.addPage(copied);
+    pages.push(await single.save());
+  }
+  return pages;
+}
+
+async function zipPages(pages: Uint8Array[]): Promise<Uint8Array> {
+  const zip = new JSZip();
+  for (let i = 0; i < pages.length; i++) zip.file(`doc_${i}.pdf`, pages[i]);
+  return zip.generateAsync({ type: "uint8array" });
+}
+
+const SCENARIOS = [10, 50, 100, 200, 400] as const;
+
+describe("Performance: Split + ZIP (5 cenários com RAM/CPU)", () => {
+  for (const pageCount of SCENARIOS) {
+    it(`PDF ${pageCount} páginas: split+ZIP < ${pageCount <= 100 ? 30 : 60}s, RAM < 512MB`, async () => {
+      const pdfBytes = await createPdf(pageCount);
+
+      const memSplit = process.memoryUsage().heapUsed;
+      const cpuSplit = process.cpuUsage();
+      const tSplit = performance.now();
+      const pages = await splitPdf(pdfBytes);
+      const dtSplit = performance.now() - tSplit;
+      const dcpuSplit = process.cpuUsage(cpuSplit);
+      const dmemSplit = Math.max(0, process.memoryUsage().heapUsed - memSplit);
+
+      const memZip = process.memoryUsage().heapUsed;
+      const cpuZip = process.cpuUsage();
+      const tZip = performance.now();
+      const zipBytes = await zipPages(pages);
+      const dtZip = performance.now() - tZip;
+      const dcpuZip = process.cpuUsage(cpuZip);
+      const dmemZip = Math.max(0, process.memoryUsage().heapUsed - memZip);
+
+      const totalMemMB = (dmemSplit + dmemZip) / 1024 / 1024;
+
+      console.log(`  ${pageCount}p: split=${dtSplit.toFixed(0)}ms (RAM ${(dmemSplit/1024/1024).toFixed(1)}MB, CPU ${(dcpuSplit.user/1000).toFixed(0)}ms), zip=${dtZip.toFixed(0)}ms (RAM ${(dmemZip/1024/1024).toFixed(1)}MB, CPU ${(dcpuZip.user/1000).toFixed(0)}ms) = total ${(dtSplit+dtZip).toFixed(0)}ms`);
+
+      expect(pages.length).toBe(pageCount);
+      expect(zipBytes.length).toBeGreaterThan(0);
+      expect(dtSplit + dtZip).toBeLessThan(pageCount <= 100 ? 30000 : 60000);
+      expect(totalMemMB).toBeLessThan(512);
+    });
+  }
 });
 
 describe("Performance: Server start/stop", () => {

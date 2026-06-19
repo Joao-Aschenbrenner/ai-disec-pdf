@@ -1,5 +1,7 @@
-const { app, BrowserWindow, Menu } = require("electron");
+const { app, BrowserWindow, Menu, dialog } = require("electron");
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
 
 // Carrega .env antes de qualquer coisa
 try {
@@ -10,6 +12,8 @@ try {
 }
 
 let mainWindow = null;
+let autoUpdater = null;
+try { autoUpdater = require("electron-updater").autoUpdater; } catch (e) { /* dev mode */ }
 
 const PORT = 3001;
 const isDev = process.env.NODE_ENV === "development";
@@ -66,6 +70,49 @@ function createWindow() {
   });
   if (isDev) mainWindow.webContents.openDevTools({ mode: "detach" });
   mainWindow.on("closed", () => { mainWindow = null; });
+
+  if (!isDev && autoUpdater) setupAutoUpdater();
+}
+
+function setupAutoUpdater() {
+  try {
+    const settingsPath = path.join(os.homedir(), ".docsplit-ai", "settings.json");
+    if (fs.existsSync(settingsPath)) {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      if (settings.githubToken) process.env.GH_TOKEN = settings.githubToken;
+    }
+  } catch (e) {
+    console.warn("[updater] Failed to read settings:", e.message);
+  }
+
+  autoUpdater.on("checking-for-update", () => console.log("[updater] Checking for updates..."));
+  autoUpdater.on("update-available", (info) => {
+    console.log("[updater] Update available:", info.version);
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info", title: "Atualização disponível",
+        message: `Nova versão ${info.version} disponível. Baixar agora?`,
+        buttons: ["Baixar", "Agora não"],
+        defaultId: 0, cancelId: 1,
+      }).then(({ response }) => { if (response === 0) autoUpdater.downloadUpdate(); });
+    }
+  });
+  autoUpdater.on("update-not-available", () => console.log("[updater] Already up-to-date"));
+  autoUpdater.on("error", (err) => console.error("[updater] Error:", err.message));
+  autoUpdater.on("download-progress", (p) => console.log(`[updater] Download: ${p.percent.toFixed(0)}%`));
+  autoUpdater.on("update-downloaded", (info) => {
+    console.log("[updater] Downloaded:", info.version);
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info", title: "Atualização pronta",
+        message: "Atualização baixada. Reiniciar agora?",
+        buttons: ["Reiniciar", "Depois"],
+        defaultId: 0, cancelId: 1,
+      }).then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
+    }
+  });
+
+  autoUpdater.checkForUpdatesAndNotify();
 }
 
 console.log("[main] NODE_ENV:", process.env.NODE_ENV, "isDev:", isDev);
