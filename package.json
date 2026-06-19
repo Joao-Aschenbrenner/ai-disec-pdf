@@ -2,7 +2,7 @@
   "name": "ai-disec-pdf",
   "author": "João Aschenbrenner",
   "private": true,
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "AI Disec PDF - Separador Inteligente de PDF com IA",
   "type": "module",
   "main": "electron/main.cjs",
@@ -34,7 +34,8 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "artifactName": "AI-Disec-PDF-Setup-${version}.${ext}"
     },
     "mac": {
       "target": "dmg"
@@ -51,7 +52,8 @@
       "createDesktopShortcut": true,
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
-      "installerHeaderIcon": "assets/icon.ico"
+      "installerHeaderIcon": "assets/icon.ico",
+      "artifactName": "AI-Disec-PDF-Setup-${version}.${ext}"
     },
     "publish": {
       "provider": "github",
