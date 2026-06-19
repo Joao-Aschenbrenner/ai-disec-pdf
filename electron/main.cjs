@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, powerSaveBlocker, powerMonitor } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, powerSaveBlocker, powerMonitor } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -119,29 +119,32 @@ function setupAutoUpdater() {
   autoUpdater.on("checking-for-update", () => console.log("[updater] Checking for updates..."));
   autoUpdater.on("update-available", (info) => {
     console.log("[updater] Update available:", info.version);
-    if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info", title: "Atualização disponível",
-        message: `Nova versão ${info.version} disponível. Baixar agora?`,
-        buttons: ["Baixar", "Agora não"],
-        defaultId: 0, cancelId: 1,
-      }).then(({ response }) => { if (response === 0) autoUpdater.downloadUpdate(); });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-available", info.version);
     }
   });
   autoUpdater.on("update-not-available", () => console.log("[updater] Already up-to-date"));
-  autoUpdater.on("error", (err) => console.error("[updater] Error:", err.message));
-  autoUpdater.on("download-progress", (p) => console.log(`[updater] Download: ${p.percent.toFixed(0)}%`));
-  autoUpdater.on("update-downloaded", (info) => {
-    console.log("[updater] Downloaded:", info.version);
-    if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info", title: "Atualização pronta",
-        message: "Atualização baixada. Reiniciar agora?",
-        buttons: ["Reiniciar", "Depois"],
-        defaultId: 0, cancelId: 1,
-      }).then(({ response }) => { if (response === 0) autoUpdater.quitAndInstall(); });
+  autoUpdater.on("error", (err) => {
+    console.error("[updater] Error:", err.message);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-error", err.message);
     }
   });
+  autoUpdater.on("download-progress", (p) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-progress", Math.round(p.percent));
+    }
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    console.log("[updater] Downloaded:", info.version);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-downloaded", info.version);
+    }
+  });
+
+  // Listen for renderer requests
+  ipcMain.on("confirm-update", () => autoUpdater.downloadUpdate());
+  ipcMain.on("restart-app", () => autoUpdater.quitAndInstall());
 
   autoUpdater.checkForUpdatesAndNotify();
 }

@@ -36,6 +36,12 @@ declare global {
       platform: string;
       startProcessing: () => void;
       endProcessing: () => void;
+      onUpdateAvailable: (fn: (version: string) => void) => () => void;
+      onUpdateProgress: (fn: (percent: number) => void) => () => void;
+      onUpdateDownloaded: (fn: (version: string) => void) => () => void;
+      onUpdateError: (fn: (message: string) => void) => () => void;
+      confirmDownload: () => void;
+      restartApp: () => void;
     };
   }
 }
@@ -85,6 +91,38 @@ export default function App() {
       if (s.provider) setSettingsProvider(s.provider);
       if (s.apiKey) setSettingsApiKey(s.apiKey);
     }).catch(() => {});
+  }, []);
+
+  // Update overlay
+  const [updateState, setUpdateState] = useState<"idle" | "available" | "downloading" | "downloaded" | "error">("idle");
+  const [updateVersion, setUpdateVersion] = useState("");
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateError, setUpdateError] = useState("");
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api) return;
+    const cleanups: (() => void)[] = [];
+    cleanups.push(api.onUpdateAvailable((version) => {
+      setUpdateVersion(version);
+      setUpdateState("available");
+      setUpdateProgress(0);
+      setUpdateError("");
+    }));
+    cleanups.push(api.onUpdateProgress((p) => {
+      setUpdateProgress(p);
+      setUpdateState("downloading");
+    }));
+    cleanups.push(api.onUpdateDownloaded((version) => {
+      setUpdateVersion(version);
+      setUpdateState("downloaded");
+      setUpdateProgress(100);
+    }));
+    cleanups.push(api.onUpdateError((msg) => {
+      setUpdateError(msg);
+      setUpdateState("error");
+    }));
+    return () => cleanups.forEach((fn) => fn());
   }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1309,6 +1347,127 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Update overlay */}
+      <AnimatePresence>
+        {updateState !== "idle" && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl"
+            >
+              {updateState === "available" && (
+                <>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center">
+                      <Sparkles className="w-5 h-5 text-indigo-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">Atualização disponível</h3>
+                      <p className="text-sm text-slate-400">v{updateVersion}</p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-slate-300 mb-5">
+                    Uma nova versão do AI Disec PDF está disponível. Deseja baixar agora?
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setUpdateState("idle")}
+                      className="flex-1 px-4 py-2.5 text-sm font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer"
+                    >
+                      Agora não
+                    </button>
+                    <button
+                      onClick={() => window.electronAPI?.confirmDownload()}
+                      className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all cursor-pointer"
+                    >
+                      Baixar
+                    </button>
+                  </div>
+                </>
+              )}
+              {updateState === "downloading" && (
+                <>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center">
+                      <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">Baixando atualização...</h3>
+                      <p className="text-sm text-slate-400">{updateProgress}%</p>
+                    </div>
+                  </div>
+                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-indigo-500 rounded-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${updateProgress}%` }}
+                      transition={{ duration: 0.3 }}
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2 text-center">{updateProgress}% concluído</p>
+                </>
+              )}
+              {updateState === "downloaded" && (
+                <>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
+                      <CheckCircle className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">Atualização pronta!</h3>
+                      <p className="text-sm text-slate-400">v{updateVersion}</p>
+                    </div>
+                  </div>
+                  <p className="text-sm text-slate-300 mb-5">
+                    A atualização foi baixada. Reiniciar o app agora para instalar?
+                  </p>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setUpdateState("idle")}
+                      className="flex-1 px-4 py-2.5 text-sm font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer"
+                    >
+                      Depois
+                    </button>
+                    <button
+                      onClick={() => window.electronAPI?.restartApp()}
+                      className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all cursor-pointer"
+                    >
+                      Reiniciar
+                    </button>
+                  </div>
+                </>
+              )}
+              {updateState === "error" && (
+                <>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-xl bg-rose-500/20 flex items-center justify-center">
+                      <AlertCircle className="w-5 h-5 text-rose-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">Erro na atualização</h3>
+                    </div>
+                  </div>
+                  <p className="text-sm text-slate-300 mb-5">{updateError}</p>
+                  <button
+                    onClick={() => setUpdateState("idle")}
+                    className="w-full px-4 py-2.5 text-sm font-bold text-white bg-slate-700 hover:bg-slate-600 rounded-xl transition-all cursor-pointer"
+                  >
+                    Fechar
+                  </button>
+                </>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
