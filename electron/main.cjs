@@ -117,7 +117,7 @@ function setupAutoUpdater() {
   }
 
   // Force feed URL to a direct https download (bypasses API issues with drafts)
-  const feedURL = "https://github.com/Joao-Aschenbrenner/ai-disec-pdf/releases/latest/download/latest.yml";
+  const feedURL = "https://github.com/Joao-Aschenbrenner/ai-disec-pdf/releases/latest/download/";
   autoUpdater.setFeedURL({ provider: "generic", url: feedURL });
   console.log("[updater] Feed URL set to:", feedURL);
 
