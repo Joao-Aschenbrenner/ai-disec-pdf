@@ -150,32 +150,67 @@ REGRAS:
   IMPORTANTE para NFS-e: NFS-e tem DOIS campos de razão social — "Prestador do Serviço" (emitente) e "Tomador do Serviço" (cliente). companyName DEVE ser a RAZÃO SOCIAL do PRESTADOR (emitente), NUNCA do tomador. Procure "Prestador", "Emitente", "Dados do Prestador". Ignore "Tomador", "Cliente", "Contratante", "Dados do Tomador". NUNCA use "Secretaria da Fazenda", "Sefaz", "Prefeitura Municipal" ou nome de órgão público/sistema como companyName.
 - Se for EXTRATO BANCÁRIO: {"isNotaFiscal":false, "notaNumber":null, "companyName":"BANCO", "valor":NUMERO, "pessoaNome":null, "documentType":"extrato"}
 - Se for DARF: {"isNotaFiscal":false, "notaNumber":null, "companyName":"darf", "valor":NUMERO, "pessoaNome":null, "documentType":"darf"}
-- Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE / FOLHA MENSAL / FICHA FINANCEIRA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":VALOR_LIQUIDO_TOTAL, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"}
-  IMPORTANTE para holerites/Folha Mensal (leia EM ORDEM):
+- Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE / FOLHA MENSAL / FICHA FINANCEIRA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":VALOR_LIQUIDO, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"}
 
-  IDENTIFICAÇÃO: Para saber se o documento é holerite/folha de pagamento, verifique se contém 3+ destes termos:
+  REGRAS OBRIGATÓRIAS para holerites/folha de pagamento (SIGA ESTRITAMENTE):
+
+  ═══ REGRA 1: IDENTIFICAÇÃO ═══
+  Para classificar como folha_pagamento, o documento deve conter 3+ destes termos:
   "Vencimentos", "Descontos", "Salário Base", "Base Calc. FGTS", "Base Cálc. IRRF", "F.G.T.S", "INSS",
   "IMPOSTO DE RENDA", "Demonstrativo de Pagamento", "Recibo de Salário", "Contra-Cheque",
   "Funcionário:", "Empregador:", "Admissão", "Departamento", "MENSALISTA".
   Se sim → documentType="folha_pagamento".
 
-  LOCALIZAÇÃO DOS CAMPOS (procure nesta ordem no documento):
-  1. companyName (EMPREGADOR): está no CABEÇALHO/TOPO do documento (ex: "Santa Casa de Misericórdia de Taquarituba").
-     IGNORE carimbos/PREFEITURA no RODAPÉ — eles NÃO são o empregador.
-     NUNCA use "PREFEITURA MUNICIPAL DE..." como companyName se houver outro nome no cabeçalho.
-  2. pessoaNome (NOME DO FUNCIONÁRIO): está na seção de identificação, ao lado de "Funcionário:", "Servidor:",
-     "Empregado:" ou coluna "Nome do Funcionário". Extraia SEMPRE.
-  3. valor (VALOR LÍQUIDO TOTAL A RECEBER): está na seção FINAL/RODAPÉ do holerite, na linha que contém
-     "Valor Líquido", "Líquido a Receber", "Total Líquido" ou "A Receber".
-     É SEMPRE o ÚLTIMO valor após todos os descontos.
-     IMPORTANTE: NUNCA use "Salário Base", "Total de Vencimentos", "Total de Proventos",
-     "Base Cálculo FGTS", "Base Cálculo IRRF" ou "Total de Descontos" como valor.
+  ═══ REGRA 2: MULTIPLICIDADE — 2 HOLERITES NA MESMA PÁGINA ═══
+  MUITO IMPORTANTE: Cada folha PODE conter DOIS holerites completos e independentes,
+  geralmente divididos horizontalmente (um superior e um inferior na mesma página).
+  Cada holerite pertence a um FUNCIONÁRIO DIFERENTE com um VALOR LÍQUIDO DIFERENTE.
+  - Se houver 2 holerites → retorne ARRAY com 2 objetos: [{...func1...}, {...func2...}]
+  - Cada objeto deve ter seu próprio pessoaNome, valor e companyName.
+  - NÃO misture dados dos dois holerites. Framework A = funcionário 1, Framework B = funcionário 2.
+  - NÃO trate a página inteira como um único holerite. Verifique SEMPRE se há 2 fichas.
 
-  4. Se tiver APENAS carimbo de PREFEITURA e não conseguir identificar funcionário, empresa ou valor → {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":null, "pessoaNome":null, "documentType":"nao_identificado"}
-  5. 2 holerites na mesma página → retorne ARRAY com os 2 objetos.
+  ═══ REGRA 3: EXCLUSÃO DE CARIMBO — PREFEITURA / ÓRGÃO PÚBLICO ═══
+  REGRA ABSOLUTA: IGNORE completamente qualquer carimbo, selo ou estampa sobreposta no documento.
+  Carimbos comuns: "PREFEITURA MUNICIPAL DE ...", "Pago com Recurso do Termo de Colaboração",
+  "DEPARTAMENTO DE ...", qualquer texto carimbado por cima da tabela.
+  - O carimbo NÃO é o empregador. NÃO é o companyName.
+  - O carimbo NÃO altera o tipo do documento. NÃO é imposto, NÃO é nota fiscal.
+  - companyName (EMPREGADOR) = SEMPRE o nome impresso no CABEÇALHO/TOPO ESQUERDO do holerite.
+    Exemplo: se o cabeçalho diz "SANTA CASA DE MISERICORDIA DE TAQUARITUBA" e há carimbo da
+    "PREFEITURA MUNICIPAL", companyName = "SANTA CASA DE MISERICORDIA DE TAQUARITUBA".
+  - Se o ÚNICO nome legível for o do carimbo (nenhum outro nome no cabeçalho) →
+    companyName="CARIMBO", documentType="nao_identificado"
+  - Se identificar o tipo de documento mas o carimbo é o ÚNICO nome legível →
+    retorne o documento normal mas com companyName="CARIMBO"
+
+  ═══ REGRA 4: VALOR LÍQUIDO — ANCORAGEM ESPACIAL ═══
+  O campo "valor" DEVE ser o VALOR LÍQUIDO (o que o funcionário realmente recebe).
+  Localização espacial precisa:
+  1. Vá para o CANTO INFERIOR DIREITO de cada ficha de holerite.
+  2. Procure a linha contendo "Valor Líquido", "Líquido a Receber", "Total Líquido" ou "A Receber".
+  3. Esta linha frequentemente tem uma SETA (=> ou -> ou 🡲) apontando para o valor à direita.
+  4. O valor correto é o número decimal logo após esta seta/indicador.
+  
+  VALIDAÇÃO MATEMÁTICA OBRIGATÓRIA antes de retornar:
+  Para cada holerite: Valor Líquido = Total de Vencimentos − Total de Descontos
+  - Encontre "Total de Vencimentos" e "Total de Descontos" no corpo do holerite.
+  - Calcule a diferença. O resultado deve ser igual ao Valor Líquido encontrado.
+  - Se bater → use o valor encontrado.
+  - Se NÃO bater → o valor provavelmente é Salário Base ou Total de Vencimentos (ERRADO).
+    Neste caso, se encontrar o Valor Líquido correto pela validação, use-o.
+    Se não encontrar → retorne valor=null e pessoaNome com o nome do funcionário.
+
+  NUNCA use como valor:
+  ✗ Salário Base
+  ✗ Total de Vencimentos / Total de Proventos
+  ✗ Base Cálculo FGTS / Base Cálculo IRRF
+  ✗ Total de Descontos
+  ✗ Qualquer valor que NÃO esteja na linha "Valor Líquido" ou equivalente
 - Se for PLANILHA/TABELA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"planilha"}
 - Se for outro imposto/guia/boleto/taxa: {"isNotaFiscal":false, "notaNumber":null, "companyName":"TRIBUTO", "valor":NUMERO, "pessoaNome":null, "documentType":"imposto"}
-- Se tiver APENAS carimbo/logo de PREFEITURA ou órgão público e não conseguir identificar o tipo do documento: {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":null, "pessoaNome":null, "documentType":"nao_identificado"}
+- Se tiver APENAS carimbo/logo de PREFEITURA ou órgão público e NÃO conseguir identificar o tipo do documento (nenhum holerite, nenhuma NF, nenhum extrato visível): {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":null, "pessoaNome":null, "documentType":"nao_identificado"}
+- Se o documento for holerite mas o ÚNICO nome legível for de carimbo (sem cabeçalho de empresa): {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":VALOR_LIQUIDO, "pessoaNome":"NOME", "documentType":"folha_pagamento"}
 - Se não encaixar em nada acima: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"outros"}
 
 IMPORTANTE: Se a página contiver MAIS DE UM documento (ex: 2 holerites lado a lado, ou um holerite em cima e outro embaixo), retorne um ARRAY de objetos: [{...documento1...}, {...documento2...}].

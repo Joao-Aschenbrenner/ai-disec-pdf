@@ -22,7 +22,7 @@ export async function pdfBase64ToJpeg(pageBase64: string): Promise<string> {
   const pdf = await loadingTask.promise;
   const page = await pdf.getPage(1);
 
-  const viewport = page.getViewport({ scale: 2.0 });
+  const viewport = page.getViewport({ scale: 2.5 });
   const canvas = new OffscreenCanvas(viewport.width, viewport.height);
   const ctx = canvas.getContext("2d");
   if (!ctx) {
