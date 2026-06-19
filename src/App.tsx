@@ -143,6 +143,16 @@ export default function App() {
   }, []);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const blobUrlsRef = useRef<string[]>([]);
+
+  const revokeAllBlobUrls = () => {
+    blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    blobUrlsRef.current = [];
+  };
+
+  useEffect(() => {
+    return () => revokeAllBlobUrls();
+  }, []);
 
   // Drag and drop events
   const [dragActive, setDragActive] = useState(false);
@@ -181,6 +191,7 @@ export default function App() {
 
   // Load PDF and split pages in the browser
   const selectPdfFile = async (file: File) => {
+    revokeAllBlobUrls();
     setSelectedFile(file);
     setIsSplitting(true);
     setSplitPages([]);
@@ -206,6 +217,7 @@ export default function App() {
         // Blob for local display
         const blob = new Blob([pdfBytes], { type: "application/pdf" });
         const blobUrl = URL.createObjectURL(blob);
+        blobUrlsRef.current.push(blobUrl);
 
         // Convert base64
         const reader = new FileReader();
@@ -395,6 +407,7 @@ export default function App() {
 
   // Clear / Reset App
   const resetApp = () => {
+    revokeAllBlobUrls();
     setSelectedFile(null);
     setSplitPages([]);
     setActivePreviewUrl(null);
@@ -450,6 +463,7 @@ export default function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(blobUrl);
   };
 
   // Update specific metadata field value manually to re-trigger filename generation

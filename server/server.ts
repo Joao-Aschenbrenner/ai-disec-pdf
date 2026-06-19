@@ -20,7 +20,7 @@ function ensureDataDir() {
 }
 
 // Função auxiliar para registrar logs em arquivo
-function logError(message: string, error?: any) {
+async function logError(message: string, error?: any) {
   ensureDataDir();
   const logPath = path.join(DATA_DIR, "ocr.log");
   const timestamp = new Date().toISOString();
@@ -31,13 +31,13 @@ function logError(message: string, error?: any) {
   }
   entry += "\n";
   try {
-    fs.appendFileSync(logPath, entry, { encoding: "utf8" });
+    await fs.promises.appendFile(logPath, entry, { encoding: "utf8" });
   } catch (e) {
     console.error("Failed to write log file", e);
   }
 }
 
-function logUpload(originalName: string, pageIndex: number, status: string, provider: string, detail: string, metadata?: any) {
+async function logUpload(originalName: string, pageIndex: number, status: string, provider: string, detail: string, metadata?: any) {
   ensureDataDir();
   const logPath = path.join(DATA_DIR, "uploads.log");
   const entry = JSON.stringify({
@@ -50,7 +50,7 @@ function logUpload(originalName: string, pageIndex: number, status: string, prov
     metadata
   }) + "\n";
   try {
-    fs.appendFileSync(logPath, entry, { encoding: "utf8" });
+    await fs.promises.appendFile(logPath, entry, { encoding: "utf8" });
   } catch (e) {
     console.error("Failed to write upload log", e);
   }
@@ -273,10 +273,10 @@ ${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento co
             console.log("[AI] Enviando para NVIDIA...");
             aiResponse = await callOpenAICompatible({ baseUrl: "https://integrate.api.nvidia.com", model: NVIDIA_MODEL, apiKey }, imageBase64, prompt);
           }
-       } catch (aiErr) {
-         logError("Falha ao chamar o provedor de IA", aiErr);
-         throw aiErr;
-       }
+} catch (aiErr) {
+          await logError("Falha ao chamar o provedor de IA", aiErr);
+          throw aiErr;
+        }
 
        if (!aiResponse.ok) {
          const errBody = await aiResponse.text();
@@ -320,7 +320,7 @@ ${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento co
         const jsonStart = trimmed.indexOf("{");
         const jsonEnd = trimmed.lastIndexOf("}");
         if (jsonStart === -1 || jsonEnd === -1) {
-          logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
+          await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
           throw new Error(`Resposta da IA não contém JSON válido: ${responseText.substring(0, 200)}`);
         }
         jsonStr = trimmed.substring(jsonStart, jsonEnd + 1);
@@ -337,22 +337,22 @@ ${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento co
         } catch {}
       }
       if (!parseSucceeded) {
-        logUpload(originalName, pageIndex, "error", provider, `JSON inválido: ${jsonStr.substring(0, 500)}`);
+        await logUpload(originalName, pageIndex, "error", provider, `JSON inválido: ${jsonStr.substring(0, 500)}`);
         throw new Error(`Erro ao interpretar resposta da IA. JSON bruto: ${responseText.substring(0, 300)}`);
       }
 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
-        logUpload(originalName, pageIndex, "success", provider, `Array com ${extractedData.length} documentos`, extractedData);
+        await logUpload(originalName, pageIndex, "success", provider, `Array com ${extractedData.length} documentos`, extractedData);
         return res.json({ _multiple: true, documents: extractedData });
       }
 
-      logUpload(originalName, pageIndex, "success", provider, "OK", extractedData);
+      await logUpload(originalName, pageIndex, "success", provider, "OK", extractedData);
       return res.json(extractedData);
 
     } catch (error: any) {
-       logError("Unhandled exception in /api/extract", error);
-       logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", error.message || "Erro desconhecido");
+       await logError("Unhandled exception in /api/extract", error);
+       await logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", error.message || "Erro desconhecido");
        console.error("[AI OCR Error]:", error);
        return res.status(500).json({
          error: error.message || "Erro desconhecido ao processar documento."
