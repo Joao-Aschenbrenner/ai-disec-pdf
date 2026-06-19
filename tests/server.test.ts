@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { startServer, stopServer } from "../server";
+import { startServer, stopServer } from "../server/server";
 import fs from "fs";
 import path from "path";
 

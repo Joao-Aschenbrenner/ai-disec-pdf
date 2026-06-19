@@ -8,3 +8,4 @@ coverage/
 server.err
 .env*
 !.env.example
+TESTE_INSTRUCOES.md

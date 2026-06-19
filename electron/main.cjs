@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, Menu } = require("electron");
 const path = require("path");
 
 // Carrega .env antes de qualquer coisa
@@ -46,7 +46,8 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: "DocSplit AI - Separador Inteligente de PDF",
+    autoHideMenuBar: true,
+    title: "DocSplit AI",
     show: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -70,6 +71,7 @@ console.log("[main] NODE_ENV:", process.env.NODE_ENV, "isDev:", isDev);
 
 app.whenReady().then(async () => {
   try {
+    Menu.setApplicationMenu(null);
     console.log("[main] Starting server in main process...");
     const ok = await startServer();
     if (ok) {

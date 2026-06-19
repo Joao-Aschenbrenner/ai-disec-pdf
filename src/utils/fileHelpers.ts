@@ -1,4 +1,4 @@
-import { ExtractedMetadata } from "../types";
+import { ExtractedMetadata, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "../types";
 
 /**
  * Sanitizes a string to make it safe for file names across operating systems
@@ -20,44 +20,56 @@ export function sanitizeFilename(str: string): string {
 export function generatePageFilename(
   originalFilename: string,
   index: number,
-  metadata: ExtractedMetadata
+  metadata: ExtractedMetadata,
+  options?: FilenameOptions
 ): string {
+  const opts = options || DEFAULT_FILENAME_OPTIONS;
   const isInvoice = metadata.isNotaFiscal || metadata.documentType === "nota_fiscal";
 
-  let identifiesPart = "";
-  let companyPart = sanitizeFilename(metadata.companyName || "");
+  const parts: string[] = [];
 
-  if (isInvoice) {
-    identifiesPart = sanitizeFilename(metadata.notaNumber || "nota") || "nota";
-    if (!companyPart) {
-      companyPart = "empresa-desconhecida";
-    }
-  } else {
-    identifiesPart = metadata.documentType === "extrato" ? "extrato"
-      : metadata.documentType === "planilha" ? "planilha"
-      : metadata.documentType === "folha_pagamento" ? "FOPAG"
-      : metadata.documentType === "darf" ? "darf"
-      : "imposto";
+  if (opts.includePageNumber) {
+    parts.push(`pag${index + 1}`);
+  }
 
-    if (metadata.documentType === "folha_pagamento") {
-      // Inclui nome do funcionário no lugar do companyName quando disponível
-      const nomePessoa = metadata.pessoaNome ? sanitizeFilename(metadata.pessoaNome) : "";
-      companyPart = nomePessoa || companyPart || "funcionario";
-    } else if (metadata.documentType === "darf") {
-      companyPart = companyPart || "darf";
-    } else if (metadata.documentType === "extrato") {
-      companyPart = companyPart || "banco";
+  if (opts.includeDocumentType) {
+    if (isInvoice) {
+      parts.push(sanitizeFilename(metadata.notaNumber || "nota") || "nota");
     } else {
-      companyPart = companyPart || identifiesPart || "documento";
+      const t = metadata.documentType === "extrato" ? "extrato"
+        : metadata.documentType === "planilha" ? "planilha"
+        : metadata.documentType === "folha_pagamento" ? "FOPAG"
+        : metadata.documentType === "darf" ? "darf"
+        : "imposto";
+      parts.push(t);
     }
   }
 
-  let valorPart = "0.00";
-  if (metadata.valor !== null && metadata.valor !== undefined) {
-    valorPart = parseFloat(metadata.valor.toString()).toFixed(2);
-  } else {
-    valorPart = "sem_valor";
+  if (opts.includeCompanyName) {
+    if (isInvoice) {
+      parts.push(sanitizeFilename(metadata.companyName || "empresa-desconhecida"));
+    } else if (metadata.documentType === "folha_pagamento") {
+      const nomePessoa = metadata.pessoaNome ? sanitizeFilename(metadata.pessoaNome) : "";
+      parts.push(nomePessoa || sanitizeFilename(metadata.companyName || "funcionario"));
+    } else if (metadata.documentType === "darf") {
+      parts.push(sanitizeFilename(metadata.companyName || "darf"));
+    } else if (metadata.documentType === "extrato") {
+      parts.push(sanitizeFilename(metadata.companyName || "banco"));
+    } else {
+      parts.push(sanitizeFilename(metadata.companyName || "documento"));
+    }
   }
 
-  return `pag${index + 1}_${identifiesPart}_${companyPart}_${valorPart}.pdf`;
+  if (opts.includeValue) {
+    if (metadata.valor !== null && metadata.valor !== undefined) {
+      parts.push(parseFloat(metadata.valor.toString()).toFixed(2));
+    } else {
+      parts.push("sem_valor");
+    }
+  }
+
+  let filename = parts.join("_");
+  if (!filename) filename = "documento";
+
+  return `${filename}.pdf`;
 }

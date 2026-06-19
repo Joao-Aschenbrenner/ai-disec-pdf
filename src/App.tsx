@@ -28,7 +28,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
-import { ExtractedMetadata, SplitPage } from "./types";
+import { ExtractedMetadata, SplitPage, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "./types";
 import { sanitizeFilename, generatePageFilename } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 
@@ -50,8 +50,12 @@ export default function App() {
   // Custom user parameters to adjust original filename prefixing
   const [removeOriginalName, setRemoveOriginalName] = useState(false);
 
-  // Settings state
+  // Filename construction options
+  const [filenameOptions, setFilenameOptions] = useState<FilenameOptions>(DEFAULT_FILENAME_OPTIONS);
+
+  // Modal states
   const [showSettings, setShowSettings] = useState(false);
+  const [showDocModal, setShowDocModal] = useState(false);
   const [settingsProvider, setSettingsProvider] = useState("GOOGLE");
   const [settingsApiKey, setSettingsApiKey] = useState("");
   const [currentProvider, setCurrentProvider] = useState("GOOGLE");
@@ -203,12 +207,12 @@ export default function App() {
       if (result._multiple && Array.isArray(result.documents)) {
         const docs = result.documents;
         const firstMeta = docs[0] as ExtractedMetadata;
-        let filename = generatePageFilename(page.originalFileName, page.index, firstMeta);
+        let filename = generatePageFilename(page.originalFileName, page.index, firstMeta, filenameOptions);
         if (removeOriginalName) {
           filename = filename.substring(filename.indexOf("_pag") + 1);
         }
         const extraPages: SplitPage[] = docs.slice(1).map((meta: ExtractedMetadata, i: number) => {
-          let extraFilename = generatePageFilename(page.originalFileName, page.index + i + 1, meta);
+          let extraFilename = generatePageFilename(page.originalFileName, page.index + i + 1, meta, filenameOptions);
           if (removeOriginalName) {
             extraFilename = extraFilename.substring(extraFilename.indexOf("_pag") + 1);
           }
@@ -232,7 +236,7 @@ export default function App() {
       }
 
       const metadata = result as ExtractedMetadata;
-      let customFilename = generatePageFilename(page.originalFileName, page.index, metadata);
+      let customFilename = generatePageFilename(page.originalFileName, page.index, metadata, filenameOptions);
       if (removeOriginalName) {
         customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
       }
@@ -429,7 +433,7 @@ export default function App() {
       };
 
       // Re-trigger filename calculation
-      let customFilename = generatePageFilename(page.originalFileName, index, updatedMetadata);
+      let customFilename = generatePageFilename(page.originalFileName, index, updatedMetadata, filenameOptions);
       if (removeOriginalName) {
         customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
       }
@@ -461,7 +465,7 @@ export default function App() {
     setSplitPages(prev => {
       return prev.map((page, idx) => {
         if (!page.metadata) return page;
-        let customFilename = generatePageFilename(page.originalFileName, idx, page.metadata);
+        let customFilename = generatePageFilename(page.originalFileName, idx, page.metadata, filenameOptions);
         if (remove) {
           customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
         }
@@ -535,6 +539,14 @@ export default function App() {
                 <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></span> {currentProvider} ativo
               </span>
           </div>
+
+          <button
+            onClick={() => setShowDocModal(true)}
+            className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-indigo-950/30 rounded-lg transition-all border border-transparent hover:border-indigo-900/30 cursor-pointer"
+            title="Ajuda e Documentação"
+          >
+            <Info className="w-4.5 h-4.5" />
+          </button>
 
           <button
             onClick={() => { setSettingsProvider(currentProvider); setShowSettings(true); }}
@@ -680,19 +692,50 @@ export default function App() {
 
               {/* Settings parameters box */}
               <div className="border-t border-slate-800 pt-4 mt-2">
-                <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase block mb-3">Configurações do Layout</span>
-                <label className="flex items-start gap-3 cursor-pointer select-none">
-                  <input 
-                    type="checkbox"
-                    checked={removeOriginalName}
-                    onChange={(e) => handleToggleOriginalNamePrefix(e.target.checked)}
-                    className="w-4 h-4 mt-0.5 accent-indigo-500 bg-slate-950 border-slate-800 text-indigo-600 rounded-md focus:ring-indigo-500"
-                  />
-                  <div className="text-xs">
-                    <p className="font-bold text-slate-200">Omitir prefixo de arquivo original</p>
-                    <p className="text-slate-400 font-medium mt-0.5">O nome final gerado começará direto no n° da nota fiscal ou imposto</p>
-                  </div>
-                </label>
+                <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase block mb-3">Componentes do Nome do Arquivo</span>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    { key: 'includePageNumber' as const, label: 'Nº da Página', desc: 'Incluir pag1, pag2...' },
+                    { key: 'includeDocumentType' as const, label: 'Tipo do Documento', desc: 'nota, imposto, extrato...' },
+                    { key: 'includeCompanyName' as const, label: 'Empresa/Pessoa', desc: 'Nome do emitente ou funcionário' },
+                    { key: 'includeValue' as const, label: 'Valor', desc: 'Valor monetário do documento' },
+                    { key: 'compactFormat' as const, label: 'Formato Compacto', desc: 'Apenas partes preenchidas' },
+                  ] as const).map(opt => (
+                    <label key={opt.key} className="flex items-start gap-2 cursor-pointer select-none p-1.5">
+                      <input 
+                        type="checkbox"
+                        checked={filenameOptions[opt.key]}
+                        onChange={() => {
+                          setFilenameOptions(prev => ({ ...prev, [opt.key]: !prev[opt.key] }));
+                          setSplitPages(prev => prev.map((page, idx) => {
+                            if (!page.metadata) return page;
+                            const newOpts = { ...filenameOptions, [opt.key]: !filenameOptions[opt.key] };
+                            let f = generatePageFilename(page.originalFileName, idx, page.metadata, newOpts);
+                            if (removeOriginalName) f = f.substring(f.indexOf("_pag") + 1);
+                            return { ...page, customFilename: f };
+                          }));
+                        }}
+                        className="w-4 h-4 mt-0.5 accent-indigo-500 bg-slate-950 border-slate-800 text-indigo-600 rounded-md focus:ring-indigo-500"
+                      />
+                      <div className="text-[11px] leading-tight">
+                        <p className="font-bold text-slate-200">{opt.label}</p>
+                        <p className="text-slate-400 mt-0.5">{opt.desc}</p>
+                      </div>
+                    </label>
+                  ))}
+                  <label className="flex items-start gap-2 cursor-pointer select-none p-1.5 col-span-2 border-t border-slate-800 pt-2">
+                    <input 
+                      type="checkbox"
+                      checked={removeOriginalName}
+                      onChange={(e) => handleToggleOriginalNamePrefix(e.target.checked)}
+                      className="w-4 h-4 mt-0.5 accent-indigo-500 bg-slate-950 border-slate-800 text-indigo-600 rounded-md focus:ring-indigo-500"
+                    />
+                    <div className="text-[11px] leading-tight">
+                      <p className="font-bold text-slate-200">Omitir prefixo original</p>
+                      <p className="text-slate-400 mt-0.5">Remove o nome do arquivo fonte do início do nome gerado</p>
+                    </div>
+                  </label>
+                </div>
               </div>
             </div>
           )}
@@ -1075,9 +1118,76 @@ export default function App() {
       {/* Visual Footer */}
       <footer className="py-8 bg-slate-900/20 border-t border-slate-900 text-center mt-12 px-4.5">
         <p className="text-xs text-slate-500 font-medium">
-          DocSplit AI • Desenvolvido com NVIDIA Llama Vision & pdf-lib • 100% Client-Side Zipping para máxima confidencialidade fiscal.
+          DocSplit AI v1.0.0 • 8 provedores de IA • 100% processamento local.
         </p>
       </footer>
+
+      {/* Documentation Modal */}
+      {showDocModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowDocModal(false)}>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto shadow-2xl mx-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <FileCheck className="w-4.5 h-4.5 text-indigo-400" />
+                Documentação - DocSplit AI
+              </h3>
+              <button onClick={() => setShowDocModal(false)} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-4 text-sm text-slate-300 leading-relaxed">
+              <section>
+                <h4 className="font-bold text-white text-base mb-2">O que é o DocSplit AI?</h4>
+                <p>Divida automaticamente PDFs com várias páginas em arquivos individuais, renomeados inteligentemente por IA.</p>
+              </section>
+              <section>
+                <h4 className="font-bold text-white text-base mb-2">Como usar</h4>
+                <ol className="list-decimal list-inside space-y-1 text-slate-400">
+                  <li>Arraste um PDF ou clique em &quot;Selecionar PDF&quot;</li>
+                  <li>Clique em &quot;Identificar &amp; Organizar Páginas&quot;</li>
+                  <li>Revise e edite os metadados extraídos</li>
+                  <li>Baixe o ZIP com os arquivos renomeados</li>
+                </ol>
+              </section>
+              <section>
+                <h4 className="font-bold text-white text-base mb-2">Provedores de IA</h4>
+                <p>São 8 provedores disponíveis. Escolha em Configurações (ícone de engrenagem):</p>
+                <ul className="list-disc list-inside space-y-1 text-slate-400 mt-1">
+                  <li><strong className="text-slate-200">Google Gemini Flash</strong> — Grátis, rápido, suporta imagens</li>
+                  <li><strong className="text-slate-200">NVIDIA Llama Vision</strong> — Modelo Meta Llama 90B</li>
+                  <li><strong className="text-slate-200">OpenAI GPT-4o</strong> — Modelo multimodal da OpenAI</li>
+                  <li><strong className="text-slate-200">Anthropic Claude</strong> — Claude 3 Sonnet</li>
+                  <li><strong className="text-slate-200">Mistral Vision</strong> — Mistral multimodal</li>
+                  <li><strong className="text-slate-200">OpenRouter</strong> — Acesso a 200+ modelos</li>
+                  <li><strong className="text-slate-200">Groq</strong> — Inferência ultrarrápida</li>
+                  <li><strong className="text-slate-200">Cerebras</strong> — Texto apenas (não suporta imagens)</li>
+                </ul>
+              </section>
+              <section>
+                <h4 className="font-bold text-white text-base mb-2">Componentes do Nome do Arquivo</h4>
+                <p>Você pode ativar/desativar cada parte do nome gerado:</p>
+                <ul className="list-disc list-inside space-y-1 text-slate-400 mt-1">
+                  <li><strong className="text-slate-200">Nº da Página</strong> — pag1, pag2, etc.</li>
+                  <li><strong className="text-slate-200">Tipo do Documento</strong> — nota, imposto, FOPAG, etc.</li>
+                  <li><strong className="text-slate-200">Empresa/Pessoa</strong> — Nome do emitente</li>
+                  <li><strong className="text-slate-200">Valor</strong> — Valor monetário</li>
+                  <li><strong className="text-slate-200">Formato Compacto</strong> — Ignora partes vazias</li>
+                  <li><strong className="text-slate-200">Omitir Prefixo</strong> — Remove nome do arquivo original</li>
+                </ul>
+              </section>
+              <section>
+                <h4 className="font-bold text-white text-base mb-2">Privacidade</h4>
+                <p>Todo processamento é local. Os dados vão apenas para o provedor de IA escolhido. Nenhum dado é armazenado por nós. Consulte os termos legais na pasta <code className="bg-slate-800 px-1 rounded">legal/</code>.</p>
+              </section>
+            </div>
+            <div className="flex justify-end mt-6">
+              <button onClick={() => setShowDocModal(false)} className="px-5 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all cursor-pointer">
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Settings Modal */}
       {showSettings && (
@@ -1106,6 +1216,9 @@ export default function App() {
                   <option value="OPENAI">OpenAI (GPT-4o)</option>
                   <option value="ANTHROPIC">Anthropic (Claude 3 Sonnet)</option>
                   <option value="MISTRAL">Mistral (Mistral Vision)</option>
+                  <option value="OPENROUTER">OpenRouter (vários modelos)</option>
+                  <option value="GROQ">Groq (Mixtral/Llama)</option>
+                  <option value="CEREBRAS">Cerebras (texto apenas)</option>
                 </select>
               </div>
 

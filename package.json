@@ -1,20 +1,20 @@
 {
   "name": "docsplit-ai",
-  "author": "DocSplit AI Team",
+  "author": "João Aschenbrenner",
   "private": true,
-  "version": "1.1.0",
-  "description": "DocSplit AI - Separador Inteligente de Notas e Impostos PDF",
+  "version": "1.0.0",
+  "description": "DocSplit AI - Separador Inteligente de PDF com IA",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "tsx bin/dev-server.ts",
-    "build": "vite build && esbuild bin/dev-server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild bin/server-module.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server-module.cjs",
+    "dev": "tsx server/bin/dev-server.ts",
+    "build": "vite build && esbuild server/bin/dev-server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild server/bin/server-module.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server-module.cjs",
     "start": "node dist/server.cjs",
     "electron:dev": "NODE_ENV=development npx electron .",
     "electron:build": "npm run build && npx electron-builder",
     "test": "vitest run --config vite.config.test.ts",
     "test:watch": "vitest --config vite.config.test.ts",
-    "clean": "rm -rf dist server.js",
+    "clean": "if (Test-Path dist) { Remove-Item -Recurse -Force dist }",
     "lint": "tsc --noEmit"
   },
   "build": {
@@ -32,7 +32,7 @@
     },
     "win": {
       "target": "nsis",
-      "icon": null
+      "icon": "assets/icon.png"
     },
     "mac": {
       "target": "dmg"

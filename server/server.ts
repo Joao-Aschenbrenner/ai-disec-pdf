@@ -149,76 +149,95 @@ IMPORTANTE: Se a página contiver MAIS DE UM documento (ex: 2 holerites lado a l
 Se não encontrar valor, coloque null. Não invente números.
 NÃO escreva NADA antes ou depois do JSON. NÃO use markdown. NÃO use **. A resposta deve COMEÇAR com { ou [ e TERMINAR com } ou ].`;
 
-// Seleciona provedor de IA (NVIDIA, GOOGLE, OPENAI, ANTHROPIC)
+// Seleciona provedor de IA
        const provider = settings.provider || "GOOGLE";
-        let aiResponse;
-        try {
-          if (provider === "GOOGLE") {
-            if (!apiKey) throw new Error("Chave de API Google não configurada.");
-            const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-            console.log("[AI] Enviando para Google Gemini...");
-            aiResponse = await fetch(googleUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: imageBase64 } }, { text: prompt }] }]
-              })
-            });
-          } else if (provider === "OPENAI") {
-            if (!apiKey) throw new Error("Chave de API OpenAI não configurada.");
-            console.log("[AI] Enviando para OpenAI GPT-4o...");
-            aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-              body: JSON.stringify({
-                model: "gpt-4o",
-                messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] }],
-                temperature: 0.1,
-                max_tokens: 1024,
-                top_p: 0.9
-              })
-            });
-          } else if (provider === "ANTHROPIC") {
-            if (!apiKey) throw new Error("Chave de API Anthropic não configurada.");
-            console.log("[AI] Enviando para Anthropic Claude...");
-            aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-              body: JSON.stringify({
-                model: "claude-3-sonnet-20240229",
-                max_tokens: 1024,
-                messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } }, { type: "text", text: prompt }] }]
-              })
-            });
-          } else if (provider === "MISTRAL") {
-            if (!apiKey) throw new Error("Chave de API Mistral não configurada.");
-            console.log("[AI] Enviando para Mistral...");
-            aiResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-              body: JSON.stringify({
-                model: "open-mistral-vision",
-                messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] }],
-                temperature: 0.1,
-                max_tokens: 1024,
-                top_p: 0.9
-              })
-            });
-          } else {
-            // NVIDIA (padrão)
-            console.log("[AI] Enviando para NVIDIA...");
-            aiResponse = await fetch(NVIDIA_API_URL, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-              body: JSON.stringify({
-                model: NVIDIA_MODEL,
-                messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] }],
-                temperature: 0.1,
-                max_tokens: 1024,
-                top_p: 0.9
-              })
-            });
-          }
+       let aiResponse;
+       try {
+         // Helper for OpenAI-compatible providers (OpenRouter, Groq, Cerebras, NVIDIA)
+         const callOpenAICompatible = (url: string, model: string, skipImage?: boolean) => {
+           const messages: any[] = [];
+           if (skipImage) {
+             // For text-only models (Cerebras), send a textual description instead of image
+             messages.push({ role: "user", content: `[IMAGEM CODIFICADA EM BASE64: ${imageBase64.substring(0, 50)}... (${imageBase64.length} caracteres)]\n\n${prompt}` });
+           } else {
+             messages.push({ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] });
+           }
+           return fetch(url, {
+             method: "POST",
+             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+             body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 1024, top_p: 0.9 })
+           });
+         };
+
+         if (provider === "GOOGLE") {
+           if (!apiKey) throw new Error("Chave de API Google não configurada.");
+           const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+           console.log("[AI] Enviando para Google Gemini...");
+           aiResponse = await fetch(googleUrl, {
+             method: "POST",
+             headers: { "Content-Type": "application/json" },
+             body: JSON.stringify({
+               contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: imageBase64 } }, { text: prompt }] }]
+             })
+           });
+         } else if (provider === "OPENAI") {
+           if (!apiKey) throw new Error("Chave de API OpenAI não configurada.");
+           console.log("[AI] Enviando para OpenAI GPT-4o...");
+           aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+             method: "POST",
+             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+             body: JSON.stringify({
+               model: "gpt-4o",
+               messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] }],
+               temperature: 0.1,
+               max_tokens: 1024,
+               top_p: 0.9
+             })
+           });
+         } else if (provider === "ANTHROPIC") {
+           if (!apiKey) throw new Error("Chave de API Anthropic não configurada.");
+           console.log("[AI] Enviando para Anthropic Claude...");
+           aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
+             method: "POST",
+             headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+             body: JSON.stringify({
+               model: "claude-3-sonnet-20240229",
+               max_tokens: 1024,
+               messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } }, { type: "text", text: prompt }] }]
+             })
+           });
+         } else if (provider === "MISTRAL") {
+           if (!apiKey) throw new Error("Chave de API Mistral não configurada.");
+           console.log("[AI] Enviando para Mistral...");
+           aiResponse = await fetch("https://api.mistral.ai/v1/chat/completions", {
+             method: "POST",
+             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+             body: JSON.stringify({
+               model: "open-mistral-vision",
+               messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] }],
+               temperature: 0.1,
+               max_tokens: 1024,
+               top_p: 0.9
+             })
+           });
+         } else if (provider === "OPENROUTER") {
+           if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
+           console.log("[AI] Enviando para OpenRouter...");
+           aiResponse = await callOpenAICompatible("https://openrouter.ai/api/v1/chat/completions", "google/gemini-2.0-flash-exp:free");
+         } else if (provider === "GROQ") {
+           if (!apiKey) throw new Error("Chave de API Groq não configurada.");
+           console.log("[AI] Enviando para Groq...");
+           aiResponse = await callOpenAICompatible("https://api.groq.com/openai/v1/chat/completions", "mixtral-8x7b-32768");
+         } else if (provider === "CEREBRAS") {
+           if (!apiKey) throw new Error("Chave de API Cerebras não configurada.");
+           console.log("[AI] Enviando para Cerebras (texto apenas)...");
+           // Cerebras doesn't support image input; returns graceful error
+           return res.status(400).json({ error: "O modelo Cerebras não suporta análise de imagens. Escolha outro provedor como Google, NVIDIA ou OpenRouter." });
+         } else {
+           // NVIDIA (padrão)
+           console.log("[AI] Enviando para NVIDIA...");
+           aiResponse = await callOpenAICompatible(NVIDIA_API_URL, NVIDIA_MODEL);
+         }
        } catch (aiErr) {
          logError("Falha ao chamar o provedor de IA", aiErr);
          throw aiErr;

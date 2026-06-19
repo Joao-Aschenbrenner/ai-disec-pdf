@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fixJSON } from "../server";
+import { fixJSON } from "../server/server";
 
 describe("fixJSON", () => {
   it("deve manter JSON válido inalterado", () => {
