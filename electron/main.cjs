@@ -13,7 +13,7 @@ try {
 
 let mainWindow = null;
 let autoUpdater = null;
-try { autoUpdater = require("electron-updater").autoUpdater; } catch (e) { /* dev mode */ }
+try { autoUpdater = require("electron-updater").autoUpdater; } catch (e) { console.warn("[main] electron-updater not available:", e.message); }
 
 let processingBlockerId = null;
 
@@ -116,14 +116,29 @@ function setupAutoUpdater() {
     console.warn("[updater] Failed to read settings:", e.message);
   }
 
-  autoUpdater.on("checking-for-update", () => console.log("[updater] Checking for updates..."));
+  // Force feed URL to a direct https download (bypasses API issues with drafts)
+  const feedURL = "https://github.com/Joao-Aschenbrenner/ai-disec-pdf/releases/latest/download/latest.yml";
+  autoUpdater.setFeedURL({ provider: "generic", url: feedURL });
+  console.log("[updater] Feed URL set to:", feedURL);
+
+  autoUpdater.on("checking-for-update", () => {
+    console.log("[updater] Checking for updates...");
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-checking");
+    }
+  });
   autoUpdater.on("update-available", (info) => {
     console.log("[updater] Update available:", info.version);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("update-available", info.version);
     }
   });
-  autoUpdater.on("update-not-available", () => console.log("[updater] Already up-to-date"));
+  autoUpdater.on("update-not-available", () => {
+    console.log("[updater] Already up-to-date");
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("update-not-available");
+    }
+  });
   autoUpdater.on("error", (err) => {
     console.error("[updater] Error:", err.message);
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -145,8 +160,9 @@ function setupAutoUpdater() {
   // Listen for renderer requests
   ipcMain.on("confirm-update", () => autoUpdater.downloadUpdate());
   ipcMain.on("restart-app", () => autoUpdater.quitAndInstall());
+  ipcMain.on("check-for-update", () => autoUpdater.checkForUpdates());
 
-  autoUpdater.checkForUpdatesAndNotify();
+  autoUpdater.checkForUpdates();
 }
 
 console.log("[main] NODE_ENV:", process.env.NODE_ENV, "isDev:", isDev);

@@ -4,10 +4,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
   platform: process.platform,
   startProcessing: () => ipcRenderer.send("processing-started"),
   endProcessing: () => ipcRenderer.send("processing-ended"),
+  onUpdateChecking: (fn) => {
+    const cb = () => fn();
+    ipcRenderer.on("update-checking", cb);
+    return () => ipcRenderer.removeListener("update-checking", cb);
+  },
   onUpdateAvailable: (fn) => {
     const cb = (_event, version) => fn(version);
     ipcRenderer.on("update-available", cb);
     return () => ipcRenderer.removeListener("update-available", cb);
+  },
+  onUpdateNotAvailable: (fn) => {
+    const cb = () => fn();
+    ipcRenderer.on("update-not-available", cb);
+    return () => ipcRenderer.removeListener("update-not-available", cb);
   },
   onUpdateProgress: (fn) => {
     const cb = (_event, percent) => fn(percent);
@@ -26,4 +36,5 @@ contextBridge.exposeInMainWorld("electronAPI", {
   },
   confirmDownload: () => ipcRenderer.send("confirm-update"),
   restartApp: () => ipcRenderer.send("restart-app"),
+  checkForUpdate: () => ipcRenderer.send("check-for-update"),
 });

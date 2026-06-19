@@ -36,12 +36,15 @@ declare global {
       platform: string;
       startProcessing: () => void;
       endProcessing: () => void;
+      onUpdateChecking: (fn: () => void) => () => void;
       onUpdateAvailable: (fn: (version: string) => void) => () => void;
+      onUpdateNotAvailable: (fn: () => void) => () => void;
       onUpdateProgress: (fn: (percent: number) => void) => () => void;
       onUpdateDownloaded: (fn: (version: string) => void) => () => void;
       onUpdateError: (fn: (message: string) => void) => () => void;
       confirmDownload: () => void;
       restartApp: () => void;
+      checkForUpdate: () => void;
     };
   }
 }
@@ -94,7 +97,7 @@ export default function App() {
   }, []);
 
   // Update overlay
-  const [updateState, setUpdateState] = useState<"idle" | "available" | "downloading" | "downloaded" | "error">("idle");
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "downloading" | "downloaded" | "error">("idle");
   const [updateVersion, setUpdateVersion] = useState("");
   const [updateProgress, setUpdateProgress] = useState(0);
   const [updateError, setUpdateError] = useState("");
@@ -103,10 +106,18 @@ export default function App() {
     const api = window.electronAPI;
     if (!api) return;
     const cleanups: (() => void)[] = [];
+    cleanups.push(api.onUpdateChecking(() => {
+      setUpdateState("checking");
+      setUpdateError("");
+    }));
     cleanups.push(api.onUpdateAvailable((version) => {
       setUpdateVersion(version);
       setUpdateState("available");
       setUpdateProgress(0);
+      setUpdateError("");
+    }));
+    cleanups.push(api.onUpdateNotAvailable(() => {
+      setUpdateState("idle");
       setUpdateError("");
     }));
     cleanups.push(api.onUpdateProgress((p) => {
@@ -1337,6 +1348,13 @@ export default function App() {
                 Cancelar
               </button>
               <button
+                onClick={async () => { window.electronAPI?.checkForUpdate(); setUpdateState("checking"); }}
+                className="px-4 py-2.5 text-sm font-bold text-cyan-300 bg-cyan-950/40 border border-cyan-800/30 hover:bg-cyan-950/60 rounded-xl transition-all cursor-pointer flex items-center gap-2"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Atualizações
+              </button>
+              <button
                 onClick={saveSettings}
                 disabled={savingSettings}
                 className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all disabled:opacity-50 cursor-pointer"
@@ -1363,6 +1381,25 @@ export default function App() {
               exit={{ scale: 0.9, opacity: 0 }}
               className="bg-slate-900 border border-slate-800 rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl"
             >
+              {updateState === "checking" && (
+                <>
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-500/20 flex items-center justify-center">
+                      <Loader2 className="w-5 h-5 text-indigo-400 animate-spin" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">Verificando atualizações...</h3>
+                      <p className="text-sm text-slate-400">Consultando GitHub</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setUpdateState("idle")}
+                    className="w-full px-4 py-2.5 text-sm font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-xl transition-all cursor-pointer"
+                  >
+                    Fechar
+                  </button>
+                </>
+              )}
               {updateState === "available" && (
                 <>
                   <div className="flex items-center gap-3 mb-3">
