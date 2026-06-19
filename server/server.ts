@@ -150,11 +150,16 @@ REGRAS:
   IMPORTANTE para NFS-e: NFS-e tem DOIS campos de razão social — "Prestador do Serviço" (emitente) e "Tomador do Serviço" (cliente). companyName DEVE ser a RAZÃO SOCIAL do PRESTADOR (emitente), NUNCA do tomador. Procure "Prestador", "Emitente", "Dados do Prestador". Ignore "Tomador", "Cliente", "Contratante", "Dados do Tomador". NUNCA use "Secretaria da Fazenda", "Sefaz", "Prefeitura Municipal" ou nome de órgão público/sistema como companyName.
 - Se for EXTRATO BANCÁRIO: {"isNotaFiscal":false, "notaNumber":null, "companyName":"BANCO", "valor":NUMERO, "pessoaNome":null, "documentType":"extrato"}
 - Se for DARF: {"isNotaFiscal":false, "notaNumber":null, "companyName":"darf", "valor":NUMERO, "pessoaNome":null, "documentType":"darf"}
-- Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"} — extraia o NOME COMPLETO do funcionário do holerite.
-  IMPORTANTE para holerites: Holerites de PREFEITURA têm carimbo grande "PREFEITURA MUNICIPAL DE...". IGNORE o carimbo — documentType DEVE ser "folha_pagamento" e o campo pessoaNome é MAIS IMPORTANTE que companyName. Extraia SEMPRE o nome completo do funcionário.
-  ATENÇÃO: Muitas vezes vêm 2 HOLERITES na mesma página (um em cima, outro embaixo). Neste caso retorne um ARRAY com os 2 objetos.
+- Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE / FOLHA MENSAL / FICHA FINANCEIRA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"}
+  IMPORTANTE para holerites/Folha Mensal:
+  1. O NOME DO FUNCIONARIO fica SEMPRE ao lado do código do funcionário (coluna "Nome do Funcionário" ou "Servidor"). Extraia SEMPRE.
+  2. O EMPREGADOR está no CABEÇALHO do documento (ex: "Santa Casa de Misericórdia de Taquarituba"). Use ESTE nome como companyName.
+  3. IGNORE carimbos/PREFEITURA no RODAPÉ — eles NÃO são o empregador. NUNCA use "PREFEITURA MUNICIPAL DE..." como companyName se houver outro nome no cabeçalho.
+  4. Se tiver APENAS carimbo de PREFEITURA e não conseguir identificar funcionário, empresa ou valor → {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":null, "pessoaNome":null, "documentType":"nao_identificado"}
+  5. 2 holerites na mesma página → retorne ARRAY com os 2 objetos.
 - Se for PLANILHA/TABELA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"planilha"}
 - Se for outro imposto/guia/boleto/taxa: {"isNotaFiscal":false, "notaNumber":null, "companyName":"TRIBUTO", "valor":NUMERO, "pessoaNome":null, "documentType":"imposto"}
+- Se tiver APENAS carimbo/logo de PREFEITURA ou órgão público e não conseguir identificar o tipo do documento: {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":null, "pessoaNome":null, "documentType":"nao_identificado"}
 - Se não encaixar em nada acima: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"outros"}
 
 IMPORTANTE: Se a página contiver MAIS DE UM documento (ex: 2 holerites lado a lado, ou um holerite em cima e outro embaixo), retorne um ARRAY de objetos: [{...documento1...}, {...documento2...}].

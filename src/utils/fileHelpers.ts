@@ -7,6 +7,7 @@ const typeMap: Record<string, string> = {
   darf: "darf",
   imposto: "imposto",
   outros: "outros",
+  nao_identificado: "nao_identificado",
   not_a_fiscal: "NF",
 };
 
@@ -47,7 +48,7 @@ export function generatePageFilename(
     parts.push(sanitizeFilename(metadata.notaNumber));
   }
 
-  if (opts.showCompanyName) {
+  if (opts.showCompanyName && metadata.documentType !== "nao_identificado") {
     let name = "";
     if (metadata.documentType === "folha_pagamento" && opts.showPessoaNome && metadata.pessoaNome) {
       name = sanitizeFilename(metadata.pessoaNome);
@@ -89,6 +90,12 @@ export function generateCombinedFilename(
   }
 
   for (const doc of docs) {
+    if (doc.documentType === "nao_identificado") {
+      const valor = opts.showValor && doc.valor != null
+        ? parseFloat(doc.valor.toString()).toFixed(2) : "sem_valor";
+      parts.push(`nao_identificado_${valor}`);
+      continue;
+    }
     let name = "desconhecido";
     if (doc.documentType === "folha_pagamento" && opts.showPessoaNome && doc.pessoaNome) {
       name = sanitizeFilename(doc.pessoaNome);

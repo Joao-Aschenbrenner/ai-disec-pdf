@@ -503,7 +503,7 @@ export default function App() {
   const darfCount = splitPages.filter(p => p.metadata?.documentType === "darf").length;
   const extratoCount = splitPages.filter(p => p.metadata?.documentType === "extrato").length;
   const folhaPagamentoCount = splitPages.filter(p => p.metadata?.documentType === "folha_pagamento").length;
-  const outrosCount = splitPages.filter(p => p.metadata?.documentType === "outros" || p.metadata?.documentType === "planilha").length;
+  const outrosCount = splitPages.filter(p => p.metadata?.documentType === "outros" || p.metadata?.documentType === "planilha" || p.metadata?.documentType === "nao_identificado").length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 antialiased font-sans flex flex-col selection:bg-indigo-500/30 selection:text-indigo-200">
@@ -958,6 +958,7 @@ export default function App() {
                                       <option value="planilha">Planilha / Tabela</option>
                                       <option value="folha_pagamento">Folha de Pagamento</option>
                                       <option value="outros">Outros</option>
+                                      <option value="nao_identificado">Não Identificado</option>
                                     </select>
                                   </div>
                                   <div className="flex flex-col gap-1.5 md:col-span-3">
