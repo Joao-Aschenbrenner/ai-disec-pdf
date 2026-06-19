@@ -3,7 +3,7 @@ import { ExtractedMetadata, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "..
 const typeMap: Record<string, string> = {
   extrato: "extrato",
   planilha: "planilha",
-  folha_pagamento: "FOPAG",
+  folha_pagamento: "holerite",
   darf: "darf",
   imposto: "imposto",
   outros: "outros",
@@ -66,5 +66,42 @@ export function generatePageFilename(
   let filename = parts.join("_");
   if (!filename) filename = "documento";
 
+  return `${filename}.pdf`;
+}
+
+export function generateCombinedFilename(
+  docs: ExtractedMetadata[],
+  index: number,
+  options?: Partial<FilenameOptions>
+): string {
+  const opts = { ...DEFAULT_FILENAME_OPTIONS, ...options };
+  const parts: string[] = [];
+
+  if (opts.showPageNumber) {
+    parts.push(`pag${index + 1}`);
+  }
+
+  parts.push(`${docs.length}`);
+
+  if (opts.showType) {
+    const typeLabel = typeMap[docs[0]?.documentType || ""] || "documento";
+    parts.push(`${typeLabel}s`);
+  }
+
+  for (const doc of docs) {
+    let name = "desconhecido";
+    if (doc.documentType === "folha_pagamento" && opts.showPessoaNome && doc.pessoaNome) {
+      name = sanitizeFilename(doc.pessoaNome);
+    } else if (opts.showCompanyName && doc.companyName) {
+      name = sanitizeFilename(doc.companyName);
+    }
+    const valor = opts.showValor && doc.valor != null
+      ? parseFloat(doc.valor.toString()).toFixed(2)
+      : "sem_valor";
+    parts.push(`${name}_${valor}`);
+  }
+
+  let filename = parts.join("_");
+  if (!filename) filename = "documento";
   return `${filename}.pdf`;
 }

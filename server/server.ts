@@ -71,6 +71,9 @@ function extractAIError(status: number, body: string): { userMessage: string; re
     if (msgStr.includes("does not support image") || msgStr.includes("not support image input")) {
       return { userMessage: "Este modelo de IA não suporta análise de imagens. Vá em Configurações e escolha outro provedor compatível." };
     }
+    if (msgStr.includes("does not support pdf") || msgStr.includes("not support pdf input")) {
+      return { userMessage: "Provedor não aceita este formato. Tente Google Gemini ou outro provedor com suporte a imagens." };
+    }
     if (msgStr.includes("API key") || msgStr.includes("invalid") || msgStr.includes("unauthorized") || status === 401 || status === 403) {
       return { userMessage: "Chave de API inválida ou sem acesso ao modelo. Verifique suas configurações." };
     }
@@ -132,13 +135,24 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const imageBase64 = pdfBase64;
        console.log(`[AI OCR] Usando imagem base64 enviada pelo cliente (${imageBase64.length} caracteres)`);
 
+      // Aviso se os dados não parecem JPEG (debug)
+      try {
+        const head = Buffer.from(imageBase64.substring(0, 4), 'base64');
+        if (head.length >= 3 && !(head[0] === 0xFF && head[1] === 0xD8 && head[2] === 0xFF)) {
+          console.warn(`[AI OCR] Dados não iniciam com magic bytes JPEG: ${head.toString('hex')}`);
+        }
+      } catch (e) { /* ignora erro de validação */ }
+
       const prompt = `Analise este documento PDF (uma única página) e retorne SOMENTE um JSON.
 
 REGRAS:
 - Se for NOTA FISCAL (fatura, NF-e, NFS-e, cupom, CT-e, recibo): {"isNotaFiscal":true, "notaNumber":"NUMERO", "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":null, "documentType":"nota_fiscal"}
+  IMPORTANTE para NFS-e: companyName deve ser a RAZÃO SOCIAL do prestador/emitente. NUNCA use "Secretaria da Fazenda", "Sefaz", "Prefeitura Municipal" ou nome de órgão público/sistema. Ignore cabeçalhos do sistema emissor.
 - Se for EXTRATO BANCÁRIO: {"isNotaFiscal":false, "notaNumber":null, "companyName":"BANCO", "valor":NUMERO, "pessoaNome":null, "documentType":"extrato"}
 - Se for DARF: {"isNotaFiscal":false, "notaNumber":null, "companyName":"darf", "valor":NUMERO, "pessoaNome":null, "documentType":"darf"}
 - Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"} — extraia o NOME COMPLETO do funcionário do holerite.
+  IMPORTANTE para holerites: Holerites de PREFEITURA têm carimbo grande "PREFEITURA MUNICIPAL DE...". IGNORE o carimbo — documentType DEVE ser "folha_pagamento" e o campo pessoaNome é MAIS IMPORTANTE que companyName. Extraia SEMPRE o nome completo do funcionário.
+  ATENÇÃO: Muitas vezes vêm 2 HOLERITES na mesma página (um em cima, outro embaixo). Neste caso retorne um ARRAY com os 2 objetos.
 - Se for PLANILHA/TABELA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"planilha"}
 - Se for outro imposto/guia/boleto/taxa: {"isNotaFiscal":false, "notaNumber":null, "companyName":"TRIBUTO", "valor":NUMERO, "pessoaNome":null, "documentType":"imposto"}
 - Se não encaixar em nada acima: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"outros"}

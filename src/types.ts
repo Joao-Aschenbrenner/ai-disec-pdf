@@ -36,4 +36,5 @@ export interface SplitPage {
   error?: string;
   retryAfter?: string;
   metadata?: ExtractedMetadata;
+  metadataList?: ExtractedMetadata[];
 }

@@ -29,7 +29,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 
 import { ExtractedMetadata, SplitPage, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "./types";
-import { sanitizeFilename, generatePageFilename } from "./utils/fileHelpers";
+import { sanitizeFilename, generatePageFilename, generateCombinedFilename } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 
 const MAX_CONCURRENT_REQUESTS = 10;
@@ -209,36 +209,22 @@ export default function App() {
 
       const result = await response.json();
 
-      // Handle multiple documents per page (array response)
+      // Handle multiple documents per page (array response) → combined entry
       if (result._multiple && Array.isArray(result.documents)) {
-        const docs = result.documents;
-        const firstMeta = docs[0] as ExtractedMetadata;
-        let filename = generatePageFilename(page.originalFileName, page.index, firstMeta, filenameOptions);
+        const docs = result.documents as ExtractedMetadata[];
+        const firstMeta = docs[0];
+        let customFilename = generateCombinedFilename(docs, page.index, filenameOptions);
         if (removeOriginalName) {
-          filename = filename.substring(filename.indexOf("_pag") + 1);
+          customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
         }
-        const extraPages: SplitPage[] = docs.slice(1).map((meta: ExtractedMetadata, i: number) => {
-          let extraFilename = generatePageFilename(page.originalFileName, page.index + i + 1, meta, filenameOptions);
-          if (removeOriginalName) {
-            extraFilename = extraFilename.substring(extraFilename.indexOf("_pag") + 1);
-          }
-          return {
-            ...page,
-            id: nextPageId(),
-            base64: page.base64,
-            status: "success" as const,
-            metadata: meta,
-            customFilename: extraFilename,
-          };
-        });
         return {
           id,
           ...page,
           status: "success",
           metadata: firstMeta,
-          customFilename: filename,
-          _extraPages: extraPages,
-        } as SplitPage & { _extraPages?: SplitPage[] };
+          metadataList: docs,
+          customFilename,
+        };
       }
 
       const metadata = result as ExtractedMetadata;
@@ -298,18 +284,6 @@ export default function App() {
 
         const process = async () => {
           const result = await processSinglePage(page.id, page);
-          
-          // Handle extra pages from multi-document
-          const extraPages = (result as any)._extraPages as SplitPage[] | undefined;
-          if (extraPages && extraPages.length > 0) {
-            setSplitPages(prev => {
-              const idx = prev.findIndex(p => p.id === page.id);
-              if (idx === -1) return prev;
-              const next = [...prev];
-              next.splice(idx + 1, 0, ...extraPages);
-              return next;
-            });
-          }
 
           // Auto-retry failed pages with backoff
           if (result.status === "failed") {
@@ -326,17 +300,6 @@ export default function App() {
               await new Promise(r => setTimeout(r, delayMs));
               // Re-process
               const retryResult = await processSinglePage(page.id, page);
-              // Handle extra pages from retry
-              const retryExtra = (retryResult as any)._extraPages as SplitPage[] | undefined;
-              if (retryExtra && retryExtra.length > 0) {
-                setSplitPages(prev => {
-                  const idx = prev.findIndex(p => p.id === page.id);
-                  if (idx === -1) return prev;
-                  const next = [...prev];
-                  next.splice(idx + 1, 0, ...retryExtra);
-                  return next;
-                });
-              }
               setSplitPages(prev => prev.map(p => p.id === page.id ? retryResult : p));
             } else {
               setSplitPages(prev => prev.map(p => p.id === page.id ? result : p));
@@ -480,6 +443,29 @@ export default function App() {
           customFilename
         };
       });
+    });
+  };
+
+  // Edit specific field for a specific doc in combined documents
+  const handleCombinedMetadataEdit = (
+    index: number,
+    docIdx: number,
+    field: keyof ExtractedMetadata,
+    value: string | boolean | number | null
+  ) => {
+    setSplitPages(prev => {
+      const next = [...prev];
+      const page = next[index];
+      if (!page.metadataList) return prev;
+      const updatedList = page.metadataList.map((d, i) =>
+        i === docIdx ? { ...d, [field]: value } : d
+      );
+      let customFilename = generateCombinedFilename(updatedList, index, filenameOptions);
+      if (removeOriginalName) {
+        customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
+      }
+      next[index] = { ...page, metadataList: updatedList, customFilename };
+      return next;
     });
   };
 
@@ -897,6 +883,8 @@ export default function App() {
                                     ? "Cota excedida"
                                     : page.error?.includes("Chave")
                                     ? "Sem chave"
+                                    : page.error?.includes("Provedor não aceita")
+                                    ? "Formato inválido"
                                     : "Falhou"}
                                 </span>
                               )}
@@ -913,108 +901,113 @@ export default function App() {
 
                           {/* Editable extracted metadata details (Rendered upon success) */}
                           {hasResult && page.metadata && (
-                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-12 gap-4">
-                              
-                              {/* Document Type Picker */}
-                              <div className="flex flex-col gap-1.5 md:col-span-4">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                                  <FileCode className="w-3.5 h-3.5 text-indigo-400" />
-                                  Tipo de Documento
-                                </label>
-                                <select
-                                  value={page.metadata.documentType}
-                                  onChange={(e) => {
-                                    const typeVal = e.target.value as any;
-                                    handleManualMetadataEdit(idx, "documentType", typeVal);
-                                    handleManualMetadataEdit(idx, "isNotaFiscal", typeVal === "nota_fiscal");
-                                  }}
-                                  className="text-xs bg-slate-900/85 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500 cursor-pointer"
-                                >
-                                  <option value="nota_fiscal">Nota Fiscal (INVOICE)</option>
-                                  <option value="imposto">Imposto / Guia de Taxa</option>
-                                  <option value="darf">DARF (Federais)</option>
-                                  <option value="extrato">Extrato Bancário</option>
-                                  <option value="planilha">Planilha / Tabela</option>
-                                  <option value="folha_pagamento">Folha de Pagamento</option>
-                                  <option value="outros">Outros</option>
-                                </select>
-                              </div>
-
-                              {/* Number detail (defaults imposto for non-NF) */}
-                              <div className="flex flex-col gap-1.5 md:col-span-3">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                                  <Hash className="w-3.5 h-3.5 text-indigo-400" />
-                                  Número {page.metadata.isNotaFiscal ? "da Nota" : "(Imposto)"}
-                                </label>
-                                <input
-                                  type="text"
-                                  disabled={!page.metadata.isNotaFiscal}
-                                  value={page.metadata.isNotaFiscal ? (page.metadata.notaNumber || "") : "imposto"}
-                                  placeholder="Sem número"
-                                  onChange={(e) => handleManualMetadataEdit(idx, "notaNumber", e.target.value)}
-                                  className="text-xs bg-slate-900 border border-slate-700 disabled:bg-slate-900/50 disabled:text-slate-600 disabled:border-slate-900 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-
-                              {/* Issuer or agency provider */}
-                              <div className="flex flex-col gap-1.5 md:col-span-3">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                                  <Briefcase className="w-3.5 h-3.5 text-indigo-400" />
-                                  {page.metadata.documentType === "folha_pagamento" ? "Empregador" : "Emitente"}
-                                </label>
-                                <input
-                                  type="text"
-                                  value={page.metadata.companyName || ""}
-                                  placeholder={page.metadata.documentType === "folha_pagamento" ? "Ex: Empresa Ltda" : "Ex: Receita Federal"}
-                                  onChange={(e) => handleManualMetadataEdit(idx, "companyName", e.target.value)}
-                                  className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-
-                              {/* Employee / Person Name (visible for folha_pagamento) */}
-                              {page.metadata.documentType === "folha_pagamento" && (
-                                <div className="flex flex-col gap-1.5 md:col-span-3">
-                                  <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                                    <Briefcase className="w-3.5 h-3.5 text-amber-400" />
-                                    Nome do Funcionário
-                                  </label>
-                                  <input
-                                    type="text"
-                                    value={page.metadata.pessoaNome || ""}
-                                    placeholder="Ex: João Silva"
-                                    onChange={(e) => handleManualMetadataEdit(idx, "pessoaNome", e.target.value)}
-                                    className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500"
-                                  />
+                            <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                              {page.metadataList && page.metadataList.length > 1 ? (
+                                <>
+                                  <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-800">
+                                    <span className="px-2.5 py-1 bg-amber-950/40 border border-amber-800/30 text-amber-400 text-[10px] font-bold rounded-md">
+                                      {page.metadataList.length} documentos nesta página
+                                    </span>
+                                  </div>
+                                  {page.metadataList.map((docMeta, docIdx) => (
+                                    <div key={docIdx} className="mb-4 pb-4 border-b border-slate-800/50 last:border-0 last:pb-0 last:mb-0">
+                                      <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider block mb-3">
+                                        Documento {docIdx + 1}
+                                      </span>
+                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                        <div className="flex flex-col gap-1.5">
+                                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Empregador</label>
+                                          <input type="text" value={docMeta.companyName || ""}
+                                            onChange={(e) => handleCombinedMetadataEdit(idx, docIdx, "companyName", e.target.value)}
+                                            className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500" />
+                                        </div>
+                                        <div className="flex flex-col gap-1.5">
+                                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Nome do Funcionário</label>
+                                          <input type="text" value={docMeta.pessoaNome || ""}
+                                            onChange={(e) => handleCombinedMetadataEdit(idx, docIdx, "pessoaNome", e.target.value)}
+                                            className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500" />
+                                        </div>
+                                        <div className="flex flex-col gap-1.5">
+                                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Valor R$</label>
+                                          <input type="number" step="0.01" value={docMeta.valor !== null ? docMeta.valor : ""}
+                                            onChange={(e) => handleCombinedMetadataEdit(idx, docIdx, "valor", e.target.value ? parseFloat(e.target.value) : null)}
+                                            className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500" />
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </>
+                              ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                                  <div className="flex flex-col gap-1.5 md:col-span-4">
+                                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                      <FileCode className="w-3.5 h-3.5 text-indigo-400" />
+                                      Tipo de Documento
+                                    </label>
+                                    <select value={page.metadata.documentType}
+                                      onChange={(e) => {
+                                        const typeVal = e.target.value as any;
+                                        handleManualMetadataEdit(idx, "documentType", typeVal);
+                                        handleManualMetadataEdit(idx, "isNotaFiscal", typeVal === "nota_fiscal");
+                                      }}
+                                      className="text-xs bg-slate-900/85 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500 cursor-pointer">
+                                      <option value="nota_fiscal">Nota Fiscal (INVOICE)</option>
+                                      <option value="imposto">Imposto / Guia de Taxa</option>
+                                      <option value="darf">DARF (Federais)</option>
+                                      <option value="extrato">Extrato Bancário</option>
+                                      <option value="planilha">Planilha / Tabela</option>
+                                      <option value="folha_pagamento">Folha de Pagamento</option>
+                                      <option value="outros">Outros</option>
+                                    </select>
+                                  </div>
+                                  <div className="flex flex-col gap-1.5 md:col-span-3">
+                                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                      <Hash className="w-3.5 h-3.5 text-indigo-400" />
+                                      Número {page.metadata.isNotaFiscal ? "da Nota" : "(Imposto)"}
+                                    </label>
+                                    <input type="text" disabled={!page.metadata.isNotaFiscal}
+                                      value={page.metadata.isNotaFiscal ? (page.metadata.notaNumber || "") : "imposto"}
+                                      onChange={(e) => handleManualMetadataEdit(idx, "notaNumber", e.target.value)}
+                                      className="text-xs bg-slate-900 border border-slate-700 disabled:bg-slate-900/50 disabled:text-slate-600 disabled:border-slate-900 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500" />
+                                  </div>
+                                  <div className="flex flex-col gap-1.5 md:col-span-3">
+                                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                      <Briefcase className="w-3.5 h-3.5 text-indigo-400" />
+                                      {page.metadata.documentType === "folha_pagamento" ? "Empregador" : "Emitente"}
+                                    </label>
+                                    <input type="text" value={page.metadata.companyName || ""}
+                                      onChange={(e) => handleManualMetadataEdit(idx, "companyName", e.target.value)}
+                                      className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500" />
+                                  </div>
+                                  {page.metadata.documentType === "folha_pagamento" && (
+                                    <div className="flex flex-col gap-1.5 md:col-span-3">
+                                      <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                        <Briefcase className="w-3.5 h-3.5 text-amber-400" />
+                                        Nome do Funcionário
+                                      </label>
+                                      <input type="text" value={page.metadata.pessoaNome || ""}
+                                        onChange={(e) => handleManualMetadataEdit(idx, "pessoaNome", e.target.value)}
+                                        className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500" />
+                                    </div>
+                                  )}
+                                  <div className="flex flex-col gap-1.5 md:col-span-3">
+                                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                      <DollarSign className="w-3.5 h-3.5 text-indigo-400" />
+                                      Valor total líquido R$
+                                    </label>
+                                    <input type="number" step="0.01" value={page.metadata.valor !== null ? page.metadata.valor : ""}
+                                      onChange={(e) => handleManualMetadataEdit(idx, "valor", e.target.value ? parseFloat(e.target.value) : null)}
+                                      className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500" />
+                                  </div>
                                 </div>
                               )}
-
-                              {/* Real Transaction Decimal Value */}
-                              <div className="flex flex-col gap-1.5 md:col-span-3">
-                                <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                                  <DollarSign className="w-3.5 h-3.5 text-indigo-400" />
-                                  Valor total líquido R$
-                                </label>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={page.metadata.valor !== null ? page.metadata.valor : ""}
-                                  placeholder="0.00"
-                                  onChange={(e) => handleManualMetadataEdit(idx, "valor", e.target.value ? parseFloat(e.target.value) : null)}
-                                  className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500"
-                                />
-                              </div>
-
-                              {/* Manual layout name editor */}
-                              <div className="flex flex-col gap-1.5 md:col-span-6">
+                              <div className="flex flex-col gap-1.5 md:col-span-6 mt-4 pt-4 border-t border-slate-800">
                                 <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">
                                   Ajustar nome do arquivo físico resultante
                                 </span>
-                                <input
-                                  type="text"
-                                  value={page.customFilename}
+                                <input type="text" value={page.customFilename}
                                   onChange={(e) => handleManualFilenameDirectEdit(idx, e.target.value)}
-                                  className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-mono text-slate-300 focus:outline-hidden focus:border-indigo-500"
-                                />
+                                  className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-mono text-slate-300 focus:outline-hidden focus:border-indigo-500" />
                               </div>
                             </div>
                           )}
@@ -1028,6 +1021,8 @@ export default function App() {
                                     ? "⚠️ " + page.error
                                     : page.error?.includes("Chave")
                                     ? "🔑 " + page.error
+                                    : page.error?.includes("Provedor não aceita")
+                                    ? "📄 " + page.error
                                     : page.error}
                                 </span>
                                 {(page.error?.includes("Cota") || page.error?.includes("requisições")) && (
@@ -1038,6 +1033,11 @@ export default function App() {
                                 {page.error?.includes("Chave") && (
                                   <span className="text-[11px] text-rose-400/60 mt-1 block">
                                     Vá em Configurações ⚙️ e adicione uma chave válida
+                                  </span>
+                                )}
+                                {page.error?.includes("Provedor não aceita") && (
+                                  <span className="text-[11px] text-rose-400/60 mt-1 block">
+                                    Troque para Google Gemini ou outro provedor com suporte a imagens ⚙️
                                   </span>
                                 )}
                               </div>
@@ -1125,7 +1125,7 @@ export default function App() {
       {/* Visual Footer */}
       <footer className="py-8 bg-slate-900/20 border-t border-slate-900 text-center mt-12 px-4.5">
         <p className="text-xs text-slate-500 font-medium">
-          DocSplit AI v1.0.0 • 8 provedores de IA • 100% processamento local.
+          AI Disec PDF v1.1.0 • 8 provedores de IA • 100% processamento local.
         </p>
       </footer>
 

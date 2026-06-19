@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generatePageFilename, sanitizeFilename } from "../src/utils/fileHelpers";
+import { generatePageFilename, generateCombinedFilename, sanitizeFilename } from "../src/utils/fileHelpers";
 import { ExtractedMetadata, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "../src/types";
 
 const metaNF: ExtractedMetadata = {
@@ -48,9 +48,9 @@ describe("generatePageFilename - plan spec tests", () => {
       .toBe("pag1_NF_NF123_Empresa_X_1500.00.pdf");
   });
 
-  it("FOPAG com pessoaNome", () => {
+  it("holerite com pessoaNome", () => {
     expect(generatePageFilename("test.pdf", 0, metaFopag, ALL_ON))
-      .toBe("pag1_FOPAG_Joao_Silva_3500.00.pdf");
+      .toBe("pag1_holerite_Joao_Silva_3500.00.pdf");
   });
 
   it("nenhuma opção → documento.pdf", () => {
@@ -85,16 +85,16 @@ describe("generatePageFilename - plan spec tests", () => {
       .toBe("pag1_outros_sem_valor.pdf");
   });
 
-  it("FOPAG sem pessoaNome usa companyName", () => {
+  it("holerite sem pessoaNome usa companyName", () => {
     const semNome = { ...metaFopag, pessoaNome: null };
     expect(generatePageFilename("test.pdf", 0, semNome, ALL_ON))
-      .toBe("pag1_FOPAG_Tech_Ltda_3500.00.pdf");
+      .toBe("pag1_holerite_Tech_Ltda_3500.00.pdf");
   });
 
   it("showPessoaNome false usa companyName", () => {
     expect(generatePageFilename("test.pdf", 0, metaFopag, {
       ...ALL_ON, showPessoaNome: false,
-    })).toBe("pag1_FOPAG_Tech_Ltda_3500.00.pdf");
+    })).toBe("pag1_holerite_Tech_Ltda_3500.00.pdf");
   });
 
   it("showNotaNumber false omite nota", () => {
@@ -157,4 +157,44 @@ describe("sanitizeFilename", () => {
   it("trim + espaços → underscore", () => { expect(sanitizeFilename("  Tech   Corp  ")).toBe("Tech_Corp"); });
   it("vazio → desconhecido", () => { expect(sanitizeFilename("")).toBe("desconhecido"); });
   it("null → desconhecido", () => { expect(sanitizeFilename(null as any)).toBe("desconhecido"); });
+});
+
+describe("generateCombinedFilename", () => {
+  const holerite1: ExtractedMetadata = {
+    isNotaFiscal: false, notaNumber: null,
+    companyName: "Prefeitura Taquarituba", valor: 3500.00,
+    pessoaNome: "João Silva", documentType: "folha_pagamento",
+  };
+  const holerite2: ExtractedMetadata = {
+    isNotaFiscal: false, notaNumber: null,
+    companyName: "Prefeitura Taquarituba", valor: 2800.00,
+    pessoaNome: "Maria Santos", documentType: "folha_pagamento",
+  };
+  const holerite3: ExtractedMetadata = {
+    isNotaFiscal: false, notaNumber: null,
+    companyName: "Prefeitura Taquarituba", valor: 1900.00,
+    pessoaNome: "Carlos Pereira", documentType: "folha_pagamento",
+  };
+
+  it("2 holerites com pessoaNome e valor", () => {
+    expect(generateCombinedFilename([holerite1, holerite2], 0, ALL_ON))
+      .toBe("pag1_2_holerites_Joao_Silva_3500.00_Maria_Santos_2800.00.pdf");
+  });
+
+  it("2 holerites sem pessoaNome usa companyName", () => {
+    const s1 = { ...holerite1, pessoaNome: null };
+    const s2 = { ...holerite2, pessoaNome: null };
+    expect(generateCombinedFilename([s1, s2], 0, ALL_ON))
+      .toBe("pag1_2_holerites_Prefeitura_Taquarituba_3500.00_Prefeitura_Taquarituba_2800.00.pdf");
+  });
+
+  it("3 holerites", () => {
+    expect(generateCombinedFilename([holerite1, holerite2, holerite3], 0, ALL_ON))
+      .toBe("pag1_3_holerites_Joao_Silva_3500.00_Maria_Santos_2800.00_Carlos_Pereira_1900.00.pdf");
+  });
+
+  it("showPageNumber false", () => {
+    expect(generateCombinedFilename([holerite1, holerite2], 0, { ...ALL_ON, showPageNumber: false }))
+      .toBe("2_holerites_Joao_Silva_3500.00_Maria_Santos_2800.00.pdf");
+  });
 });
