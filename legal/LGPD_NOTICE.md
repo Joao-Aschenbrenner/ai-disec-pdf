@@ -1,4 +1,4 @@
-# Aviso LGPD — DocSplit AI
+# Aviso LGPD — AI Disec PDF
 
 **Lei Geral de Proteção de Dados Pessoais (Lei nº 13.709/2018)**  
 **Versão:** 1.0.0  

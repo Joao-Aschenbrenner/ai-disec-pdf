@@ -1,15 +1,15 @@
-# Política de Privacidade — DocSplit AI
+# Política de Privacidade — AI Disec PDF
 
 **Versão:** 1.0.0  
 **Data de vigência:** Junho de 2026
 
 ## 1. Coleta de Dados
 
-O DocSplit AI opera integralmente no ambiente local do usuário. Nenhum dado pessoal é coletado, armazenado ou transmitido para servidores controlados pelo autor.
+O AI Disec PDF opera integralmente no ambiente local do usuário. Nenhum dado pessoal é coletado, armazenado ou transmitido para servidores controlados pelo autor.
 
 ## 2. Processamento Local
 
-- O aplicativo Electron e o servidor Express rodam exclusivamente em sua máquina.
+- O aplicativo e o servidor interno rodam exclusivamente em sua máquina.
 - Os arquivos PDF Processados permanecem em seu sistema de arquivos local.
 - Nenhuma telemetria, analytics ou rastreamento está embutido no Software.
 

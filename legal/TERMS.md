@@ -1,4 +1,4 @@
-# Termos de Uso — DocSplit AI
+# Termos de Uso — AI Disec PDF
 
 **Versão:** 1.0.0  
 **Data de vigência:** Junho de 2026  
@@ -6,7 +6,7 @@
 
 ## 1. Aceitação
 
-Ao utilizar o DocSplit AI ("Software"), você concorda integralmente com estes Termos de Uso. Caso não concorde, não utilize o Software.
+Ao utilizar o AI Disec PDF ("Software"), você concorda integralmente com estes Termos de Uso. Caso não concorde, não utilize o Software.
 
 ## 2. Licença de Uso
 
@@ -14,7 +14,7 @@ Este Software é fornecido para uso pessoal e profissional, sob licença MIT. Vo
 
 ## 3. Processamento de Dados
 
-- Todo o processamento de PDFs ocorre localmente no seu navegador e em um servidor Express rodando em sua máquina.
+- Todo o processamento de PDFs ocorre localmente na sua máquina.
 - As páginas dos documentos são enviadas exclusivamente para o provedor de IA selecionado por você (NVIDIA, Google, Mistral, OpenRouter, Groq, Cerebras, OpenAI, Anthropic) para fins de extração de metadados.
 - Nenhum dado é armazenado em servidores terceiros além do necessário para a requisição à API de IA escolhida.
 - Recomenda-se não processar documentos contendo informações sensíveis sem consultar a política de privacidade do provedor de IA utilizado.
