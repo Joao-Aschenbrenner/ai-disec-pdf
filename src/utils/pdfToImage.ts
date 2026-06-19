@@ -38,6 +38,12 @@ export async function pdfBase64ToJpeg(pageBase64: string): Promise<string> {
   });
   const jpegBase64 = dataUrl.split(",")[1];
 
+  // Verificação de segurança: os primeiros bytes devem ser FF D8 FF (JPEG magic bytes)
+  const head = atob(jpegBase64.substring(0, 4));
+  if (head.charCodeAt(0) !== 0xFF || head.charCodeAt(1) !== 0xD8) {
+    throw new Error("Falha na conversão para JPEG — dados inválidos");
+  }
+
   pdf.destroy();
   return jpegBase64;
 }

@@ -71,8 +71,8 @@ function extractAIError(status: number, body: string): { userMessage: string; re
     if (msgStr.includes("does not support image") || msgStr.includes("not support image input")) {
       return { userMessage: "Este modelo de IA não suporta análise de imagens. Vá em Configurações e escolha outro provedor compatível." };
     }
-    if (msgStr.includes("does not support pdf") || msgStr.includes("not support pdf input")) {
-      return { userMessage: "Provedor não aceita este formato. Tente Google Gemini ou outro provedor com suporte a imagens." };
+    if (msgStr.includes("does not support pdf") || msgStr.includes("not support pdf input") || msgStr.includes("Cannot read")) {
+      return { userMessage: "O provedor de IA não conseguiu processar esta página (formato de imagem inválido). Tente reprocessar ou trocar de provedor nas Configurações." };
     }
     if (msgStr.includes("API key") || msgStr.includes("invalid") || msgStr.includes("unauthorized") || status === 401 || status === 403) {
       return { userMessage: "Chave de API inválida ou sem acesso ao modelo. Verifique suas configurações." };
@@ -150,11 +150,27 @@ REGRAS:
   IMPORTANTE para NFS-e: NFS-e tem DOIS campos de razão social — "Prestador do Serviço" (emitente) e "Tomador do Serviço" (cliente). companyName DEVE ser a RAZÃO SOCIAL do PRESTADOR (emitente), NUNCA do tomador. Procure "Prestador", "Emitente", "Dados do Prestador". Ignore "Tomador", "Cliente", "Contratante", "Dados do Tomador". NUNCA use "Secretaria da Fazenda", "Sefaz", "Prefeitura Municipal" ou nome de órgão público/sistema como companyName.
 - Se for EXTRATO BANCÁRIO: {"isNotaFiscal":false, "notaNumber":null, "companyName":"BANCO", "valor":NUMERO, "pessoaNome":null, "documentType":"extrato"}
 - Se for DARF: {"isNotaFiscal":false, "notaNumber":null, "companyName":"darf", "valor":NUMERO, "pessoaNome":null, "documentType":"darf"}
-- Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE / FOLHA MENSAL / FICHA FINANCEIRA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"}
-  IMPORTANTE para holerites/Folha Mensal:
-  1. O NOME DO FUNCIONARIO fica SEMPRE ao lado do código do funcionário (coluna "Nome do Funcionário" ou "Servidor"). Extraia SEMPRE.
-  2. O EMPREGADOR está no CABEÇALHO do documento (ex: "Santa Casa de Misericórdia de Taquarituba"). Use ESTE nome como companyName.
-  3. IGNORE carimbos/PREFEITURA no RODAPÉ — eles NÃO são o empregador. NUNCA use "PREFEITURA MUNICIPAL DE..." como companyName se houver outro nome no cabeçalho.
+- Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE / FOLHA MENSAL / FICHA FINANCEIRA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":VALOR_LIQUIDO_TOTAL, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"}
+  IMPORTANTE para holerites/Folha Mensal (leia EM ORDEM):
+
+  IDENTIFICAÇÃO: Para saber se o documento é holerite/folha de pagamento, verifique se contém 3+ destes termos:
+  "Vencimentos", "Descontos", "Salário Base", "Base Calc. FGTS", "Base Cálc. IRRF", "F.G.T.S", "INSS",
+  "IMPOSTO DE RENDA", "Demonstrativo de Pagamento", "Recibo de Salário", "Contra-Cheque",
+  "Funcionário:", "Empregador:", "Admissão", "Departamento", "MENSALISTA".
+  Se sim → documentType="folha_pagamento".
+
+  LOCALIZAÇÃO DOS CAMPOS (procure nesta ordem no documento):
+  1. companyName (EMPREGADOR): está no CABEÇALHO/TOPO do documento (ex: "Santa Casa de Misericórdia de Taquarituba").
+     IGNORE carimbos/PREFEITURA no RODAPÉ — eles NÃO são o empregador.
+     NUNCA use "PREFEITURA MUNICIPAL DE..." como companyName se houver outro nome no cabeçalho.
+  2. pessoaNome (NOME DO FUNCIONÁRIO): está na seção de identificação, ao lado de "Funcionário:", "Servidor:",
+     "Empregado:" ou coluna "Nome do Funcionário". Extraia SEMPRE.
+  3. valor (VALOR LÍQUIDO TOTAL A RECEBER): está na seção FINAL/RODAPÉ do holerite, na linha que contém
+     "Valor Líquido", "Líquido a Receber", "Total Líquido" ou "A Receber".
+     É SEMPRE o ÚLTIMO valor após todos os descontos.
+     IMPORTANTE: NUNCA use "Salário Base", "Total de Vencimentos", "Total de Proventos",
+     "Base Cálculo FGTS", "Base Cálculo IRRF" ou "Total de Descontos" como valor.
+
   4. Se tiver APENAS carimbo de PREFEITURA e não conseguir identificar funcionário, empresa ou valor → {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":null, "pessoaNome":null, "documentType":"nao_identificado"}
   5. 2 holerites na mesma página → retorne ARRAY com os 2 objetos.
 - Se for PLANILHA/TABELA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"planilha"}
