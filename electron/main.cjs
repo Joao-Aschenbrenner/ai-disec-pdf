@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, powerSaveBlocker, powerMonitor } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
@@ -14,6 +14,37 @@ try {
 let mainWindow = null;
 let autoUpdater = null;
 try { autoUpdater = require("electron-updater").autoUpdater; } catch (e) { /* dev mode */ }
+
+let processingBlockerId = null;
+
+ipcMain.on("processing-started", () => {
+  if (processingBlockerId === null) {
+    processingBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+    console.log("[main] Power save blocker started (id:", processingBlockerId, ")");
+  }
+});
+
+ipcMain.on("processing-ended", () => {
+  if (processingBlockerId !== null) {
+    powerSaveBlocker.stop(processingBlockerId);
+    console.log("[main] Power save blocker stopped");
+    processingBlockerId = null;
+  }
+});
+
+powerMonitor.on("suspend", () => {
+  console.log("[main] System suspending...");
+});
+
+powerMonitor.on("resume", () => {
+  console.log("[main] System resumed");
+  // Restart blocker if processing was active and it got lost
+  if (processingBlockerId !== null) {
+    try { powerSaveBlocker.stop(processingBlockerId); } catch (e) {}
+    processingBlockerId = powerSaveBlocker.start("prevent-app-suspension");
+    console.log("[main] Power save blocker restarted after resume (id:", processingBlockerId, ")");
+  }
+});
 
 const PORT = 3001;
 const isDev = process.env.NODE_ENV === "development";

@@ -29,6 +29,16 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 
 import { ExtractedMetadata, SplitPage, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "./types";
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      platform: string;
+      startProcessing: () => void;
+      endProcessing: () => void;
+    };
+  }
+}
 import { sanitizeFilename, generatePageFilename, generateCombinedFilename } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 
@@ -256,6 +266,7 @@ export default function App() {
   const processAllPages = async () => {
     if (splitPages.length === 0 || isProcessing) return;
     setIsProcessing(true);
+    window.electronAPI?.startProcessing();
 
     // Deep clone to reset state for processing
     const updatedPages = splitPages.map(p => ({
@@ -323,6 +334,7 @@ export default function App() {
     }
 
     setIsProcessing(false);
+    window.electronAPI?.endProcessing();
   };
 
   // Clear / Reset App
@@ -665,6 +677,7 @@ export default function App() {
                     <button
                       onClick={async () => {
                         setIsProcessing(true);
+                        window.electronAPI?.startProcessing();
                         const failed = splitPages.filter(p => p.status === "failed");
                         for (const page of failed) {
                           setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
@@ -672,6 +685,7 @@ export default function App() {
                           setSplitPages(prev => prev.map(p => p.id === page.id ? res : p));
                         }
                         setIsProcessing(false);
+                        window.electronAPI?.endProcessing();
                       }}
                       className="py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition-all shadow-lg active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
                     >
