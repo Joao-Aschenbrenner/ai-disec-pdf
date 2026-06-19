@@ -30,16 +30,12 @@ export async function pdfBase64ToJpeg(pageBase64: string): Promise<string> {
   }
 
   await page.render({ canvasContext: ctx as any, viewport }).promise;
-  // Converte o canvas para JPEG base64
-  const dataUrl = canvas.convertToBlob
-    ? await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 })
-        .then(blob => new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(blob);
-        }))
-    : canvas.toDataURL("image/jpeg", 0.92);
-  // dataUrl is "data:image/jpeg;base64,..."; extraímos a parte base64
+  const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+  const dataUrl = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.readAsDataURL(blob);
+  });
   const jpegBase64 = dataUrl.split(",")[1];
 
   pdf.destroy();

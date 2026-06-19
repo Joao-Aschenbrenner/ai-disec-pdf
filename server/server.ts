@@ -227,7 +227,7 @@ NÃO escreva NADA antes ou depois do JSON. NÃO use markdown. NÃO use **. A res
          } else if (provider === "GROQ") {
            if (!apiKey) throw new Error("Chave de API Groq não configurada.");
            console.log("[AI] Enviando para Groq...");
-           aiResponse = await callOpenAICompatible("https://api.groq.com/openai/v1/chat/completions", "mixtral-8x7b-32768");
+           aiResponse = await callOpenAICompatible("https://api.groq.com/openai/v1/chat/completions", "llama-3.2-90b-vision-preview");
          } else if (provider === "CEREBRAS") {
            if (!apiKey) throw new Error("Chave de API Cerebras não configurada.");
            console.log("[AI] Enviando para Cerebras (texto apenas)...");
