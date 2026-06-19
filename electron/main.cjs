@@ -46,8 +46,9 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 600,
+    icon: path.join(__dirname, "..", "assets", "icon.png"),
     autoHideMenuBar: true,
-    title: "DocSplit AI",
+    title: "AI Disec PDF",
     show: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
