@@ -50,8 +50,14 @@ export default function App() {
   // Custom user parameters to adjust original filename prefixing
   const [removeOriginalName, setRemoveOriginalName] = useState(false);
 
-  // Filename construction options
-  const [filenameOptions, setFilenameOptions] = useState<FilenameOptions>(DEFAULT_FILENAME_OPTIONS);
+  // Filename construction options + localStorage persistence
+  const [filenameOptions, setFilenameOptions] = useState<FilenameOptions>(() => {
+    try {
+      const saved = localStorage.getItem("filenameOptions");
+      return saved ? JSON.parse(saved) : DEFAULT_FILENAME_OPTIONS;
+    } catch { return DEFAULT_FILENAME_OPTIONS; }
+  });
+  useEffect(() => { localStorage.setItem("filenameOptions", JSON.stringify(filenameOptions)); }, [filenameOptions]);
 
   // Modal states
   const [showSettings, setShowSettings] = useState(false);
@@ -690,26 +696,27 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Settings parameters box */}
+              {/* Configurações do Layout */}
               <div className="border-t border-slate-800 pt-4 mt-2">
                 <span className="text-[10px] font-bold text-slate-500 tracking-wider uppercase block mb-3">Componentes do Nome do Arquivo</span>
-                <div className="grid grid-cols-2 gap-2">
-                  {([
-                    { key: 'includePageNumber' as const, label: 'Nº da Página', desc: 'Incluir pag1, pag2...' },
-                    { key: 'includeDocumentType' as const, label: 'Tipo do Documento', desc: 'nota, imposto, extrato...' },
-                    { key: 'includeCompanyName' as const, label: 'Empresa/Pessoa', desc: 'Nome do emitente ou funcionário' },
-                    { key: 'includeValue' as const, label: 'Valor', desc: 'Valor monetário do documento' },
-                    { key: 'compactFormat' as const, label: 'Formato Compacto', desc: 'Apenas partes preenchidas' },
-                  ] as const).map(opt => (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                  {[
+                    { key: 'showPageNumber' as const, label: 'Número da página', desc: 'pag1_, pag2_...' },
+                    { key: 'showType' as const, label: 'Tipo do documento', desc: 'NF, FOPAG, extrato...' },
+                    { key: 'showNotaNumber' as const, label: 'Número da nota', desc: 'NF123 — só NF-e' },
+                    { key: 'showCompanyName' as const, label: 'Nome empresa/pessoa', desc: 'João_Silva' },
+                    { key: 'showPessoaNome' as const, label: 'Nome do funcionário', desc: 'holerite/FOPAG' },
+                    { key: 'showValor' as const, label: 'Valor', desc: '3500.00' },
+                  ].map(opt => (
                     <label key={opt.key} className="flex items-start gap-2 cursor-pointer select-none p-1.5">
-                      <input 
+                      <input
                         type="checkbox"
                         checked={filenameOptions[opt.key]}
                         onChange={() => {
-                          setFilenameOptions(prev => ({ ...prev, [opt.key]: !prev[opt.key] }));
+                          const newOpts = { ...filenameOptions, [opt.key]: !filenameOptions[opt.key] };
+                          setFilenameOptions(newOpts);
                           setSplitPages(prev => prev.map((page, idx) => {
                             if (!page.metadata) return page;
-                            const newOpts = { ...filenameOptions, [opt.key]: !filenameOptions[opt.key] };
                             let f = generatePageFilename(page.originalFileName, idx, page.metadata, newOpts);
                             if (removeOriginalName) f = f.substring(f.indexOf("_pag") + 1);
                             return { ...page, customFilename: f };
@@ -723,19 +730,19 @@ export default function App() {
                       </div>
                     </label>
                   ))}
-                  <label className="flex items-start gap-2 cursor-pointer select-none p-1.5 col-span-2 border-t border-slate-800 pt-2">
-                    <input 
-                      type="checkbox"
-                      checked={removeOriginalName}
-                      onChange={(e) => handleToggleOriginalNamePrefix(e.target.checked)}
-                      className="w-4 h-4 mt-0.5 accent-indigo-500 bg-slate-950 border-slate-800 text-indigo-600 rounded-md focus:ring-indigo-500"
-                    />
-                    <div className="text-[11px] leading-tight">
-                      <p className="font-bold text-slate-200">Omitir prefixo original</p>
-                      <p className="text-slate-400 mt-0.5">Remove o nome do arquivo fonte do início do nome gerado</p>
-                    </div>
-                  </label>
                 </div>
+                <label className="flex items-start gap-2 cursor-pointer select-none p-1.5 mt-1 border-t border-slate-800 pt-3">
+                  <input
+                    type="checkbox"
+                    checked={removeOriginalName}
+                    onChange={(e) => handleToggleOriginalNamePrefix(e.target.checked)}
+                    className="w-4 h-4 mt-0.5 accent-indigo-500 bg-slate-950 border-slate-800 text-indigo-600 rounded-md focus:ring-indigo-500"
+                  />
+                  <div className="text-[11px] leading-tight">
+                    <p className="font-bold text-slate-200">Omitir prefixo original</p>
+                    <p className="text-slate-400 mt-0.5">Remove o nome do arquivo fonte do início do nome gerado</p>
+                  </div>
+                </label>
               </div>
             </div>
           )}
@@ -1177,7 +1184,16 @@ export default function App() {
               </section>
               <section>
                 <h4 className="font-bold text-white text-base mb-2">Privacidade</h4>
-                <p>Todo processamento é local. Os dados vão apenas para o provedor de IA escolhido. Nenhum dado é armazenado por nós. Consulte os termos legais na pasta <code className="bg-slate-800 px-1 rounded">legal/</code>.</p>
+                <p>Todo processamento é local. Os dados vão apenas para o provedor de IA escolhido. Nenhum dado é armazenado por nós.</p>
+              </section>
+              <section className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                <h4 className="font-bold text-white text-base mb-2">Documentos Legais</h4>
+                <ul className="list-disc list-inside space-y-1 text-slate-400">
+                  <li><a href="#" onClick={(e) => { e.preventDefault(); alert("Termos de Uso — consulte o arquivo legal/TERMS.md no diretório do aplicativo."); }} className="text-indigo-400 hover:text-indigo-300">Termos de Uso (TERMS.md)</a></li>
+                  <li><a href="#" onClick={(e) => { e.preventDefault(); alert("Política de Privacidade — consulte o arquivo legal/PRIVACY_POLICY.md no diretório do aplicativo."); }} className="text-indigo-400 hover:text-indigo-300">Política de Privacidade (PRIVACY_POLICY.md)</a></li>
+                  <li><a href="#" onClick={(e) => { e.preventDefault(); alert("Aviso LGPD — consulte o arquivo legal/LGPD_NOTICE.md no diretório do aplicativo."); }} className="text-indigo-400 hover:text-indigo-300">Aviso LGPD (LGPD_NOTICE.md)</a></li>
+                </ul>
+                <p className="text-[11px] text-slate-500 mt-2">Os arquivos estão na pasta <code className="bg-slate-800 px-1 rounded">legal/</code> na raiz do aplicativo.</p>
               </section>
             </div>
             <div className="flex justify-end mt-6">
@@ -1216,9 +1232,9 @@ export default function App() {
                   <option value="OPENAI">OpenAI (GPT-4o)</option>
                   <option value="ANTHROPIC">Anthropic (Claude 3 Sonnet)</option>
                   <option value="MISTRAL">Mistral (Mistral Vision)</option>
-                  <option value="OPENROUTER">OpenRouter (vários modelos)</option>
-                  <option value="GROQ">Groq (Mixtral/Llama)</option>
-                  <option value="CEREBRAS">Cerebras (texto apenas)</option>
+                  <option value="OPENROUTER">OpenRouter (Gemini Flash via API)</option>
+                  <option value="GROQ">Groq (Llama Vision, grátis)</option>
+                  <option value="CEREBRAS">Cerebras (texto apenas, sem visão)</option>
                 </select>
               </div>
 

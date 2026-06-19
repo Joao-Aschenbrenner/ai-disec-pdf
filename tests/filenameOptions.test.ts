@@ -2,237 +2,159 @@ import { describe, it, expect } from "vitest";
 import { generatePageFilename, sanitizeFilename } from "../src/utils/fileHelpers";
 import { ExtractedMetadata, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "../src/types";
 
-const baseInvoice: ExtractedMetadata = {
-  isNotaFiscal: true,
-  notaNumber: "12345",
-  companyName: "Empresa Ltda",
-  valor: 1500.50,
-  pessoaNome: null,
-  documentType: "nota_fiscal",
+const metaNF: ExtractedMetadata = {
+  isNotaFiscal: true, notaNumber: "NF123",
+  companyName: "Empresa X", valor: 1500.00,
+  pessoaNome: null, documentType: "nota_fiscal",
 };
 
-const baseFolha: ExtractedMetadata = {
-  isNotaFiscal: false,
-  notaNumber: null,
-  companyName: "Tech Corp",
-  valor: 3500.00,
-  pessoaNome: "João Silva",
-  documentType: "folha_pagamento",
+const metaFopag: ExtractedMetadata = {
+  isNotaFiscal: false, notaNumber: null,
+  companyName: "Tech Ltda", valor: 3500.00,
+  pessoaNome: "João Silva", documentType: "folha_pagamento",
 };
 
-const baseDARF: ExtractedMetadata = {
-  isNotaFiscal: false,
-  notaNumber: null,
-  companyName: "Receita Federal",
-  valor: 250.00,
-  pessoaNome: null,
-  documentType: "darf",
+const metaDARF: ExtractedMetadata = {
+  isNotaFiscal: false, notaNumber: null,
+  companyName: "Receita Federal", valor: 250.00,
+  pessoaNome: null, documentType: "darf",
 };
 
-const baseExtrato: ExtractedMetadata = {
-  isNotaFiscal: false,
-  notaNumber: null,
-  companyName: "Banco do Brasil",
-  valor: 5000.00,
-  pessoaNome: null,
-  documentType: "extrato",
+const metaExtrato: ExtractedMetadata = {
+  isNotaFiscal: false, notaNumber: null,
+  companyName: "Banco do Brasil", valor: 5000.00,
+  pessoaNome: null, documentType: "extrato",
 };
 
-const baseOutros: ExtractedMetadata = {
-  isNotaFiscal: false,
-  notaNumber: null,
-  companyName: null,
-  valor: null,
-  pessoaNome: null,
-  documentType: "outros",
+const metaOutros: ExtractedMetadata = {
+  isNotaFiscal: false, notaNumber: null,
+  companyName: null, valor: null,
+  pessoaNome: null, documentType: "outros",
 };
 
-describe("generatePageFilename - defaults (all options enabled)", () => {
-  it("NF: pag1_12345_Empresa_Ltda_1500.50.pdf", () => {
-    const name = generatePageFilename("test.pdf", 0, baseInvoice);
-    expect(name).toBe("pag1_12345_Empresa_Ltda_1500.50.pdf");
+const ALL_ON: FilenameOptions = {
+  showPageNumber: true, showType: true, showNotaNumber: true,
+  showCompanyName: true, showValor: true, showPessoaNome: true,
+};
+
+const ALL_OFF: FilenameOptions = {
+  showPageNumber: false, showType: false, showNotaNumber: false,
+  showCompanyName: false, showValor: false, showPessoaNome: false,
+};
+
+describe("generatePageFilename - plan spec tests", () => {
+  it("todas opções ativas → NF completa", () => {
+    expect(generatePageFilename("test.pdf", 0, metaNF, ALL_ON))
+      .toBe("pag1_NF_NF123_Empresa_X_1500.00.pdf");
   });
 
-  it("FOPAG: pag1_FOPAG_Joao_Silva_3500.00.pdf", () => {
-    const name = generatePageFilename("test.pdf", 0, baseFolha);
-    expect(name).toBe("pag1_FOPAG_Joao_Silva_3500.00.pdf");
+  it("FOPAG com pessoaNome", () => {
+    expect(generatePageFilename("test.pdf", 0, metaFopag, ALL_ON))
+      .toBe("pag1_FOPAG_Joao_Silva_3500.00.pdf");
   });
 
-  it("DARF: pag1_darf_Receita_Federal_250.00.pdf", () => {
-    const name = generatePageFilename("test.pdf", 0, baseDARF);
-    expect(name).toBe("pag1_darf_Receita_Federal_250.00.pdf");
+  it("nenhuma opção → documento.pdf", () => {
+    expect(generatePageFilename("test.pdf", 0, metaNF, ALL_OFF))
+      .toBe("documento.pdf");
   });
 
-  it("Extrato: pag1_extrato_Banco_do_Brasil_5000.00.pdf", () => {
-    const name = generatePageFilename("test.pdf", 0, baseExtrato);
-    expect(name).toBe("pag1_extrato_Banco_do_Brasil_5000.00.pdf");
+  it("apenas página + tipo", () => {
+    expect(generatePageFilename("test.pdf", 2, metaDARF, {
+      ...ALL_OFF, showPageNumber: true, showType: true,
+    })).toBe("pag3_darf.pdf");
   });
 
-  it("Outros: pag1_imposto_documento_sem_valor.pdf", () => {
-    const name = generatePageFilename("test.pdf", 2, baseOutros);
-    expect(name).toBe("pag3_imposto_documento_sem_valor.pdf");
+  it("NF sem notaNumber", () => {
+    const semNota = { ...metaNF, notaNumber: null };
+    expect(generatePageFilename("test.pdf", 0, semNota, ALL_ON))
+      .toBe("pag1_NF_Empresa_X_1500.00.pdf");
+  });
+
+  it("DARF com companyName", () => {
+    expect(generatePageFilename("test.pdf", 1, metaDARF, ALL_ON))
+      .toBe("pag2_darf_Receita_Federal_250.00.pdf");
+  });
+
+  it("Extrato com banco", () => {
+    expect(generatePageFilename("test.pdf", 0, metaExtrato, ALL_ON))
+      .toBe("pag1_extrato_Banco_do_Brasil_5000.00.pdf");
+  });
+
+  it("Outros sem valor → sem_valor", () => {
+    expect(generatePageFilename("test.pdf", 0, metaOutros, ALL_ON))
+      .toBe("pag1_outros_sem_valor.pdf");
+  });
+
+  it("FOPAG sem pessoaNome usa companyName", () => {
+    const semNome = { ...metaFopag, pessoaNome: null };
+    expect(generatePageFilename("test.pdf", 0, semNome, ALL_ON))
+      .toBe("pag1_FOPAG_Tech_Ltda_3500.00.pdf");
+  });
+
+  it("showPessoaNome false usa companyName", () => {
+    expect(generatePageFilename("test.pdf", 0, metaFopag, {
+      ...ALL_ON, showPessoaNome: false,
+    })).toBe("pag1_FOPAG_Tech_Ltda_3500.00.pdf");
+  });
+
+  it("showNotaNumber false omite nota", () => {
+    expect(generatePageFilename("test.pdf", 0, metaNF, {
+      ...ALL_ON, showNotaNumber: false,
+    })).toBe("pag1_NF_Empresa_X_1500.00.pdf");
+  });
+
+  it("apenas valor e página", () => {
+    expect(generatePageFilename("test.pdf", 0, metaNF, {
+      ...ALL_OFF, showPageNumber: true, showValor: true,
+    })).toBe("pag1_1500.00.pdf");
+  });
+
+  it("índice 10 → pag11", () => {
+    expect(generatePageFilename("test.pdf", 10, metaNF, ALL_ON))
+      .toBe("pag11_NF_NF123_Empresa_X_1500.00.pdf");
+  });
+
+  it("companyName null → nome não aparece", () => {
+    const semEmpresa = { ...metaNF, companyName: null };
+    expect(generatePageFilename("test.pdf", 0, semEmpresa, ALL_ON))
+      .toBe("pag1_NF_NF123_1500.00.pdf");
   });
 });
 
-describe("generatePageFilename - page number option", () => {
-  const opts: FilenameOptions = { ...DEFAULT_FILENAME_OPTIONS, includePageNumber: false };
+describe("generatePageFilename - 64 combinatorial tests (2^6)", () => {
+  const metas = [metaNF, metaFopag, metaDARF, metaExtrato, metaOutros];
+  const bools = [false, true];
+  let comboCount = 0;
 
-  it("sem page number na NF", () => {
-    const name = generatePageFilename("test.pdf", 0, baseInvoice, opts);
-    expect(name).toBe("12345_Empresa_Ltda_1500.50.pdf");
-  });
-
-  it("sem page number na FOPAG", () => {
-    const name = generatePageFilename("test.pdf", 0, baseFolha, opts);
-    expect(name).toBe("FOPAG_Joao_Silva_3500.00.pdf");
-  });
-});
-
-describe("generatePageFilename - document type option", () => {
-  const opts: FilenameOptions = { ...DEFAULT_FILENAME_OPTIONS, includeDocumentType: false };
-
-  it("sem tipo na NF", () => {
-    const name = generatePageFilename("test.pdf", 0, baseInvoice, opts);
-    expect(name).toBe("pag1_Empresa_Ltda_1500.50.pdf");
-  });
-
-  it("sem tipo na FOPAG", () => {
-    const name = generatePageFilename("test.pdf", 0, baseFolha, opts);
-    expect(name).toBe("pag1_Joao_Silva_3500.00.pdf");
-  });
-});
-
-describe("generatePageFilename - company name option", () => {
-  const opts: FilenameOptions = { ...DEFAULT_FILENAME_OPTIONS, includeCompanyName: false };
-
-  it("sem empresa na NF", () => {
-    const name = generatePageFilename("test.pdf", 0, baseInvoice, opts);
-    expect(name).toBe("pag1_12345_1500.50.pdf");
-  });
-
-  it("sem empresa na FOPAG", () => {
-    const name = generatePageFilename("test.pdf", 0, baseFolha, opts);
-    expect(name).toBe("pag1_FOPAG_3500.00.pdf");
-  });
-});
-
-describe("generatePageFilename - value option", () => {
-  const opts: FilenameOptions = { ...DEFAULT_FILENAME_OPTIONS, includeValue: false };
-
-  it("sem valor na NF", () => {
-    const name = generatePageFilename("test.pdf", 0, baseInvoice, opts);
-    expect(name).toBe("pag1_12345_Empresa_Ltda.pdf");
-  });
-
-  it("sem valor na FOPAG", () => {
-    const name = generatePageFilename("test.pdf", 0, baseFolha, opts);
-    expect(name).toBe("pag1_FOPAG_Joao_Silva.pdf");
-  });
-});
-
-describe("generatePageFilename - multiple options disabled", () => {
-  it("apenas tipo + empresa", () => {
-    const opts: FilenameOptions = { includePageNumber: false, includeDocumentType: true, includeCompanyName: true, includeValue: false, compactFormat: false };
-    const name = generatePageFilename("test.pdf", 0, baseInvoice, opts);
-    expect(name).toBe("12345_Empresa_Ltda.pdf");
-  });
-
-  it("apenas valor", () => {
-    const opts: FilenameOptions = { includePageNumber: false, includeDocumentType: false, includeCompanyName: false, includeValue: true, compactFormat: false };
-    const name = generatePageFilename("test.pdf", 0, baseInvoice, opts);
-    expect(name).toBe("1500.50.pdf");
-  });
-
-  it("tudo desligado -> documento.pdf", () => {
-    const opts: FilenameOptions = { includePageNumber: false, includeDocumentType: false, includeCompanyName: false, includeValue: false, compactFormat: false };
-    const name = generatePageFilename("test.pdf", 0, baseInvoice, opts);
-    expect(name).toBe("documento.pdf");
-  });
-});
-
-describe("generatePageFilename - index variation", () => {
-  it("pagina 1 em NF", () => {
-    const name = generatePageFilename("test.pdf", 0, baseInvoice);
-    expect(name).toMatch(/^pag1_/);
-  });
-  it("pagina 5 em NF", () => {
-    const name = generatePageFilename("test.pdf", 4, baseInvoice);
-    expect(name).toMatch(/^pag5_/);
-  });
-  it("pagina 20 em FOPAG", () => {
-    const name = generatePageFilename("test.pdf", 19, baseFolha);
-    expect(name).toMatch(/^pag20_/);
-  });
-});
-
-describe("generatePageFilename - null company name fallbacks", () => {
-  const noCompany: ExtractedMetadata = { ...baseDARF, companyName: null };
-  it("darf sem companyName usa darf", () => {
-    const name = generatePageFilename("test.pdf", 0, noCompany);
-    expect(name).toBe("pag1_darf_darf_250.00.pdf");
-  });
-
-  const noCompanyExtrato: ExtractedMetadata = { ...baseExtrato, companyName: null };
-  it("extrato sem companyName usa banco", () => {
-    const name = generatePageFilename("test.pdf", 0, noCompanyExtrato);
-    expect(name).toBe("pag1_extrato_banco_5000.00.pdf");
-  });
-});
-
-describe("generatePageFilename - pessoaNome in folha", () => {
-  it("folha sem pessoaNome usa companyName", () => {
-    const semNome: ExtractedMetadata = { ...baseFolha, pessoaNome: null };
-    const name = generatePageFilename("test.pdf", 0, semNome);
-    expect(name).toBe("pag1_FOPAG_Tech_Corp_3500.00.pdf");
-  });
-
-  it("folha com pessoaNome vazio usa companyName", () => {
-    const semNome: ExtractedMetadata = { ...baseFolha, pessoaNome: "" };
-    const name = generatePageFilename("test.pdf", 0, semNome);
-    expect(name).toBe("pag1_FOPAG_Tech_Corp_3500.00.pdf");
-  });
-});
-
-describe("sanitizeFilename", () => {
-  it("remove acentos", () => {
-    expect(sanitizeFilename("João Silva")).toBe("Joao_Silva");
-  });
-  it("remove caracteres especiais", () => {
-    expect(sanitizeFilename("Empresa@#$% Ltda")).toBe("Empresa_Ltda");
-  });
-  it("trim e converte espacos para underscore", () => {
-    expect(sanitizeFilename("  Tech   Corp  ")).toBe("Tech_Corp");
-  });
-  it("retorna desconhecido para vazio", () => {
-    expect(sanitizeFilename("")).toBe("desconhecido");
-  });
-  it("retorna desconhecido para null/undefined", () => {
-    expect(sanitizeFilename(null as any)).toBe("desconhecido");
-    expect(sanitizeFilename(undefined as any)).toBe("desconhecido");
-  });
-});
-
-describe("generatePageFilename - all 32 combos of 5 booleans", () => {
-  const metas = [baseInvoice, baseFolha, baseDARF, baseExtrato, baseOutros];
-
-  for (let mask = 0; mask < 32; mask++) {
+  for (const p of bools)
+  for (const t of bools)
+  for (const n of bools)
+  for (const c of bools)
+  for (const v of bools)
+  for (const pe of bools) {
     const opts: FilenameOptions = {
-      includePageNumber: !!(mask & 1),
-      includeDocumentType: !!(mask & 2),
-      includeCompanyName: !!(mask & 4),
-      includeValue: !!(mask & 8),
-      compactFormat: !!(mask & 16),
+      showPageNumber: p, showType: t, showNotaNumber: n,
+      showCompanyName: c, showValor: v, showPessoaNome: pe,
     };
-
     for (const meta of metas) {
-      it(`mask=${mask} type=${meta.documentType}`, () => {
+      const combo = `${p}${t}${n}${c}${v}${pe}_${meta.documentType}`;
+      it(`combo ${combo}`, () => {
         const name = generatePageFilename("test.pdf", 0, meta, opts);
         expect(name).toMatch(/\.pdf$/);
         expect(name.length).toBeGreaterThan(4);
-        if (!opts.includePageNumber && !opts.includeDocumentType && !opts.includeCompanyName && !opts.includeValue) {
+        if (!p && !t && !n && !c && !v) {
           expect(name).toBe("documento.pdf");
         }
+        comboCount++;
       });
     }
   }
+});
+
+describe("sanitizeFilename", () => {
+  it("remove acentos", () => { expect(sanitizeFilename("João Silva")).toBe("Joao_Silva"); });
+  it("remove especiais", () => { expect(sanitizeFilename("Empresa@#$% Ltda")).toBe("Empresa_Ltda"); });
+  it("trim + espaços → underscore", () => { expect(sanitizeFilename("  Tech   Corp  ")).toBe("Tech_Corp"); });
+  it("vazio → desconhecido", () => { expect(sanitizeFilename("")).toBe("desconhecido"); });
+  it("null → desconhecido", () => { expect(sanitizeFilename(null as any)).toBe("desconhecido"); });
 });

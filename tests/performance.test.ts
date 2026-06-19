@@ -21,7 +21,7 @@ function makePages(count: number): ExtractedMetadata[] {
   return Array.from({ length: count }, (_, i) => makeMeta(types[i % types.length]));
 }
 
-describe("Performance: filename generation (100 combos x 400 pages)", () => {
+describe("Performance: filename generation (64 combos x 400 pages)", () => {
   it("gera 400 nomes com opções default < 100ms", () => {
     const pages = makePages(400);
     const start = performance.now();
@@ -33,17 +33,18 @@ describe("Performance: filename generation (100 combos x 400 pages)", () => {
     console.log(`  400 filenames (default): ${elapsed.toFixed(1)}ms`);
   });
 
-  it("gera 400 nomes com 32 combos de options < 500ms", () => {
+  it("gera 400 nomes com 64 combos de options < 500ms", () => {
     const pages = makePages(400);
     const start = performance.now();
     let total = 0;
-    for (let mask = 0; mask < 32; mask++) {
+    for (let mask = 0; mask < 64; mask++) {
       const opts: FilenameOptions = {
-        includePageNumber: !!(mask & 1),
-        includeDocumentType: !!(mask & 2),
-        includeCompanyName: !!(mask & 4),
-        includeValue: !!(mask & 8),
-        compactFormat: !!(mask & 16),
+        showPageNumber: !!(mask & 1),
+        showType: !!(mask & 2),
+        showNotaNumber: !!(mask & 4),
+        showCompanyName: !!(mask & 8),
+        showValor: !!(mask & 16),
+        showPessoaNome: !!(mask & 32),
       };
       for (let i = 0; i < pages.length; i++) {
         generatePageFilename("test.pdf", i, pages[i], opts);
@@ -52,7 +53,7 @@ describe("Performance: filename generation (100 combos x 400 pages)", () => {
     }
     const elapsed = performance.now() - start;
     expect(elapsed).toBeLessThan(500);
-    console.log(`  400x32=${total} filenames (all combos): ${elapsed.toFixed(1)}ms`);
+    console.log(`  400x64=${total} filenames (all combos): ${elapsed.toFixed(1)}ms`);
   });
 });
 

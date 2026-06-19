@@ -1,71 +1,66 @@
 import { ExtractedMetadata, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "../types";
 
-/**
- * Sanitizes a string to make it safe for file names across operating systems
- */
+const typeMap: Record<string, string> = {
+  extrato: "extrato",
+  planilha: "planilha",
+  folha_pagamento: "FOPAG",
+  darf: "darf",
+  imposto: "imposto",
+  outros: "outros",
+  not_a_fiscal: "NF",
+};
+
 export function sanitizeFilename(str: string): string {
   if (!str) return "desconhecido";
   return str
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // Remove accents/diacritics
-    .replace(/[^a-zA-Z0-9_\-\s]/g, "") // Remove everything except alphanumeric, spaces, underscores, and dashes
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9_\-\s]/g, "")
     .trim()
-    .replace(/\s+/g, "_") // Replace spaces with underscores
-    .replace(/__+/g, "_"); // Merge multiple underscores
+    .replace(/\s+/g, "_")
+    .replace(/__+/g, "_");
 }
 
-/**
- * Generates the professional filename based on original file context and extracted metadata
- */
 export function generatePageFilename(
   originalFilename: string,
   index: number,
   metadata: ExtractedMetadata,
-  options?: FilenameOptions
+  options?: Partial<FilenameOptions>
 ): string {
-  const opts = options || DEFAULT_FILENAME_OPTIONS;
+  const opts = { ...DEFAULT_FILENAME_OPTIONS, ...options };
   const isInvoice = metadata.isNotaFiscal || metadata.documentType === "nota_fiscal";
-
   const parts: string[] = [];
 
-  if (opts.includePageNumber) {
+  if (opts.showPageNumber) {
     parts.push(`pag${index + 1}`);
   }
 
-  if (opts.includeDocumentType) {
+  if (opts.showType) {
     if (isInvoice) {
-      parts.push(sanitizeFilename(metadata.notaNumber || "nota") || "nota");
+      parts.push("NF");
     } else {
-      const t = metadata.documentType === "extrato" ? "extrato"
-        : metadata.documentType === "planilha" ? "planilha"
-        : metadata.documentType === "folha_pagamento" ? "FOPAG"
-        : metadata.documentType === "darf" ? "darf"
-        : "imposto";
-      parts.push(t);
+      parts.push(typeMap[metadata.documentType] || "documento");
     }
   }
 
-  if (opts.includeCompanyName) {
-    if (isInvoice) {
-      parts.push(sanitizeFilename(metadata.companyName || "empresa-desconhecida"));
-    } else if (metadata.documentType === "folha_pagamento") {
-      const nomePessoa = metadata.pessoaNome ? sanitizeFilename(metadata.pessoaNome) : "";
-      parts.push(nomePessoa || sanitizeFilename(metadata.companyName || "funcionario"));
-    } else if (metadata.documentType === "darf") {
-      parts.push(sanitizeFilename(metadata.companyName || "darf"));
-    } else if (metadata.documentType === "extrato") {
-      parts.push(sanitizeFilename(metadata.companyName || "banco"));
-    } else {
-      parts.push(sanitizeFilename(metadata.companyName || "documento"));
-    }
+  if (isInvoice && opts.showNotaNumber && metadata.notaNumber) {
+    parts.push(sanitizeFilename(metadata.notaNumber));
   }
 
-  if (opts.includeValue) {
-    if (metadata.valor !== null && metadata.valor !== undefined) {
-      parts.push(parseFloat(metadata.valor.toString()).toFixed(2));
-    } else {
-      parts.push("sem_valor");
+  if (opts.showCompanyName) {
+    let name = "";
+    if (metadata.documentType === "folha_pagamento" && opts.showPessoaNome && metadata.pessoaNome) {
+      name = sanitizeFilename(metadata.pessoaNome);
+    } else if (metadata.companyName) {
+      name = sanitizeFilename(metadata.companyName);
     }
+    if (name) parts.push(name);
+  }
+
+  if (opts.showValor) {
+    parts.push(metadata.valor !== null && metadata.valor !== undefined
+      ? parseFloat(metadata.valor.toString()).toFixed(2)
+      : "sem_valor");
   }
 
   let filename = parts.join("_");

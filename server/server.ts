@@ -10,7 +10,6 @@ const DEFAULT_PORT = 3001;
 const DATA_DIR = path.join(os.homedir(), ".docsplit-ai");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
-const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const NVIDIA_MODEL = "meta/llama-3.2-90b-vision-instruct";
 let serverInstance: any = null;
 
@@ -154,18 +153,17 @@ NÃO escreva NADA antes ou depois do JSON. NÃO use markdown. NÃO use **. A res
        let aiResponse;
        try {
          // Helper for OpenAI-compatible providers (OpenRouter, Groq, Cerebras, NVIDIA)
-         const callOpenAICompatible = (url: string, model: string, skipImage?: boolean) => {
-           const messages: any[] = [];
-           if (skipImage) {
-             // For text-only models (Cerebras), send a textual description instead of image
-             messages.push({ role: "user", content: `[IMAGEM CODIFICADA EM BASE64: ${imageBase64.substring(0, 50)}... (${imageBase64.length} caracteres)]\n\n${prompt}` });
-           } else {
-             messages.push({ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] });
-           }
-           return fetch(url, {
+         interface OpenAICompatConfig { baseUrl: string; model: string; apiKey: string; }
+         const callOpenAICompatible = (config: OpenAICompatConfig, image: string, promptText: string) => {
+           return fetch(`${config.baseUrl}/v1/chat/completions`, {
              method: "POST",
-             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
-             body: JSON.stringify({ model, messages, temperature: 0.1, max_tokens: 1024, top_p: 0.9 })
+             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.apiKey}` },
+             body: JSON.stringify({
+               model: config.model,
+               messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image}`, detail: "high" } }, { type: "text", text: promptText }] }],
+               temperature: 0.1,
+               max_tokens: 1024,
+             }),
            });
          };
 
@@ -220,24 +218,24 @@ NÃO escreva NADA antes ou depois do JSON. NÃO use markdown. NÃO use **. A res
                top_p: 0.9
              })
            });
-         } else if (provider === "OPENROUTER") {
-           if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
-           console.log("[AI] Enviando para OpenRouter...");
-           aiResponse = await callOpenAICompatible("https://openrouter.ai/api/v1/chat/completions", "google/gemini-2.0-flash-exp:free");
-         } else if (provider === "GROQ") {
-           if (!apiKey) throw new Error("Chave de API Groq não configurada.");
-           console.log("[AI] Enviando para Groq...");
-           aiResponse = await callOpenAICompatible("https://api.groq.com/openai/v1/chat/completions", "llama-3.2-90b-vision-preview");
-         } else if (provider === "CEREBRAS") {
-           if (!apiKey) throw new Error("Chave de API Cerebras não configurada.");
-           console.log("[AI] Enviando para Cerebras (texto apenas)...");
-           // Cerebras doesn't support image input; returns graceful error
-           return res.status(400).json({ error: "O modelo Cerebras não suporta análise de imagens. Escolha outro provedor como Google, NVIDIA ou OpenRouter." });
-         } else {
-           // NVIDIA (padrão)
-           console.log("[AI] Enviando para NVIDIA...");
-           aiResponse = await callOpenAICompatible(NVIDIA_API_URL, NVIDIA_MODEL);
-         }
+          } else if (provider === "OPENROUTER") {
+            if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
+            console.log("[AI] Enviando para OpenRouter...");
+            aiResponse = await callOpenAICompatible({ baseUrl: "https://openrouter.ai/api", model: "google/gemini-2.0-flash-001", apiKey }, imageBase64, prompt);
+          } else if (provider === "GROQ") {
+            if (!apiKey) throw new Error("Chave de API Groq não configurada.");
+            console.log("[AI] Enviando para Groq...");
+            aiResponse = await callOpenAICompatible({ baseUrl: "https://api.groq.com/openai", model: "llama-3.2-90b-vision-preview", apiKey }, imageBase64, prompt);
+          } else if (provider === "CEREBRAS") {
+            if (!apiKey) throw new Error("Chave de API Cerebras não configurada.");
+            console.log("[AI] Enviando para Cerebras (texto apenas)...");
+            // Cerebras doesn't support image input; returns graceful error
+            return res.status(400).json({ error: "O modelo Cerebras não suporta análise de imagens. Escolha outro provedor como Google, NVIDIA ou OpenRouter." });
+          } else {
+            // NVIDIA (padrão)
+            console.log("[AI] Enviando para NVIDIA...");
+            aiResponse = await callOpenAICompatible({ baseUrl: "https://integrate.api.nvidia.com", model: NVIDIA_MODEL, apiKey }, imageBase64, prompt);
+          }
        } catch (aiErr) {
          logError("Falha ao chamar o provedor de IA", aiErr);
          throw aiErr;

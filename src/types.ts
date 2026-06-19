@@ -8,19 +8,21 @@ export interface ExtractedMetadata {
 }
 
 export interface FilenameOptions {
-  includePageNumber: boolean;
-  includeDocumentType: boolean;
-  includeCompanyName: boolean;
-  includeValue: boolean;
-  compactFormat: boolean;
+  showPageNumber: boolean;
+  showType: boolean;
+  showNotaNumber: boolean;
+  showCompanyName: boolean;
+  showValor: boolean;
+  showPessoaNome: boolean;
 }
 
 export const DEFAULT_FILENAME_OPTIONS: FilenameOptions = {
-  includePageNumber: true,
-  includeDocumentType: true,
-  includeCompanyName: true,
-  includeValue: true,
-  compactFormat: false,
+  showPageNumber: true,
+  showType: true,
+  showNotaNumber: true,
+  showCompanyName: true,
+  showValor: true,
+  showPessoaNome: true,
 };
 
 export interface SplitPage {
