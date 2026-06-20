@@ -12,13 +12,13 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
     showPessoaNome: true,
   };
 
-  it("deve gerar nome combinado para 2 holerites com nomes e valores diferentes", () => {
+  it("deve gerar nome combinado para 2 holerites com nomes diferentes (valor sempre null)", () => {
     const docs: ExtractedMetadata[] = [
       {
         isNotaFiscal: false,
         notaNumber: null,
         companyName: "SANTA CASA DE MISERICORDIA DE TAQUARITUBA",
-        valor: 3665.16,
+        valor: null,
         pessoaNome: "ROSANA MARIA DE ARAUJO",
         documentType: "folha_pagamento",
       },
@@ -26,7 +26,7 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
         isNotaFiscal: false,
         notaNumber: null,
         companyName: "SANTA CASA DE MISERICORDIA DE TAQUARITUBA",
-        valor: 2020.26,
+        valor: null,
         pessoaNome: "ROSENILDA LEAL BUCIOLOTTI",
         documentType: "folha_pagamento",
       },
@@ -37,9 +37,8 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
     expect(filename).toContain("2");
     expect(filename).toContain("holerites");
     expect(filename).toContain("ROSANA_MARIA_DE_ARAUJO");
-    expect(filename).toContain("3665.16");
     expect(filename).toContain("ROSENILDA_LEAL_BUCIOLOTTI");
-    expect(filename).toContain("2020.26");
+    expect(filename).toContain("sem_valor");
     expect(filename).toMatch(/\.pdf$/);
   });
 
@@ -49,7 +48,7 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
         isNotaFiscal: false,
         notaNumber: null,
         companyName: "HOSPITAL CENTRAL",
-        valor: 1500.0,
+        valor: null,
         pessoaNome: "JOAO SILVA",
         documentType: "folha_pagamento",
       },
@@ -57,7 +56,7 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
         isNotaFiscal: false,
         notaNumber: null,
         companyName: "HOSPITAL CENTRAL",
-        valor: 2300.5,
+        valor: null,
         pessoaNome: "MARIA SOUZA",
         documentType: "folha_pagamento",
       },
@@ -76,7 +75,7 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
         isNotaFiscal: false,
         notaNumber: null,
         companyName: "HOSPITAL CENTRAL",
-        valor: 1500.0,
+        valor: null,
         pessoaNome: "JOAO SILVA",
         documentType: "folha_pagamento",
       },
@@ -106,7 +105,7 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
         isNotaFiscal: false,
         notaNumber: null,
         companyName: "SANTA CASA",
-        valor: 1800.0,
+        valor: null,
         pessoaNome: "PEDRO SANTOS",
         documentType: "folha_pagamento",
       },
@@ -117,46 +116,43 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
     expect(filename).toContain("nao_identificado");
     expect(filename).toContain("sem_valor");
     expect(filename).toContain("PEDRO_SANTOS");
-    expect(filename).toContain("1800.00");
   });
 });
 
-describe("Validação Matemática do Valor Líquido", () => {
-  function validateValorLiquido(
-    totalVencimentos: number,
-    totalDescontos: number,
-    valorLiquidoExtraido: number
-  ): boolean {
-    const diferenca = totalVencimentos - totalDescontos;
-    return Math.abs(diferenca - valorLiquidoExtraido) < 0.01;
-  }
-
-  it("deve validar Valor Líquido correto (Vencimentos - Descontos = Líquido)", () => {
-    expect(validateValorLiquido(4110.53, 445.37, 3665.16)).toBe(true);
+describe("Holerite valor SEMPRE null", () => {
+  it("holerite metadata deve ter valor=null", () => {
+    const metadata: ExtractedMetadata = {
+      isNotaFiscal: false,
+      notaNumber: null,
+      companyName: "SANTA CASA DE MISERICORDIA DE TAQUARITUBA",
+      valor: null,
+      pessoaNome: "ROSANA MARIA DE ARAUJO",
+      documentType: "folha_pagamento",
+    };
+    expect(metadata.valor).toBeNull();
   });
 
-  it("deve rejeitar Salário Base passado como Valor Líquido", () => {
-    expect(validateValorLiquido(4110.53, 445.37, 3606.93)).toBe(false);
-  });
-
-  it("deve rejeitar Total de Vencimentos passado como Valor Líquido", () => {
-    expect(validateValorLiquido(4110.53, 445.37, 4110.53)).toBe(false);
-  });
-
-  it("deve validar caso com Descontos zerados", () => {
-    expect(validateValorLiquido(3000.0, 0, 3000.0)).toBe(true);
-  });
-
-  it("deve rejeitar valor completamente diferente", () => {
-    expect(validateValorLiquido(4110.53, 445.37, 999.99)).toBe(false);
-  });
-
-  it("deve aceitar diferença de arredondamento < 0.01", () => {
-    expect(validateValorLiquido(1000.005, 0, 1000.01)).toBe(true);
-  });
-
-  it("deve validar segundo holerite duplo com valores distintos", () => {
-    expect(validateValorLiquido(2420.26, 400.0, 2020.26)).toBe(true);
+  it("holerite duplo: ambos devem ter valor=null", () => {
+    const docs: ExtractedMetadata[] = [
+      {
+        isNotaFiscal: false,
+        notaNumber: null,
+        companyName: "SANTA CASA",
+        valor: null,
+        pessoaNome: "FUNCIONARIO 1",
+        documentType: "folha_pagamento",
+      },
+      {
+        isNotaFiscal: false,
+        notaNumber: null,
+        companyName: "SANTA CASA",
+        valor: null,
+        pessoaNome: "FUNCIONARIO 2",
+        documentType: "folha_pagamento",
+      },
+    ];
+    expect(docs[0].valor).toBeNull();
+    expect(docs[1].valor).toBeNull();
   });
 });
 
@@ -175,12 +171,12 @@ describe("Exclusão de Carimbo — Regras de Nome de Empresa", () => {
     expect(metadata.companyName).toBe("CARIMBO");
   });
 
-  it("deve usar nome do cabeçalho quando EMPRESA ecarimbo coexistem", () => {
+  it("deve usar nome do cabeçalho quando EMPRESA e carimbo coexistem", () => {
     const metadata: ExtractedMetadata = {
       isNotaFiscal: false,
       notaNumber: null,
       companyName: "SANTA CASA DE MISERICORDIA DE TAQUARITUBA",
-      valor: 3665.16,
+      valor: null,
       pessoaNome: "ROSANA MARIA DE ARAUJO",
       documentType: "folha_pagamento",
     };
@@ -188,6 +184,7 @@ describe("Exclusão de Carimbo — Regras de Nome de Empresa", () => {
     expect(metadata.companyName).not.toBe("PREFEITURA MUNICIPAL DE TAQUARITUBA");
     expect(metadata.companyName).toBe("SANTA CASA DE MISERICORDIA DE TAQUARITUBA");
     expect(metadata.documentType).toBe("folha_pagamento");
+    expect(metadata.valor).toBeNull();
   });
 
   it("sanitizeFilename deve remover acentos de nomes com cedilha e acentos", () => {
@@ -211,7 +208,7 @@ describe("Holerite Individual — generatePageFilename", () => {
       isNotaFiscal: false,
       notaNumber: null,
       companyName: "HOSPITAL",
-      valor: 2000.0,
+      valor: null,
       pessoaNome: "JOAO",
       documentType: "folha_pagamento",
     };
@@ -233,7 +230,7 @@ describe("Holerite Individual — generatePageFilename", () => {
       isNotaFiscal: false,
       notaNumber: null,
       companyName: "HOSPITAL CENTRAL",
-      valor: 2000.0,
+      valor: null,
       pessoaNome: "JOAO SILVA",
       documentType: "folha_pagamento",
     };
@@ -315,27 +312,16 @@ describe("Prompt Holerite — Verificação de Conteúdo do Prompt", () => {
     expect(content).toContain("ARRAY");
   });
 
-  it("deve conter REGRA 4: VALOR LÍQUIDO com ancoragem espacial", async () => {
+  it("deve conter REGRA 4: valor SEMPRE null para holerites", async () => {
     const fs = await import("fs");
     const path = await import("path");
     const serverPath = path.join(__dirname, "..", "server", "server.ts");
     const content = fs.readFileSync(serverPath, "utf8");
 
-    expect(content).toContain("VALOR LÍQUIDO");
-    expect(content).toContain("ANCORAGEM ESPACIAL");
-    expect(content).toContain("CANTO INFERIOR DIREITO");
-    expect(content).toContain("VALIDAÇÃO MATEMÁTICA OBRIGATÓRIA");
+    expect(content).toContain("valor SEMPRE null");
+    expect(content).toContain("NÃO tente extrair Valor Líquido");
   });
 
-  it("deve conter instrução NEGATIVA para Salário Base como valor", async () => {
-    const fs = await import("fs");
-    const path = await import("path");
-    const serverPath = path.join(__dirname, "..", "server", "server.ts");
-    const content = fs.readFileSync(serverPath, "utf8");
-
-    expect(content).toContain("Salário Base");
-    expect(content).toContain("Total de Vencimentos");
-  });
 });
 
 describe("pdfToImage Scale — Verificação de Configuração", () => {
