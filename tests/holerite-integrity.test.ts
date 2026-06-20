@@ -12,7 +12,7 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
     showPessoaNome: true,
   };
 
-  it("deve gerar nome combinado para 2 holerites com nomes diferentes (valor sempre null)", () => {
+  it("deve gerar nome combinado para 2 holerites com apenas os nomes (sem valor)", () => {
     const docs: ExtractedMetadata[] = [
       {
         isNotaFiscal: false,
@@ -38,7 +38,8 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
     expect(filename).toContain("holerites");
     expect(filename).toContain("ROSANA_MARIA_DE_ARAUJO");
     expect(filename).toContain("ROSENILDA_LEAL_BUCIOLOTTI");
-    expect(filename).toContain("sem_valor");
+    expect(filename).not.toContain("sem_valor");
+    expect(filename).not.toContain("3665");
     expect(filename).toMatch(/\.pdf$/);
   });
 
@@ -116,6 +117,7 @@ describe("Holerite Duplo — generateCombinedFilename", () => {
     expect(filename).toContain("nao_identificado");
     expect(filename).toContain("sem_valor");
     expect(filename).toContain("PEDRO_SANTOS");
+    expect(filename).not.toContain("1800");
   });
 });
 
