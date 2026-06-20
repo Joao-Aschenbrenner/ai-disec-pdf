@@ -50,7 +50,7 @@ describe("generatePageFilename - plan spec tests", () => {
 
   it("holerite com pessoaNome", () => {
     expect(generatePageFilename("test.pdf", 0, metaFopag, ALL_ON))
-      .toBe("pag1_holerite_Joao_Silva_3500.00.pdf");
+      .toBe("pag1_holerite_Joao_Silva.pdf");
   });
 
   it("nenhuma opção → documento.pdf", () => {
@@ -88,13 +88,13 @@ describe("generatePageFilename - plan spec tests", () => {
   it("holerite sem pessoaNome usa companyName", () => {
     const semNome = { ...metaFopag, pessoaNome: null };
     expect(generatePageFilename("test.pdf", 0, semNome, ALL_ON))
-      .toBe("pag1_holerite_Tech_Ltda_3500.00.pdf");
+      .toBe("pag1_holerite_Tech_Ltda.pdf");
   });
 
   it("showPessoaNome false usa companyName", () => {
     expect(generatePageFilename("test.pdf", 0, metaFopag, {
       ...ALL_ON, showPessoaNome: false,
-    })).toBe("pag1_holerite_Tech_Ltda_3500.00.pdf");
+    })).toBe("pag1_holerite_Tech_Ltda.pdf");
   });
 
   it("showNotaNumber false omite nota", () => {
@@ -178,23 +178,23 @@ describe("generateCombinedFilename", () => {
 
   it("2 holerites com pessoaNome e valor", () => {
     expect(generateCombinedFilename([holerite1, holerite2], 0, ALL_ON))
-      .toBe("pag1_2_holerites_Joao_Silva_3500.00_Maria_Santos_2800.00.pdf");
+      .toBe("pag1_2_holerites_Joao_Silva_Maria_Santos.pdf");
   });
 
   it("2 holerites sem pessoaNome usa companyName", () => {
     const s1 = { ...holerite1, pessoaNome: null };
     const s2 = { ...holerite2, pessoaNome: null };
     expect(generateCombinedFilename([s1, s2], 0, ALL_ON))
-      .toBe("pag1_2_holerites_Prefeitura_Taquarituba_3500.00_Prefeitura_Taquarituba_2800.00.pdf");
+      .toBe("pag1_2_holerites_Prefeitura_Taquarituba_Prefeitura_Taquarituba.pdf");
   });
 
   it("3 holerites", () => {
     expect(generateCombinedFilename([holerite1, holerite2, holerite3], 0, ALL_ON))
-      .toBe("pag1_3_holerites_Joao_Silva_3500.00_Maria_Santos_2800.00_Carlos_Pereira_1900.00.pdf");
+      .toBe("pag1_3_holerites_Joao_Silva_Maria_Santos_Carlos_Pereira.pdf");
   });
 
   it("showPageNumber false", () => {
     expect(generateCombinedFilename([holerite1, holerite2], 0, { ...ALL_ON, showPageNumber: false }))
-      .toBe("2_holerites_Joao_Silva_3500.00_Maria_Santos_2800.00.pdf");
+      .toBe("2_holerites_Joao_Silva_Maria_Santos.pdf");
   });
 });

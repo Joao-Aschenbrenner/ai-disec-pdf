@@ -1011,12 +1011,14 @@ export default function App() {
                                             onChange={(e) => handleCombinedMetadataEdit(idx, docIdx, "pessoaNome", e.target.value)}
                                             className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500" />
                                         </div>
-                                        <div className="flex flex-col gap-1.5">
-                                          <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Valor R$</label>
-                                          <input type="number" step="0.01" value={docMeta.valor !== null ? docMeta.valor : ""}
-                                            onChange={(e) => handleCombinedMetadataEdit(idx, docIdx, "valor", e.target.value ? parseFloat(e.target.value) : null)}
-                                            className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500" />
-                                        </div>
+                                        {docMeta.documentType !== "folha_pagamento" && (
+                                          <div className="flex flex-col gap-1.5">
+                                            <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">Valor R$</label>
+                                            <input type="number" step="0.01" value={docMeta.valor !== null ? docMeta.valor : ""}
+                                              onChange={(e) => handleCombinedMetadataEdit(idx, docIdx, "valor", e.target.value ? parseFloat(e.target.value) : null)}
+                                              className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500" />
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   ))}
@@ -1075,15 +1077,17 @@ export default function App() {
                                         className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-amber-500" />
                                     </div>
                                   )}
-                                  <div className="flex flex-col gap-1.5 md:col-span-3">
-                                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                                      <DollarSign className="w-3.5 h-3.5 text-indigo-400" />
-                                      Valor total líquido R$
-                                    </label>
-                                    <input type="number" step="0.01" value={page.metadata.valor !== null ? page.metadata.valor : ""}
-                                      onChange={(e) => handleManualMetadataEdit(idx, "valor", e.target.value ? parseFloat(e.target.value) : null)}
-                                      className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500" />
-                                  </div>
+                                  {page.metadata.documentType !== "folha_pagamento" && (
+                                    <div className="flex flex-col gap-1.5 md:col-span-3">
+                                      <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                        <DollarSign className="w-3.5 h-3.5 text-indigo-400" />
+                                        Valor total líquido R$
+                                      </label>
+                                      <input type="number" step="0.01" value={page.metadata.valor !== null ? page.metadata.valor : ""}
+                                        onChange={(e) => handleManualMetadataEdit(idx, "valor", e.target.value ? parseFloat(e.target.value) : null)}
+                                        className="text-xs bg-slate-900 border border-slate-700 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-indigo-500" />
+                                    </div>
+                                  )}
                                 </div>
                               )}
                               <div className="flex flex-col gap-1.5 md:col-span-6 mt-4 pt-4 border-t border-slate-800">

@@ -58,7 +58,7 @@ export function generatePageFilename(
     if (name) parts.push(name);
   }
 
-  if (opts.showValor) {
+  if (opts.showValor && metadata.documentType !== "folha_pagamento") {
     parts.push(metadata.valor !== null && metadata.valor !== undefined
       ? parseFloat(metadata.valor.toString()).toFixed(2)
       : "sem_valor");
@@ -102,10 +102,14 @@ export function generateCombinedFilename(
     } else if (opts.showCompanyName && doc.companyName) {
       name = sanitizeFilename(doc.companyName);
     }
-    const valor = opts.showValor && doc.valor != null
-      ? parseFloat(doc.valor.toString()).toFixed(2)
-      : "sem_valor";
-    parts.push(`${name}_${valor}`);
+    if (doc.documentType === "folha_pagamento") {
+      parts.push(name);
+    } else {
+      const valor = opts.showValor && doc.valor != null
+        ? parseFloat(doc.valor.toString()).toFixed(2)
+        : "sem_valor";
+      parts.push(`${name}_${valor}`);
+    }
   }
 
   let filename = parts.join("_");
