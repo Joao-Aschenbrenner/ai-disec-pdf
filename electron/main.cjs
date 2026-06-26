@@ -116,9 +116,8 @@ function setupAutoUpdater() {
     console.warn("[updater] Failed to read settings:", e.message);
   }
 
-  // Force feed URL to a direct https download (bypasses API issues with drafts)
-  const feedURL = "https://github.com/Joao-Aschenbrenner/ai-disec-pdf/releases/latest/download/";
-  autoUpdater.setFeedURL({ provider: "generic", url: feedURL });
+  // Use GitHub provider for auto-updates (public repo, no token needed)
+  autoUpdater.setFeedURL({ provider: "github", owner: "Joao-Aschenbrenner", repo: "ai-disec-pdf" });
   console.log("[updater] Feed URL set to:", feedURL);
 
   autoUpdater.on("checking-for-update", () => {
