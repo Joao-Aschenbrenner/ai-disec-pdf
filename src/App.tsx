@@ -87,6 +87,7 @@ export default function App() {
   const [currentProvider, setCurrentProvider] = useState("NVIDIA");
   const [savingSettings, setSavingSettings] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showFirstTimeWarning, setShowFirstTimeWarning] = useState(false);
 
   // Reprocess correction dialog
   const [showCorrection, setShowCorrection] = useState(false);
@@ -99,7 +100,12 @@ export default function App() {
       if (s.provider) setCurrentProvider(s.provider);
       if (s.provider) setSettingsProvider(s.provider);
       if (s.apiKey) setSettingsApiKey(s.apiKey);
-    }).catch(() => {});
+      if (!s.apiKey) {
+        setTimeout(() => setShowFirstTimeWarning(true), 800);
+      }
+    }).catch(() => {
+      setTimeout(() => setShowFirstTimeWarning(true), 800);
+    });
   }, []);
 
   // Update overlay
@@ -598,7 +604,7 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-1.5" id="app-title">
-              DocSplit <span className="text-indigo-400 font-semibold text-xs bg-indigo-500/10 border border-indigo-500/20 px-2 py-0.5 rounded-full uppercase tracking-wider">AI</span>
+              AI Disec PDF
             </h1>
             <p className="text-xs text-slate-400 font-medium hidden sm:block mt-0.5">
               Separador Inteligente de Notas e Impostos
@@ -609,8 +615,16 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-end hidden md:flex">
             <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Motor Inteligente</span>
-              <span className={`text-xs font-semibold flex items-center gap-1.5 mt-0.5 ${settingsApiKey ? "text-emerald-400" : "text-slate-500"}`}>
-                <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${settingsApiKey ? "bg-emerald-500" : "bg-slate-600"}`}></span> {settingsApiKey ? `${currentProvider} ativo` : "Sem chave de API"}
+              <span className={`text-xs font-semibold flex items-center gap-1.5 mt-0.5 ${settingsApiKey ? "text-emerald-400" : "text-rose-400"}`}>
+                <span className={`w-2.5 h-2.5 rounded-full animate-pulse ${settingsApiKey ? "bg-emerald-500" : "bg-rose-500"}`}></span> {settingsApiKey ? `${currentProvider} ativo` : "Configure a chave de API"}
+                {!settingsApiKey && (
+                  <span className="group relative">
+                    <Info className="w-3.5 h-3.5 text-rose-400 cursor-help" />
+                    <span className="absolute right-0 top-6 w-56 bg-slate-800 text-slate-300 text-[10px] leading-relaxed p-2 rounded-lg border border-slate-700 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                      Va em Configuracoes (engrenagem) para adicionar uma chave de API e ativar o motor de IA.
+                    </span>
+                  </span>
+                )}
               </span>
           </div>
 
@@ -643,6 +657,32 @@ export default function App() {
         </div>
       </header>
       </div>
+
+      {showFirstTimeWarning && !settingsApiKey && (
+        <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 pt-2">
+          <div className="bg-rose-950/30 border border-rose-800/40 rounded-xl px-5 py-3 flex items-start gap-3 animate-fadeIn">
+            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-rose-200">Configure o Motor Inteligente</p>
+              <p className="text-xs text-rose-300/80 mt-0.5">
+                Adicione uma chave de API nas Configuracoes (engrenagem) para ativar a identificacao automatica de documentos.
+              </p>
+            </div>
+            <button
+              onClick={() => { setSettingsProvider(currentProvider); setShowSettings(true); setShowFirstTimeWarning(false); }}
+              className="text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"
+            >
+              Configurar
+            </button>
+            <button
+              onClick={() => setShowFirstTimeWarning(false)}
+              className="text-rose-400 hover:text-rose-300 p-1 cursor-pointer shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="max-w-[1600px] w-full mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         
@@ -1238,7 +1278,7 @@ export default function App() {
             <div className="flex items-center justify-between mb-5">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
                 <FileCheck className="w-4.5 h-4.5 text-indigo-400" />
-                Documentação - DocSplit AI
+                Documentação - AI Disec PDF
               </h3>
               <button onClick={() => setShowDocModal(false)} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 cursor-pointer">
                 <X className="w-4 h-4" />
@@ -1246,7 +1286,7 @@ export default function App() {
             </div>
             <div className="space-y-4 text-sm text-slate-300 leading-relaxed">
               <section>
-                <h4 className="font-bold text-white text-base mb-2">O que é o DocSplit AI?</h4>
+                <h4 className="font-bold text-white text-base mb-2">O que é o AI Disec PDF?</h4>
                 <p>Divida automaticamente PDFs com várias páginas em arquivos individuais, renomeados inteligentemente por IA.</p>
               </section>
               <section>
@@ -1372,7 +1412,7 @@ export default function App() {
                 </div>
                 <p className="text-[11px] text-slate-500 mt-1.5">
                   {settingsApiKey
-                    ? "Chave salva em ~/.docsplit-ai/settings.json"
+                    ? "Chave salva em ~/.ai-disec-pdf/settings.json"
                     : "Sua chave fica salva localmente no disco."}
                 </p>
               </div>

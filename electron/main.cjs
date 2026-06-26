@@ -107,7 +107,7 @@ function createWindow() {
 
 function setupAutoUpdater() {
   try {
-    const settingsPath = path.join(os.homedir(), ".docsplit-ai", "settings.json");
+    const settingsPath = path.join(os.homedir(), ".ai-disec-pdf", "settings.json");
     if (fs.existsSync(settingsPath)) {
       const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
       if (settings.githubToken) process.env.GH_TOKEN = settings.githubToken;

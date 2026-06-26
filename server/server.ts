@@ -7,7 +7,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const DEFAULT_PORT = 3001;
-const DATA_DIR = path.join(os.homedir(), ".docsplit-ai");
+const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
 const NVIDIA_MODEL = "meta/llama-3.2-90b-vision-instruct";
