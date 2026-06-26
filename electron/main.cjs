@@ -118,7 +118,7 @@ function setupAutoUpdater() {
 
   // Use GitHub provider for auto-updates (public repo, no token needed)
   autoUpdater.setFeedURL({ provider: "github", owner: "Joao-Aschenbrenner", repo: "ai-disec-pdf" });
-  console.log("[updater] Feed URL set to:", feedURL);
+  console.log("[updater] Feed URL set to: github:Joao-Aschenbrenner/ai-disec-pdf");
 
   autoUpdater.on("checking-for-update", () => {
     console.log("[updater] Checking for updates...");
