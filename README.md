@@ -6,70 +6,116 @@
 
 [![GitHub Release](https://img.shields.io/github/v/release/Joao-Aschenbrenner/ai-disec-pdf?style=for-the-badge&label=Download&color=6d28d9)](https://github.com/Joao-Aschenbrenner/ai-disec-pdf/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-6d28d9?style=for-the-badge)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-386%20passing-22c55e?style=for-the-badge)]()
+![Version](https://img.shields.io/badge/version-1.4.11-6d28d9?style=for-the-badge)
 
 </div>
 
-Divide PDFs com múltiplos documentos (notas fiscais, DARFs, holerites, extratos, boletos) em arquivos individuais, renomeados automaticamente com base no conteúdo de cada página.
+Aplicação desktop (Electron + React) que divide PDFs contendo múltiplos documentos (notas fiscais, DARFs, holerites, extratos, boletos) em arquivos individuais, renomeados automaticamente com base no conteúdo de cada página via IA.
 
 ---
 
-## ⬇️ Download
+## Funcionalidades
+
+- **Divisão inteligente** — extrai cada página de um PDF multifolha como arquivo independente
+- **Renomeação automática** — IA identifica o tipo de documento (NF-e, DARF, holerite, extrato, imposto) e nomeia cada arquivo com dados relevantes (empresa, valor, número da nota, funcionário)
+- **7 provedores de IA** — Google Gemini, OpenAI GPT-4o, Anthropic Claude, NVIDIA Llama Vision, Mistral, OpenRouter e Groq
+- **Editor manual** — corrija ou preencha metadados extraídos; o nome do arquivo é recalculado automaticamente
+- **Preview interativo** — visualização lado a lado de cada página com seus dados extraídos
+- **Download em ZIP** — pacote organizado com todos os documentos processados
+- **Atualização automática** — auto-update via GitHub Releases
+- **Configuração flexível** — escolha quais componentes entram no nome do arquivo (tipo, número, empresa, valor, funcionário)
+
+## Provedores de IA
+
+| Provedor | Modelo | Imagens |
+|---|---|---|
+| Google | Gemini 2.0 Flash (grátis) | Sim |
+| NVIDIA | Llama 3.2 90B Vision | Sim |
+| OpenAI | GPT-4o | Sim |
+| Anthropic | Claude 3 Sonnet | Sim |
+| Mistral | Mistral Vision | Sim |
+| OpenRouter | Gemini Flash via API | Sim |
+| Groq | Llama Vision (grátis) | Sim |
+
+
+## Download
 
 Baixe o instalador mais recente na [página de Releases](https://github.com/Joao-Aschenbrenner/ai-disec-pdf/releases/latest):
 
 ```
-AI Disec PDF Setup 1.0.0.exe
+AI-Disec-PDF-Setup-1.4.11.exe
 ```
 
-## 🚀 Como usar
+## Como usar
 
 1. **Instalar** — execute o instalador baixado
 2. **Abrir** — atalho no Desktop ou Menu Iniciar
-3. **Configurar chave** — clique em ⚙️ Configurações, escolha um provedor e cole sua chave de API
+3. **Configurar chave** — clique em ⚙️, escolha um provedor e cole sua chave de API
 4. **Processar** — arraste ou selecione um PDF, clique em "Identificar & Organizar Páginas"
 5. **Baixar** — clique em "Baixar ZIP Processado"
 
 O app verifica atualizações automaticamente toda vez que inicia.
 
-## 🤖 Provedores de IA
+## Stack
 
-| Provedor    | Modelo                    | Imagens |
-|-------------|---------------------------|---------|
-| Google      | Gemini 2.0 Flash (grátis) | Sim     |
-| NVIDIA      | Llama 3.2 90B Vision      | Sim     |
-| OpenAI      | GPT-4o                    | Sim     |
-| Anthropic   | Claude 3 Sonnet           | Sim     |
-| Mistral     | Mistral Vision            | Sim     |
-| OpenRouter  | Gemini Flash via API      | Sim     |
-| Groq        | Llama Vision (grátis)     | Sim     |
-| Cerebras    | texto apenas              | Não     |
+| Camada | Tecnologia |
+|---|---|
+| Frontend | React 19 + TypeScript + Tailwind CSS 4 |
+| Backend | Express + TypeScript (executado no Electron) |
+| Desktop | Electron 34 + electron-builder |
+| IA | Google Gemini / OpenAI / Anthropic / NVIDIA / Mistral / OpenRouter / Groq |
+| PDF | pdf-lib + pdfjs-dist + sharp |
+| Testes | Vitest (386 testes) |
+| Build | Vite 6 + esbuild |
 
-## 📁 Estrutura do projeto
+## Estrutura do projeto
 
 ```
+ai-disec-pdf/
 ├── assets/          # Ícones (SVG, PNG, ICO)
-├── electron/        # main.cjs (auto-update, menu removido)
+├── electron/        # main.cjs, preload.cjs (auto-update, power save)
 ├── legal/           # Termos de uso, privacidade, LGPD
-├── server/          # Express + 8 providers IA
-├── src/             # React + Tailwind
+├── server/          # Express + integração com 8 provedores de IA
+├── src/             # React + Tailwind (interface)
+│   ├── utils/       # Helpers (fileHelpers, pdfToImage)
+│   ├── App.tsx      # Componente principal
+│   ├── types.ts     # Tipos TypeScript (metadados, opções)
+│   ├── main.tsx     # Entry point
+│   └── index.css    # Estilos globais
 ├── tests/           # 386 testes (Vitest)
-└── dist/            # Build de produção
+├── scripts/         # Scripts de release
+├── dist/            # Build de produção
+└── release/         # Instaladores gerados
 ```
 
----
-
-## 🔧 Desenvolvimento
+## Desenvolvimento
 
 ```bash
 git clone https://github.com/Joao-Aschenbrenner/ai-disec-pdf.git
 cd ai-disec-pdf
 npm install
-npm run dev              # servidor web
-npm run electron:dev     # Electron + servidor
-npm run test             # 386 testes
-npm run build            # build produção
-npm run electron:build   # gera instalador
+
+# Servidor web (Vite dev server + Express)
+npm run dev
+
+# Electron + servidor
+npm run electron:dev
+
+# Testes
+npm run test
+
+# Build produção
+npm run build
+
+# Gerar instalador
+npm run electron:build
+```
+
+### Variáveis de ambiente
+
+```bash
+PORT=3001                    # porta do servidor (opcional, padrão 3001)
+APP_URL="http://localhost:3001"
 ```
 
 ### Publicar atualização
@@ -85,9 +131,7 @@ npm run release
 # Usuários existentes recebem a atualização ao abrir o app
 ```
 
----
-
-## 📄 Licença
+## Licença
 
 Distribuído sob licença **MIT**. Veja [LICENSE](LICENSE) para mais informações.
 

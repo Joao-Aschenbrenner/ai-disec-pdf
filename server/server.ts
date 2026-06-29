@@ -204,7 +204,7 @@ ${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento co
        const provider = settings.provider || "GOOGLE";
        let aiResponse;
        try {
-         // Helper for OpenAI-compatible providers (OpenRouter, Groq, Cerebras, NVIDIA)
+         // Helper for OpenAI-compatible providers (OpenRouter, Groq, NVIDIA)
          interface OpenAICompatConfig { baseUrl: string; model: string; apiKey: string; }
          const callOpenAICompatible = (config: OpenAICompatConfig, image: string, promptText: string) => {
            return fetch(`${config.baseUrl}/v1/chat/completions`, {
@@ -278,11 +278,6 @@ ${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento co
             if (!apiKey) throw new Error("Chave de API Groq não configurada.");
             console.log("[AI] Enviando para Groq...");
             aiResponse = await callOpenAICompatible({ baseUrl: "https://api.groq.com/openai", model: "llama-3.2-90b-vision-preview", apiKey }, imageBase64, prompt);
-          } else if (provider === "CEREBRAS") {
-            if (!apiKey) throw new Error("Chave de API Cerebras não configurada.");
-            console.log("[AI] Enviando para Cerebras (texto apenas)...");
-            // Cerebras doesn't support image input; returns graceful error
-            return res.status(400).json({ error: "O modelo Cerebras não suporta análise de imagens. Escolha outro provedor como Google, NVIDIA ou OpenRouter." });
           } else {
             // NVIDIA (padrão)
             console.log("[AI] Enviando para NVIDIA...");

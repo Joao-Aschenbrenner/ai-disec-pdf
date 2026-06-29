@@ -1309,7 +1309,6 @@ export default function App() {
                   <li><strong className="text-slate-200">Mistral Vision</strong> — Mistral multimodal</li>
                   <li><strong className="text-slate-200">OpenRouter</strong> — Acesso a 200+ modelos</li>
                   <li><strong className="text-slate-200">Groq</strong> — Inferência ultrarrápida</li>
-                  <li><strong className="text-slate-200">Cerebras</strong> — Texto apenas (não suporta imagens)</li>
                 </ul>
               </section>
               <section>
@@ -1376,7 +1375,6 @@ export default function App() {
                   <option value="MISTRAL">Mistral (Mistral Vision)</option>
                   <option value="OPENROUTER">OpenRouter (Gemini Flash via API)</option>
                   <option value="GROQ">Groq (Llama Vision)</option>
-                  <option value="CEREBRAS">Cerebras (texto apenas, sem visão)</option>
                 </select>
               </div>
 

@@ -38,7 +38,6 @@ Nova seção "Componentes do Nome do Arquivo" na UI:
 | Mistral | Mistral (Mistral Vision) | open-mistral-vision | ✅ |
 | OpenRouter | OpenRouter (Gemini Flash via API) | gemini-2.0-flash-001 | ✅ |
 | Groq | Groq (Llama Vision, grátis) | llama-3.2-90b-vision-preview | ✅ |
-| Cerebras | Cerebras (texto apenas, sem visão) | — | ❌ |
 
 ## Testes de FilenameOptions
 

@@ -26,7 +26,6 @@ Para realizar a extração de metadados, as imagens das páginas dos PDFs são e
 | NVIDIA      | https://www.nvidia.com/en-us/privacy-policy/                  |
 | Groq        | https://groq.com/privacy-policy/                              |
 | OpenRouter  | https://openrouter.ai/privacy                                 |
-| Cerebras    | https://cerebras.net/privacy-policy/                          |
 
 ## 4. Segurança
 
