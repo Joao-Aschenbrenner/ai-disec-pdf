@@ -17,7 +17,7 @@ describe("Catálogo de modelos (server/models.json)", () => {
     expect(fs.existsSync(catalogPath)).toBe(true);
     const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
     expect(catalog.providers).toBeTypeOf("object");
-    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER"];
+    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ"];
     for (const p of expected) {
       expect(catalog.providers[p], `provider ${p} ausente`).toBeDefined();
       expect(catalog.providers[p].baseUrl).toBeTypeOf("string");
@@ -39,7 +39,7 @@ describe("Catálogo de modelos (server/models.json)", () => {
 
   it("catálogo cobre os 9 providers (6 cloud + 3 novos)", () => {
     const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "server", "models.json"), "utf8"));
-    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
+    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
     for (const p of expected) {
       expect(catalog.providers[p], `${p} ausente do catálogo`).toBeDefined();
     }
@@ -106,7 +106,7 @@ describe("getProviderConfig (catálogo e fallback)", () => {
     expect(getProviderConfig("MISTRAL").model).not.toBe("open-mistral-vision");
     // NVIDIA default agora é llama-3.2-11b-vision (nano-8b entrou em EOL em 2026-08-26)
     expect(getProviderConfig("NVIDIA").model).not.toBe("meta/llama-3.2-90b-vision-instruct");
-    expect(getProviderConfig("NVIDIA").model).toBe("meta/llama-3.2-11b-vision-instruct");
+    expect(getProviderConfig("NVIDIA").model).toBe("z-ai/glm-5-3-flash");
     expect(getProviderConfig("OPENROUTER").model).toBe("google/gemma-4-26b-a4b-it:free");
   });
 
@@ -134,6 +134,7 @@ describe("getProviderConfig (catálogo e fallback)", () => {
       expect(m).not.toBe("microsoft/phi-3-vision-128k-instruct");
       expect(m).not.toMatch(/nano-12b-v2-vl/);
     }
+    expect(nvidia.tiers!.medium).toBe("z-ai/glm-5-3-flash");
     expect(nvidia.tiers!.precise).toBe("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning");
   });
 });
@@ -146,7 +147,7 @@ describe("Mock dos 8 provedores de IA", () => {
 
   const providers = [
     "GOOGLE", "NVIDIA", "OPENAI", "ANTHROPIC",
-    "MISTRAL", "OPENROUTER",
+    "MISTRAL", "OPENROUTER", "GROQ",
   ] as const;
 
   function mockResponseForProvider(provider: string) {
