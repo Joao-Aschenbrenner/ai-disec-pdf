@@ -116,9 +116,9 @@ export function generatePageFilename(
     (!metadata.documentClass && metadata.documentType === "folha_pagamento");
 
   if (opts.showValor && !isIndividualPayroll) {
-    if (metadata.valor !== null && metadata.valor !== undefined) {
-      parts.push(parseFloat(metadata.valor.toString()).toFixed(2));
-    }
+    parts.push(metadata.valor !== null && metadata.valor !== undefined
+      ? parseFloat(metadata.valor.toString()).toFixed(2)
+      : "sem_valor");
   }
 
   return finalizeFilename(parts);
@@ -138,7 +138,10 @@ export function generateCombinedFilename(
 
   for (const doc of docs.slice(0, 3)) {
     if (doc.documentType === "nao_identificado") {
-      parts.push("REV");
+      const legacyValue = opts.showValor && doc.valor != null
+        ? parseFloat(doc.valor.toString()).toFixed(2)
+        : "sem_valor";
+      parts.push(doc.documentClass ? "REV" : "nao_identificado_" + legacyValue);
       continue;
     }
 
