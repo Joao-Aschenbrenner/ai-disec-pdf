@@ -4,13 +4,13 @@ export const MAX_FILENAME_LENGTH = 80;
 export const MAX_ENTITY_LENGTH = 28;
 
 const typeMap: Record<string, string> = {
-  extrato: "EXT",
-  planilha: "TAB",
-  folha_pagamento: "HOL",
-  darf: "DARF",
-  imposto: "GUIA",
-  outros: "DOC",
-  nao_identificado: "REV",
+  extrato: "extrato",
+  planilha: "planilha",
+  folha_pagamento: "holerite",
+  darf: "darf",
+  imposto: "imposto",
+  outros: "outros",
+  nao_identificado: "nao_identificado",
   not_a_fiscal: "NF",
 };
 
@@ -89,7 +89,7 @@ export function generatePageFilename(
   const isInvoice = metadata.isNotaFiscal || metadata.documentType === "nota_fiscal";
   const parts: string[] = [];
 
-  if (opts.showPageNumber) parts.push(`p${index + 1}`);
+  if (opts.showPageNumber) parts.push(`pag${index + 1}`);
   if (opts.showType) parts.push(typeLabel(metadata));
 
   if (isInvoice && opts.showNotaNumber && metadata.notaNumber) {
@@ -132,7 +132,7 @@ export function generateCombinedFilename(
   const opts = { ...DEFAULT_FILENAME_OPTIONS, ...options };
   const parts: string[] = [];
 
-  if (opts.showPageNumber) parts.push(`p${index + 1}`);
+  if (opts.showPageNumber) parts.push(`pag${index + 1}`);
   parts.push(String(docs.length));
   if (opts.showType) parts.push(typeLabel(docs[0] || ({} as ExtractedMetadata)) + "s");
 
