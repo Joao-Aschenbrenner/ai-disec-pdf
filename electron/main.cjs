@@ -101,7 +101,8 @@ async function layaHealth(timeoutMs = 700) {
   try {
     const response = await fetch(`http://127.0.0.1:${LAYA_PORT}/health`, { signal: controller.signal });
     if (!response.ok) return { running: false, health: null };
-    const health = await response.json().catch(() => ({}));
+    const health = await response.json().catch(() => null);
+    if (!health || health.status !== "ok") return { running: false, health: null };
     return { running: true, health };
   } catch {
     return { running: false, health: null };
