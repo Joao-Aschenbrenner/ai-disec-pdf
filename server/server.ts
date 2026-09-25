@@ -42,6 +42,7 @@ interface ModelsCatalog {
     minRamGB?: Record<string, number>;
     noVision?: boolean;
     ocrOnly?: boolean;
+    optional?: boolean;
   }>;
 }
 
@@ -613,7 +614,7 @@ app.get("/api/classification/health", async (_req, res) => {
   return res.json({
     version: "classification-v2",
     laya,
-    strategy: "hard-signatures -> laya -> VLM candidate -> review"
+    strategy: "hard-signatures -> laya -> deterministic fallback/review"
   });
 });
 
