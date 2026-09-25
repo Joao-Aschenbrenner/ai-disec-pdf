@@ -26,21 +26,20 @@ Tornar a classificação robusta mesmo usando um VLM mais fraco.
 
 Servidor esperado: `http://127.0.0.1:8000`.
 
-Instalação de referência:
+No desktop, o próprio Electron gerencia uma venv isolada em `~/.ai-disec-pdf/laya/venv`. Em **Configurações > Laya local**, o usuário pode instalar, iniciar, parar e ver o health do serviço. Depois de instalado, o app tenta iniciar o Laya automaticamente nas próximas execuções.
 
-```bash
-python -m pip install "laya[serve]"
-LAYA_DEVICE=auto LAYA_PRELOAD=1 laya-serve
-```
+A versão fica fixada em `0.3.20` nesta release e somente o checkpoint `multilingual` é pré-carregado.
 
 Endpoint usado pelo DocSplit: `POST /v1/systemone`.
 
-Variáveis opcionais:
+Variáveis opcionais para desenvolvimento:
 
 - `LAYA_URL`
 - `LAYA_API_KEY`
+- `LAYA_DEVICE`
+- `LAYA_THREADS`
 
-Se o Laya estiver offline ou exceder o timeout, o DocSplit continua funcionando com signatures + VLM fallback.
+Se o Laya estiver offline ou exceder o timeout, o DocSplit continua funcionando com signatures + revisão determinística. Uma decisão feita **somente pelo Laya** permanece marcada como `needsReview=true` até calibração no golden real.
 
 ## Dataset de calibração
 
