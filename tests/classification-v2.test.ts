@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { PDFDocument } from "pdf-lib";
 import { classifyBySignatures } from "../server/classification/documentSignatures";
 import { routeDocument } from "../server/classification/documentRouter";
 import { generatePageFilename, makeWindowsSafeFilename, resolveFilenameConflict, MAX_FILENAME_LENGTH } from "../src/utils/fileHelpers";
+import { splitPdfPageIntoHorizontalHalves } from "../src/utils/pageSegmenter";
 
 describe("CLASSIFICATION-V2 signatures", () => {
   it("hard guard DANFE nunca vira folha", () => {
@@ -137,5 +139,35 @@ describe("SafeFilenameBuilder", () => {
     expect(a).toBe("pag9_HOL_documento.pdf");
     expect(b).toBe("pag9_HOL_documento_2.pdf");
     expect(b.length).toBeLessThanOrEqual(MAX_FILENAME_LENGTH);
+  });
+});
+
+
+describe("PageSegmenter", () => {
+  it("corta uma página em metades superior e inferior reais", async () => {
+    const source = await PDFDocument.create();
+    source.addPage([600, 800]);
+    const bytes = await source.save();
+    const base64 = Buffer.from(bytes).toString("base64");
+
+    const segments = await splitPdfPageIntoHorizontalHalves(base64);
+    expect(segments).toHaveLength(2);
+    expect(segments[0].position).toBe("top");
+    expect(segments[1].position).toBe("bottom");
+
+    const top = await PDFDocument.load(Buffer.from(segments[0].base64, "base64"));
+    const bottom = await PDFDocument.load(Buffer.from(segments[1].base64, "base64"));
+    const topCrop = top.getPage(0).getCropBox();
+    const bottomCrop = bottom.getPage(0).getCropBox();
+
+    expect(topCrop.width).toBe(600);
+    expect(topCrop.height).toBe(400);
+    expect(topCrop.y).toBe(400);
+    expect(bottomCrop.width).toBe(600);
+    expect(bottomCrop.height).toBe(400);
+    expect(bottomCrop.y).toBe(0);
+
+    URL.revokeObjectURL(segments[0].blobUrl);
+    URL.revokeObjectURL(segments[1].blobUrl);
   });
 });
