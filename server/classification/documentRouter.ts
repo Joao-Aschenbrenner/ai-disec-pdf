@@ -11,9 +11,14 @@ export interface RoutingResult {
   needsReview: boolean;
 }
 
+export interface RoutingOptions {
+  useLaya?: boolean;
+}
+
 export async function routeDocument(
   classificationText: string,
-  _candidate?: string
+  _candidate?: string,
+  options: RoutingOptions = {}
 ): Promise<RoutingResult> {
   const sig = classifyBySignatures(classificationText);
 
@@ -30,7 +35,9 @@ export async function routeDocument(
     };
   }
 
-  const laya = await classifyWithLaya(classificationText);
+  const laya = options.useLaya === false
+    ? { available: false, reason: "disabled" }
+    : await classifyWithLaya(classificationText);
   if (laya.available && laya.documentClass) {
     // Laya base checkpoints are not trusted alone at low confidence.
     // Agreement with signatures is stronger than either source in isolation.
