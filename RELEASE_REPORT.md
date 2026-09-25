@@ -12,7 +12,7 @@ A auditoria foi executada sobre a branch `feat/classification-v2-laya`. O result
 | Testes | PASS | 14 arquivos, 477 testes |
 | Build | PASS | `npm run build` |
 | Dependências runtime | PASS | `npm audit --omit=dev --audit-level=moderate`: 0 vulnerabilidades |
-| Segurança | PASS | auditoria selada pós-SSRF: `findingCount: 0`, selo SHA-256 válido |
+| Segurança | PASS | scan `scan-2026-09-25T20-09-33.859Z-11839d8889cb`, `findingCount: 0`, selo `sha256:da7a8c1286b1620685fb9550b24ed0db4ca299c7a07f841d391a568d83a75ef9` |
 | Catálogo | PASS | IDs multimodais atuais e fail-safe do updater cobertos por testes |
 
 ## Electron e instalador

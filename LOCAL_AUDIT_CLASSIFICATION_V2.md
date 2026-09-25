@@ -140,7 +140,7 @@ Evidências executadas nesta auditoria:
 - `npm test -- --reporter=dot`: **PASS**, 14 arquivos e 477 testes.
 - `npm run build`: **PASS** (Vite + dois bundles esbuild).
 - `npm audit --omit=dev --audit-level=moderate`: **PASS**, 0 vulnerabilidades.
-- auditoria de segurança selada pós-SSRF: **PASS**, `findingCount: 0`, selo SHA-256 válido.
+- auditoria de segurança profunda selada: **PASS**, scan `scan-2026-09-25T20-09-33.859Z-11839d8889cb`, `findingCount: 0`, 546 pacotes e 0 advisories offline correspondentes; selo SHA-256 válido.
 - `npm run electron:dev`: **PASS** após o launcher iniciar o servidor e aguardar a porta 3001.
 - executável empacotado: **PASS**, processo vivo por 10 s e `GET /api/models` HTTP 200.
 - NSIS: **PASS**, instalação isolada código 0 e desinstalação isolada código 0, sem arquivos remanescentes.
