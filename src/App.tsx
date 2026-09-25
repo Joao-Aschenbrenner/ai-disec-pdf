@@ -63,7 +63,7 @@ declare global {
     };
   }
 }
-import { sanitizeFilename, generatePageFilename, generateCombinedFilename } from "./utils/fileHelpers";
+import { sanitizeFilename, generatePageFilename, generateCombinedFilename, makeWindowsSafeFilename, resolveFilenameConflict } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 import { imageLikelyHasTwoStackedDocuments, splitPdfPageIntoHorizontalHalves } from "./utils/pageSegmenter";
 import { version as appVersion } from "../package.json";
@@ -840,6 +840,7 @@ export default function App() {
     const cleanOriginalName = sanitizeFilename(selectedFile?.name.replace(/\.pdf$/i, "") || "documentos");
     
     let addedCount = 0;
+    const usedZipNames = new Set<string>();
     
     for (const page of splitPages) {
       // Decode base64 to binary ArrayBuffer/Uint8Array
@@ -850,7 +851,8 @@ export default function App() {
         bytes[i] = binaryString.charCodeAt(i);
       }
       
-      zip.file(page.customFilename, bytes);
+      const zipFilename = resolveFilenameConflict(page.customFilename, usedZipNames);
+      zip.file(zipFilename, bytes);
       addedCount++;
     }
 
@@ -909,7 +911,7 @@ export default function App() {
       const next = [...prev];
       next[index] = {
         ...next[index],
-        customFilename: filename.endsWith(".pdf") ? filename : `${filename}.pdf`
+        customFilename: makeWindowsSafeFilename(filename)
       };
       return next;
     });
