@@ -37,7 +37,7 @@ describe("Catálogo de modelos (server/models.json)", () => {
     }
   });
 
-  it("catálogo cobre os 9 providers (6 cloud + 3 novos)", () => {
+  it("catálogo cobre os providers ativos e legados", () => {
     const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "server", "models.json"), "utf8"));
     const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
     for (const p of expected) {
@@ -66,9 +66,9 @@ describe("Catálogo de modelos (server/models.json)", () => {
 });
 
 describe("getProviderConfig (catálogo e fallback)", () => {
-  it("FALLBACK_MODELS exportado cobre os 7 providers", async () => {
+  it("FALLBACK_MODELS exportado cobre os providers configurados", async () => {
     const { FALLBACK_MODELS } = await import("../server/server");
-    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
+    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
     for (const p of expected) {
       expect(FALLBACK_MODELS[p], `${p} ausente do fallback`).toBeDefined();
       if (p !== "LOCAL_OLLAMA") {
@@ -88,7 +88,7 @@ describe("getProviderConfig (catálogo e fallback)", () => {
 
   it("todos os providers com visão têm config válida via catálogo", async () => {
     const { getProviderConfig } = await import("../server/server");
-    const providers = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
+    const providers = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
     for (const p of providers) {
       const cfg = getProviderConfig(p);
       expect(cfg.baseUrl, `${p}: baseUrl`).toBeTypeOf("string");
@@ -104,7 +104,7 @@ describe("getProviderConfig (catálogo e fallback)", () => {
     // Modelos que sabemos que foram descontinuados/lentos e não devem ser o default
     expect(getProviderConfig("ANTHROPIC").model).not.toBe("claude-3-sonnet-20240229");
     expect(getProviderConfig("MISTRAL").model).not.toBe("open-mistral-vision");
-    // NVIDIA default agora é llama-3.2-11b-vision (nano-8b entrou em EOL em 2026-08-26)
+    // NVIDIA default da Classification V2 é GLM-5.3-Flash; Nemotron Omni fica como fallback preciso
     expect(getProviderConfig("NVIDIA").model).not.toBe("meta/llama-3.2-90b-vision-instruct");
     expect(getProviderConfig("NVIDIA").model).toBe("z-ai/glm-5-3-flash");
     expect(getProviderConfig("OPENROUTER").model).toBe("google/gemma-4-26b-a4b-it:free");
