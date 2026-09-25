@@ -1085,7 +1085,16 @@ export default function App() {
 
       const updatedMetadata = {
         ...page.metadata,
-        [field]: value
+        [field]: value,
+        ...(field === "documentType"
+          ? {
+              documentClass: undefined,
+              needsReview: false,
+              classificationSource: "manual",
+              classificationConfidence: 1,
+              classificationEvidence: ["manual-confirmation"],
+            }
+          : {}),
       };
 
       // Re-trigger filename calculation
@@ -1183,6 +1192,7 @@ export default function App() {
   const totalPages = splitPages.length;
   const processedCount = splitPages.filter(p => p.status === "success").length;
   const failedCount = splitPages.filter(p => p.status === "failed").length;
+  const reviewCount = splitPages.filter(p => p.status === "success" && p.metadata?.needsReview).length;
   const pendingCount = splitPages.filter(p => p.status === "pending" || p.status === "processing" || p.status === "failed").length;
   
   const notaFiscalCount = splitPages.filter(p => p.metadata?.documentType === "nota_fiscal").length;
@@ -1537,6 +1547,12 @@ export default function App() {
                     <p className="text-xs text-slate-400 mt-1">Configure os nomes inteligentes ou edite as informações geradas por inteligência artificial.</p>
                   </div>
                   
+                  {reviewCount > 0 && (
+                    <span className="text-[10px] font-bold bg-amber-950/40 border border-amber-800/30 text-amber-300 px-2.5 py-1.5 rounded-lg">
+                      {reviewCount} para revisar
+                    </span>
+                  )}
+                  
                   {processedCount > 0 && (
                     <button
                       onClick={downloadAllAsZip}
@@ -1601,7 +1617,15 @@ export default function App() {
                                   Lendo...
                                 </span>
                               )}
-                              {page.status === "success" && (
+                              {page.status === "success" && page.metadata?.needsReview ? (
+                                <span
+                                  className="text-[10px] font-bold bg-amber-950/50 border border-amber-800/30 text-amber-300 px-2.5 py-1 rounded-md flex items-center gap-1 cursor-help"
+                                  title={`Baixa confiança • fonte: ${page.metadata.classificationSource || "desconhecida"}`}
+                                >
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  Revisar
+                                </span>
+                              ) : page.status === "success" && (
                                 <span className="text-[10px] font-bold bg-emerald-950/50 border border-emerald-900/30 text-emerald-400 px-2.5 py-1 rounded-md flex items-center gap-1">
                                   <Check className="w-3.5 h-3.5" />
                                   Pronto
@@ -1633,6 +1657,28 @@ export default function App() {
                           {/* Editable extracted metadata details (Rendered upon success) */}
                           {hasResult && page.metadata && (
                             <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                              <div className="flex items-center gap-2 flex-wrap mb-3">
+                                {page.metadata.documentClass && (
+                                  <span className="text-[9px] font-bold px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300">
+                                    {page.metadata.documentClass}
+                                  </span>
+                                )}
+                                {page.metadata.classificationSource && (
+                                  <span className="text-[9px] px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-500">
+                                    fonte: {page.metadata.classificationSource}
+                                  </span>
+                                )}
+                                {typeof page.metadata.classificationConfidence === "number" && (
+                                  <span className="text-[9px] px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-500">
+                                    confiança: {Math.round(page.metadata.classificationConfidence * 100)}%
+                                  </span>
+                                )}
+                                {page.metadata.needsReview && (
+                                  <span className="text-[9px] font-bold px-2 py-1 rounded bg-amber-950/40 border border-amber-800/30 text-amber-300">
+                                    confirme o tipo antes de usar
+                                  </span>
+                                )}
+                              </div>
                               {page.metadataList && page.metadataList.length > 1 ? (
                                 <>
                                   <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-800">
