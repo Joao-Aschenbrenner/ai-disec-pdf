@@ -9,7 +9,7 @@ export interface LayaDecision {
 
 const DEFAULT_LAYA_URL = "http://127.0.0.1:8000";
 
-export async function classifyWithLaya(text: string, timeoutMs = 1200): Promise<LayaDecision> {
+export async function classifyWithLaya(text: string, timeoutMs = 2500): Promise<LayaDecision> {
   if (!text || text.trim().length < 20) {
     return { available: false, reason: "texto insuficiente" };
   }
@@ -71,7 +71,8 @@ export async function getLayaHealth(timeoutMs = 500): Promise<{ healthy: boolean
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${baseUrl}/health`, { signal: controller.signal });
-    return { healthy: response.ok, url: baseUrl };
+    const payload: any = response.ok ? await response.json().catch(() => null) : null;
+    return { healthy: response.ok && payload?.status === "ok", url: baseUrl };
   } catch {
     return { healthy: false, url: baseUrl };
   } finally {
