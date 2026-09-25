@@ -26,6 +26,7 @@ export async function classifyWithLaya(text: string, timeoutMs = 1200): Promise<
         ...(process.env.LAYA_API_KEY ? { Authorization: `Bearer ${process.env.LAYA_API_KEY}` } : {})
       },
       body: JSON.stringify({
+        model: "multilingual",
         state: { body: text.slice(0, 24000) },
         questions: {
           document_class: {
