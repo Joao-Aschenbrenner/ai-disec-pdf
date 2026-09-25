@@ -23,26 +23,24 @@ Todos devem encerrar com exit code 0.
 
 ## 3. Laya
 
-Instalar somente se ainda não estiver instalado:
+No app, abrir **Configurações > Laya local**.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/setup-laya.ps1
-```
+Validar o fluxo completo:
 
-Em outro terminal:
+1. estado inicial correto (`não instalado`, `parado`, `iniciando` ou `ativo`);
+2. se necessário, clicar **Instalar Laya** e confirmar criação da venv isolada;
+3. clicar **Iniciar Laya**;
+4. fechar/reabrir o app e confirmar auto-start quando já instalado;
+5. clicar **Parar Laya** e confirmar que o app continua funcionando sem ele.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/start-laya.ps1
-```
-
-Validar:
+Também validar:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod http://localhost:3001/api/classification/health
 ```
 
-O segundo endpoint deve informar `classification-v2`. Se Laya estiver offline o app deve continuar funcionando, marcando casos fracos para revisão.
+O health deve ser realmente do Laya (`status=ok`) e o segundo endpoint deve informar `classification-v2`. Com Laya desligado, casos fracos precisam continuar processando e aparecer como **Revisar**, não como sucesso silencioso.
 
 ## 4. PDF real local
 
@@ -100,6 +98,9 @@ LINT=PASS|FAIL
 TESTS=PASS|FAIL
 BUILD=PASS|FAIL
 LAYA_HEALTH=PASS|FAIL
+LAYA_INSTALL_UI=PASS|FAIL
+LAYA_AUTOSTART=PASS|FAIL
+REVIEW_BADGE=PASS|FAIL
 ELECTRON=PASS|FAIL
 REAL_PDF=PASS|FAIL
 TWO_DOC_SPLIT=PASS|FAIL
