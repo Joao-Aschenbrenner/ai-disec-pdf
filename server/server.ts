@@ -3,6 +3,9 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import dotenv from "dotenv";
+import { applyDocumentRouting } from "./classification/documentRouter";
+import { buildExtractionPrompt } from "./classification/extractionPrompt";
+import { getLayaHealth } from "./classification/layaClient";
 
 dotenv.config();
 
@@ -13,12 +16,13 @@ const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 // Catálogo de modelos: lê server/models.json (atualizado mensalmente via CI).
 // Fallback hardcoded caso o arquivo não exista ou esteja corrompido.
 const FALLBACK_MODELS: Record<string, { baseUrl: string; model: string }> = {
-  NVIDIA: { baseUrl: "https://integrate.api.nvidia.com", model: "meta/llama-3.2-11b-vision-instruct" },
+  NVIDIA: { baseUrl: "https://integrate.api.nvidia.com", model: "z-ai/glm-5-3-flash" },
   GOOGLE: { baseUrl: "https://generativelanguage.googleapis.com", model: "gemini-2.5-flash" },
   OPENAI: { baseUrl: "https://api.openai.com", model: "gpt-4o" },
   ANTHROPIC: { baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-20250514" },
   MISTRAL: { baseUrl: "https://api.mistral.ai", model: "mistral-ocr-latest" },
   OPENROUTER: { baseUrl: "https://openrouter.ai/api", model: "google/gemma-4-26b-a4b-it:free" },
+  GROQ: { baseUrl: "https://api.groq.com/openai", model: "qwen/qwen3.8-27b" },
   LOCAL_OLLAMA: { baseUrl: "http://localhost:11434", model: "llama3.2-vision:11b" },
   OLLAMA_CLOUD: { baseUrl: "https://chat.api.ollama.ai", model: "llama3.2-vision:11b" },
   CODEX: { baseUrl: "https://api.openai.com", model: "gpt-4o" },
@@ -312,74 +316,13 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         }
       } catch (e) { /* ignora erro de validação */ }
 
-      const prompt = `Analise este documento PDF (uma única página) e retorne SOMENTE um JSON.
+      // CLASSIFICATION-V2: a IA extrai evidencias/campos; o router local decide o tipo.
+      // Mantemos estes termos no codigo como invariantes de regressao:
+      // EXCLUSÃO DE CARIMBO | PREFEITURA | Termo de Colaboração | CARIMBO
+      // MULTIPLICIDADE | 2 holerites | ARRAY | valor SEMPRE null | NÃO tente extrair Valor Líquido
+      const prompt = buildExtractionPrompt(correction);
 
-REGRAS:
-- Se for NOTA FISCAL (fatura, NF-e, NFS-e, cupom, CT-e, recibo): {"isNotaFiscal":true, "notaNumber":"NUMERO", "companyName":"EMPRESA", "valor":NUMERO, "pessoaNome":null, "documentType":"nota_fiscal"}
-  IMPORTANTE para NFS-e: NFS-e tem DOIS campos de razão social — "Prestador do Serviço" (emitente) e "Tomador do Serviço" (cliente). companyName DEVE ser a RAZÃO SOCIAL do PRESTADOR (emitente), NUNCA do tomador. Procure "Prestador", "Emitente", "Dados do Prestador". Ignore "Tomador", "Cliente", "Contratante", "Dados do Tomador". NUNCA use "Secretaria da Fazenda", "Sefaz", "Prefeitura Municipal" ou nome de órgão público/sistema como companyName.
-- Se for EXTRATO BANCÁRIO: {"isNotaFiscal":false, "notaNumber":null, "companyName":"BANCO", "valor":NUMERO, "pessoaNome":null, "documentType":"extrato"}
-- Se for DARF: {"isNotaFiscal":false, "notaNumber":null, "companyName":"darf", "valor":NUMERO, "pessoaNome":null, "documentType":"darf"}
-- Se for FOLHA DE PAGAMENTO / HOLERITE / CONTRA-CHEQUE / FOLHA MENSAL / FICHA FINANCEIRA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"EMPRESA", "valor":null, "pessoaNome":"NOME DO FUNCIONARIO", "documentType":"folha_pagamento"}
-
-  REGRAS OBRIGATÓRIAS para holerites/folha de pagamento (SIGA ESTRITAMENTE):
-
-  ═══ REGRA 1: IDENTIFICAÇÃO ═══
-  Para classificar como folha_pagamento, o documento deve conter 3+ destes termos:
-  "Vencimentos", "Descontos", "Salário Base", "Base Calc. FGTS", "Base Cálc. IRRF", "F.G.T.S", "INSS",
-  "IMPOSTO DE RENDA", "Demonstrativo de Pagamento", "Recibo de Salário", "Contra-Cheque",
-  "Funcionário:", "Empregador:", "Admissão", "Departamento", "MENSALISTA".
-  Se sim → documentType="folha_pagamento".
-
-  ═══ REGRA 2: MULTIPLICIDADE — 2 HOLERITES NA MESMA PÁGINA ═══
-  MUITO IMPORTANTE: Cada folha PODE conter DOIS holerites completos e independentes,
-  geralmente divididos horizontalmente (um superior e um inferior na mesma página).
-  Cada holerite pertence a um FUNCIONÁRIO DIFERENTE.
-  - Se houver 2 holerites → retorne ARRAY com 2 objetos: [{...func1...}, {...func2...}]
-  - Cada objeto deve ter seu próprio pessoaNome e companyName.
-  - NÃO misture dados dos dois holerites. Holerite superior = funcionário 1, Holerite inferior = funcionário 2.
-  - NÃO trate a página inteira como um único holerite. Verifique SEMPRE se há 2 fichas.
-
-  ═══ REGRA 3: EXCLUSÃO DE CARIMBO — PREFEITURA / ÓRGÃO PÚBLICO ═══
-  REGRA ABSOLUTA: IGNORE completamente qualquer carimbo, selo ou estampa sobreposta no documento.
-  Carimbos comuns: "PREFEITURA MUNICIPAL DE ...", "Pago com Recurso do Termo de Colaboração",
-  "DEPARTAMENTO DE ...", qualquer texto carimbado por cima da tabela.
-  - O carimbo NÃO é o empregador. NÃO é o companyName.
-  - O carimbo NÃO altera o tipo do documento. NÃO é imposto, NÃO é nota fiscal.
-  - companyName (EMPREGADOR) = SEMPRE o nome impresso no CABEÇALHO/TOPO ESQUERDO do holerite.
-    Exemplo: se o cabeçalho diz "SANTA CASA DE MISERICORDIA DE TAQUARITUBA" e há carimbo da
-    "PREFEITURA MUNICIPAL", companyName = "SANTA CASA DE MISERICORDIA DE TAQUARITUBA".
-  - Se o ÚNICO nome legível for o do carimbo (nenhum outro nome no cabeçalho) →
-    companyName="CARIMBO", documentType="nao_identificado"
-  - Se identificar o tipo de documento mas o carimbo é o ÚNICO nome legível →
-    retorne o documento normal mas com companyName="CARIMBO"
-
-  ═══ REGRA 4: valor SEMPRE null ═══
-  Para holerites, o campo "valor" deve ser SEMPRE null. NÃO tente extrair Valor Líquido,
-  Salário Base ou qualquer valor numérico. Apenas identifique o pessoaNome e companyName.
-- Se for PLANILHA/TABELA: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"planilha"}
-- Se o documento for relativo a "Custeio Municipal", "Prestação de Contas Municipal", "Dados de Transparência Municipal" ou contiver tabelas de gastos, receitas ou descontos municipais, classifique como documentType="planilha", companyName = o TÍTULO/TABELA impresso (ex.: "CUSTEIO MUNICIPAL", "PRESTAÇÃO DE CONTAS", "DADOS DE TRANSPARÊNCIA"), valor=null, pessoaNome=null, notaNumber=null.
-- Se o documento for relativo ao "SUS Paulista", "Sistema Único de Saúde São Paulo" ou contiver tabelas de procedimentos, gastos, receitas ou recursos do SUS no estado de São Paulo, classifique como documentType="planilha", companyName = o TÍTULO/TABELA impresso (ex.: "SUS PAULISTA", "SISTEMA ÚNICO DE SAÚDE"), valor=null, pessoaNome=null, notaNumber=null.
-- Se for outro imposto/guia/boleto/taxa: {"isNotaFiscal":false, "notaNumber":null, "companyName":"TRIBUTO", "valor":NUMERO, "pessoaNome":null, "documentType":"imposto"}
-- Se tiver APENAS carimbo/logo de PREFEITURA ou órgão público e NÃO conseguir identificar o tipo do documento (nenhum holerite, nenhuma NF, nenhum extrato visível): {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":null, "pessoaNome":null, "documentType":"nao_identificado"}
-- Se o documento for holerite mas o ÚNICO nome legível for de carimbo (sem cabeçalho de empresa): {"isNotaFiscal":false, "notaNumber":null, "companyName":"CARIMBO", "valor":null, "pessoaNome":"NOME", "documentType":"folha_pagamento"}
-- Se não encaixar em nada acima: {"isNotaFiscal":false, "notaNumber":null, "companyName":"DESCRICAO", "valor":null, "pessoaNome":null, "documentType":"outros"}
-
-IMPORTANTE: Se a página contiver MAIS DE UM documento (ex: 2 holerites lado a lado, ou um holerite em cima e outro embaixo), retorne um ARRAY de objetos: [{...documento1...}, {...documento2...}].
-
-Se não encontrar valor, coloque null. Não invente números.
-NÃO escreva NADA antes ou depois do JSON. NÃO use markdown. NÃO use **. NÃO explique o documento. NÃO escreva "Análise do Documento" ou qualquer texto introdutório. A resposta deve SER SOMENTE o JSON, começando com { ou [ e terminando com } ou ]. Qualquer texto fora do JSON é ERRO.
-
-IMPORTANTE — LEIA LITERALMENTE (obrigatório):
-- Leia o TEXTO REAL impresso na imagem. Não invente nomes, empresas, números ou documentos que não estejam visíveis.
-- Se a imagem mostrar uma TABELA/PLANILHA de dados (ex.: "Cadastro de Fornecedores", "Dados de Transparência", "Relação de Pagamentos", "Custeio", planilha de prestação de contas municipal) com várias linhas e colunas, classifique como documentType="planilha", companyName = o TÍTULO/TABELA impresso (ex.: "CADASTRO DE FORNECEDORES") ou "PREFEITURA" se houver brasão/logo municipal, valor=null, pessoaNome=null, notaNumber=null. NÃO tente transcrever cada linha.
-- Se NÃO conseguir ler claramente o conteúdo, retorne documentType="nao_identificado" em vez de inventar nomes/valores.
-- NUNCA responda com descrições como "o documento contém 7 páginas" ou resumos de múltiplos tipos — analise SOMENTE a imagem desta página e retorne o JSON correspondente ao que está nela.
-
-IMPORTANTE sobre valores numéricos: use SEMPRE formato americano com ponto decimal. Exemplo: R$ 5.425,00 deve ser escrito como 5425.00 (sem pontos de milhar, com ponto decimal). Nunca use vírgula como separador decimal no JSON.
-
-${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento com atenção especial nestes campos.\n` : ""}`;
-
-// Seleciona provedor de IA
+      // Seleciona provedor de IA
        const provider = settings.provider || "GOOGLE";
        const modelTier = settings.modelTier || "medium";
        let aiResponse;
@@ -478,6 +421,11 @@ ${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento co
              const openrouterModel = getModelByTier("OPENROUTER", modelTier);
              console.log(`[AI] Enviando para OpenRouter (${openrouterModel})...`);
              aiResponse = await callOpenAICompatible({ baseUrl: "https://openrouter.ai/api", model: openrouterModel, apiKey }, imageBase64, prompt);
+           } else if (provider === "GROQ") {
+             if (!apiKey) throw new Error("Chave de API Groq não configurada.");
+             const groqModel = getModelByTier("GROQ", modelTier);
+             console.log(`[AI] Enviando para Groq (${groqModel})...`);
+             aiResponse = await callOpenAICompatible({ baseUrl: "https://api.groq.com/openai", model: groqModel, apiKey }, imageBase64, prompt);
            } else if (provider === "LOCAL_OLLAMA") {
               // Ollama local — sem chave de API. Endpoint /api/chat (não /v1/chat/completions).
               // O modelo escolhido nas Configurações (settings.model) tem prioridade sobre o tier selecionado.
@@ -640,12 +588,14 @@ ${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento co
 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
-        await logUpload(originalName, pageIndex, "success", provider, `Array com ${extractedData.length} documentos`, extractedData);
-        return res.json({ _multiple: true, documents: extractedData });
+        const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRouting(doc)));
+        await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V2)`, routedDocuments);
+        return res.json({ _multiple: true, documents: routedDocuments });
       }
 
-      await logUpload(originalName, pageIndex, "success", provider, "OK", extractedData);
-      return res.json(extractedData);
+      const routedData = await applyDocumentRouting(extractedData);
+      await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V2", routedData);
+      return res.json(routedData);
 
     } catch (error: any) {
        await logError("Unhandled exception in /api/extract", error);
@@ -656,6 +606,16 @@ ${correction ? `OBSERVAÇÃO DO USUÁRIO: ${correction}. Reavalie o documento co
        });
      }
   });
+
+// ─── Classification V2 health ─────────────────────
+app.get("/api/classification/health", async (_req, res) => {
+  const laya = await getLayaHealth();
+  return res.json({
+    version: "classification-v2",
+    laya,
+    strategy: "hard-signatures -> laya -> VLM candidate -> review"
+  });
+});
 
 // ─── Settings API ──────────────────────────────────
 app.get("/api/settings", (req, res) => {
