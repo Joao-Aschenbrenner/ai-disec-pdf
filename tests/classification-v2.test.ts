@@ -83,6 +83,14 @@ describe("CLASSIFICATION-V2 router", () => {
     expect(r.documentClass).toBe("NFS");
     expect(r.documentType).toBe("nota_fiscal");
   });
+
+  it("candidato do VLM nao vira autoridade quando nao ha evidencia", async () => {
+    const r = await routeDocument("texto generico sem assinatura suficiente", "folha_pagamento");
+    expect(r.documentClass).toBe("OUTRO");
+    expect(r.documentType).toBe("outros");
+    expect(r.source).toBe("fallback");
+    expect(r.needsReview).toBe(true);
+  });
 });
 
 describe("SafeFilenameBuilder", () => {
@@ -115,6 +123,11 @@ describe("SafeFilenameBuilder", () => {
 
   it("nome manual reservado do Windows e neutralizado", () => {
     expect(makeWindowsSafeFilename("CON.pdf")).toBe("_CON.pdf");
+  });
+
+  it("nome Windows-safe preserva casas decimais", () => {
+    expect(makeWindowsSafeFilename("pag5_NFS_7225_CLINICA_1700.00.pdf"))
+      .toBe("pag5_NFS_7225_CLINICA_1700.00.pdf");
   });
 
   it("duplicatas no ZIP recebem sufixo e continuam curtas", () => {
