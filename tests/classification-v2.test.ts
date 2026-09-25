@@ -37,6 +37,11 @@ describe("CLASSIFICATION-V2 signatures", () => {
     expect(r.documentClass).toBe("EXTRATO_CC");
   });
 
+  it("continuação da folha de 13o permanece FOPAG_13_RESUMO", () => {
+    const r = classifyBySignatures("NOME CPF AGENCIA/CONTA ACEITO TIPO VALOR PGTO 13 SALARIO PAGINA 2 DE 3");
+    expect(r.documentClass).toBe("FOPAG_13_RESUMO");
+  });
+
   it("holerite individual usa assinatura mensalista/vencimentos/descontos", () => {
     const r = classifyBySignatures("FOLHA MENSAL MENSALISTA VENCIMENTOS DESCONTOS SALARIO BASE F.G.T.S.");
     expect(r.documentClass).toBe("HOLERITE");
