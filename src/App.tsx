@@ -1585,8 +1585,10 @@ export default function App() {
                   <li><strong className="text-slate-200">Google Gemini 2.5 Flash</strong> — Rápido, suporta imagens</li>
                   <li><strong className="text-slate-200">OpenAI GPT-4o</strong> — Modelo multimodal da OpenAI</li>
                   <li><strong className="text-slate-200">Anthropic Claude Sonnet 4</strong> — Multimodal</li>
-                  <li><strong className="text-slate-200">Mistral OCR</strong> — OCR em nuvem</li>
-                  <li><strong className="text-slate-200">OpenRouter</strong> — Modelos grátis de visão</li>
+                  <li><strong className="text-slate-200">Mistral OCR</strong> — Opcional; pode exigir créditos</li>
+                  <li><strong className="text-slate-200">OpenRouter</strong> — Modelos compatíveis</li>
+                  <li><strong className="text-slate-200">Groq</strong> — Qwen 3.8 multimodal</li>
+                  <li><strong className="text-slate-200">Laya local</strong> — apoio à classificação; não recebe a imagem</li>
                   <li><strong className="text-slate-200">Ollama Cloud</strong> — Llama Vision via Ollama</li>
                   <li><strong className="text-slate-200">Codex Pro</strong> — Limite elevado via login OAuth</li>
                   <li><strong className="text-slate-200">Ollama Local</strong> — 100% offline, download automático</li>
@@ -1650,12 +1652,13 @@ export default function App() {
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
                 >
                   <optgroup label="Modelos na Nuvem (API Key)">
-                    <option value="NVIDIA">NVIDIA (Llama 3.2 11B Vision — rápido, grátis)</option>
+                    <option value="NVIDIA">NVIDIA (GLM-5.3-Flash — padrão)</option>
                     <option value="GOOGLE">Google Gemini 2.5 Flash</option>
                     <option value="OPENAI">OpenAI (GPT-4o)</option>
                     <option value="ANTHROPIC">Anthropic (Claude Sonnet 4)</option>
-                    <option value="MISTRAL">Mistral (OCR + classificação)</option>
-                    <option value="OPENROUTER">OpenRouter (Gemma 4 26B — FREE)</option>
+                    <option value="MISTRAL">Mistral OCR (opcional / pode exigir créditos)</option>
+                    <option value="OPENROUTER">OpenRouter (modelos free compatíveis)</option>
+                    <option value="GROQ">Groq (Qwen 3.8 27B multimodal)</option>
                     <option value="OLLAMA_CLOUD">Ollama Cloud (token ollama.com)</option>
                     <option value="CODEX">Codex Pro (login OAuth)</option>
                   </optgroup>
