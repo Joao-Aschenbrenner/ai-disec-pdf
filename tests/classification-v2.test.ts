@@ -85,7 +85,7 @@ describe("CLASSIFICATION-V2 router", () => {
   });
 
   it("candidato do VLM nao vira autoridade quando nao ha evidencia", async () => {
-    const r = await routeDocument("texto generico sem assinatura suficiente", "folha_pagamento");
+    const r = await routeDocument("texto generico sem assinatura suficiente", "folha_pagamento", { useLaya: false });
     expect(r.documentClass).toBe("OUTRO");
     expect(r.documentType).toBe("outros");
     expect(r.source).toBe("fallback");
