@@ -72,9 +72,18 @@ function finalizeFilename(parts: string[]): string {
 }
 
 export function makeWindowsSafeFilename(filename: string): string {
-  let stem = sanitizeFilename(String(filename || "").replace(/\.pdf$/i, ""));
-  if (!stem || stem === "desconhecido") stem = "documento";
-  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(stem)) {
+  let stem = String(filename || "")
+    .replace(/\.pdf$/i, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/[. ]+$/g, "");
+
+  if (!stem) stem = "documento";
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(stem)) {
     stem = "_" + stem;
   }
   return finalizeFilename([stem]);
