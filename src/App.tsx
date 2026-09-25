@@ -65,6 +65,7 @@ declare global {
 }
 import { sanitizeFilename, generatePageFilename, generateCombinedFilename } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
+import { imageLikelyHasTwoStackedDocuments, splitPdfPageIntoHorizontalHalves } from "./utils/pageSegmenter";
 import { version as appVersion } from "../package.json";
 
 const MAX_CONCURRENT_REQUESTS = 4; // mais estável em tiers gratuitos e reduz 429
@@ -538,39 +539,104 @@ export default function App() {
     }
   };
 
-  // Callback to trigger backend OCR on page index
-  const processSinglePage = async (id: string, page: SplitPage, correction?: string): Promise<SplitPage> => {
+  type ProcessedPageResult = SplitPage | SplitPage[];
+
+  const requestExtraction = async (
+    imageBase64: string,
+    page: SplitPage,
+    correction?: string
+  ): Promise<any> => {
+    const response = await fetch("/api/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pdfBase64: imageBase64,
+        originalName: page.originalFileName,
+        pageIndex: page.sourcePageIndex ?? page.index,
+        ...(correction ? { correction } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      const errJson = await response.json();
+      const err = new Error(errJson.error || "Erro de requisição.") as any;
+      err.retryAfter = errJson.retryAfter;
+      throw err;
+    }
+    return response.json();
+  };
+
+  const buildProcessedPage = (
+    id: string,
+    page: SplitPage,
+    metadata: ExtractedMetadata,
+    overrides?: Partial<SplitPage>
+  ): SplitPage => {
+    const targetPage = { ...page, ...overrides };
+    let customFilename = generatePageFilename(
+      targetPage.originalFileName,
+      targetPage.sourcePageIndex ?? targetPage.index,
+      metadata,
+      filenameOptions
+    );
+    if (removeOriginalName) {
+      const marker = customFilename.indexOf("_pag");
+      if (marker >= 0) customFilename = customFilename.substring(marker + 1);
+    }
+    return {
+      ...targetPage,
+      id,
+      status: "success",
+      metadata,
+      metadataList: undefined,
+      customFilename,
+    };
+  };
+
+  // Processa uma página. Quando uma página física contém dois holerites,
+  // retorna dois SplitPage reais (PDFs cropados), não apenas metadataList.
+  const processSinglePage = async (
+    id: string,
+    page: SplitPage,
+    correction?: string
+  ): Promise<ProcessedPageResult> => {
     try {
       const imageBase64 = await pdfBase64ToJpeg(page.base64);
-      const response = await fetch("/api/extract", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          pdfBase64: imageBase64,
-          originalName: page.originalFileName,
-          pageIndex: page.index,
-          ...(correction ? { correction } : {}),
-        }),
-      });
+      const result = await requestExtraction(imageBase64, page, correction);
 
-      if (!response.ok) {
-        const errJson = await response.json();
-        const err = new Error(errJson.error || "Erro de requisição.") as any;
-        err.retryAfter = errJson.retryAfter;
-        throw err;
+      // Caso a IA já tenha identificado 2 documentos, convertemos imediatamente
+      // a página física em dois PDFs independentes, preservando ordem topo -> baixo.
+      if (
+        result._multiple &&
+        Array.isArray(result.documents) &&
+        result.documents.length === 2 &&
+        page.segmentIndex === undefined
+      ) {
+        try {
+          const segments = await splitPdfPageIntoHorizontalHalves(page.base64);
+          segments.forEach(s => blobUrlsRef.current.push(s.blobUrl));
+          return result.documents.map((metadata: ExtractedMetadata, idx: number) =>
+            buildProcessedPage(`${id}-s${idx + 1}`, page, metadata, {
+              base64: segments[idx].base64,
+              blobUrl: segments[idx].blobUrl,
+              sourcePageIndex: page.sourcePageIndex ?? page.index,
+              segmentIndex: idx,
+              segmentPosition: segments[idx].position,
+            })
+          );
+        } catch (segmentError) {
+          console.warn("[segment] Falha ao separar 2 documentos; mantendo página combinada.", segmentError);
+        }
       }
 
-      const result = await response.json();
-
-      // Handle multiple documents per page (array response) → combined entry
+      // Compatibilidade para arrays inesperados (>2 ou página já segmentada).
       if (result._multiple && Array.isArray(result.documents)) {
         const docs = result.documents as ExtractedMetadata[];
         const firstMeta = docs[0];
-        let customFilename = generateCombinedFilename(docs, page.index, filenameOptions);
+        let customFilename = generateCombinedFilename(docs, page.sourcePageIndex ?? page.index, filenameOptions);
         if (removeOriginalName) {
-          customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
+          const marker = customFilename.indexOf("_pag");
+          if (marker >= 0) customFilename = customFilename.substring(marker + 1);
         }
         return {
           id,
@@ -583,18 +649,64 @@ export default function App() {
       }
 
       const metadata = result as ExtractedMetadata;
-      let customFilename = generatePageFilename(page.originalFileName, page.index, metadata, filenameOptions);
-      if (removeOriginalName) {
-        customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
+
+      // IA fraca pode não perceber os dois holerites. Depois que o router local
+      // confirma HOLERITE, usamos layout conservador para decidir se vale reprocessar
+      // as duas metades separadamente.
+      const isIndividualPayroll =
+        metadata.documentClass === "HOLERITE" ||
+        metadata.documentClass === "HOLERITE_13";
+
+      if (
+        isIndividualPayroll &&
+        page.segmentIndex === undefined &&
+        await imageLikelyHasTwoStackedDocuments(imageBase64)
+      ) {
+        try {
+          const segments = await splitPdfPageIntoHorizontalHalves(page.base64);
+          segments.forEach(s => blobUrlsRef.current.push(s.blobUrl));
+          const segmentedResults: SplitPage[] = [];
+
+          for (const segment of segments) {
+            const segmentPage: SplitPage = {
+              ...page,
+              id: `${id}-s${segment.segmentIndex + 1}`,
+              base64: segment.base64,
+              blobUrl: segment.blobUrl,
+              sourcePageIndex: page.sourcePageIndex ?? page.index,
+              segmentIndex: segment.segmentIndex,
+              segmentPosition: segment.position,
+              status: "processing",
+            };
+
+            try {
+              const segmentImage = await pdfBase64ToJpeg(segment.base64);
+              const segmentResult = await requestExtraction(segmentImage, segmentPage, correction);
+              const segmentMeta: ExtractedMetadata =
+                segmentResult?._multiple && Array.isArray(segmentResult.documents)
+                  ? segmentResult.documents[0]
+                  : segmentResult;
+
+              segmentedResults.push(
+                buildProcessedPage(segmentPage.id, segmentPage, segmentMeta)
+              );
+            } catch (segmentError: any) {
+              segmentedResults.push({
+                ...segmentPage,
+                status: "failed",
+                error: segmentError?.message || "Falha ao processar segmento",
+                retryAfter: segmentError?.retryAfter,
+              });
+            }
+          }
+
+          if (segmentedResults.length === 2) return segmentedResults;
+        } catch (segmentError) {
+          console.warn("[segment] Detector sugeriu 2 documentos, mas crop falhou.", segmentError);
+        }
       }
 
-      return {
-        id,
-        ...page,
-        status: "success",
-        metadata,
-        customFilename,
-      };
+      return buildProcessedPage(id, page, metadata);
     } catch (err: any) {
       console.error(`Page ${page.index + 1} processing failed:`, err);
       return {
@@ -638,11 +750,27 @@ export default function App() {
         // Update item status in UI to 'processing'
         setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
 
+        const applyProcessedResult = (result: ProcessedPageResult) => {
+          setSplitPages(prev => {
+            const currentIndex = prev.findIndex(p => p.id === page.id);
+            if (currentIndex < 0) return prev;
+            if (Array.isArray(result)) {
+              return [
+                ...prev.slice(0, currentIndex),
+                ...result,
+                ...prev.slice(currentIndex + 1),
+              ];
+            }
+            return prev.map(p => p.id === page.id ? result : p);
+          });
+        };
+
         const process = async () => {
           const result = await processSinglePage(page.id, page);
 
-          // Auto-retry failed pages with backoff
-          if (result.status === "failed") {
+          // Auto-retry apenas quando a página física inteira falhou.
+          // Segmentos já materializados podem ser reprocessados individualmente pela UI.
+          if (!Array.isArray(result) && result.status === "failed") {
             const attempt = (retries[page.id] || 0) + 1;
             retries[page.id] = attempt;
             
@@ -656,12 +784,12 @@ export default function App() {
               await new Promise(r => setTimeout(r, delayMs));
               // Re-process
               const retryResult = await processSinglePage(page.id, page);
-              setSplitPages(prev => prev.map(p => p.id === page.id ? retryResult : p));
+              applyProcessedResult(retryResult);
             } else {
-              setSplitPages(prev => prev.map(p => p.id === page.id ? result : p));
+              applyProcessedResult(result);
             }
           } else {
-            setSplitPages(prev => prev.map(p => p.id === page.id ? result : p));
+            applyProcessedResult(result);
           }
 
           // Remove self from active list
