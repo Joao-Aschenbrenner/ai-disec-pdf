@@ -20,7 +20,7 @@
         "image",
         "multimodal",
         "omni",
-        "glm"
+        "glm-5-3-flash"
       ],
       "preferred": [
         "z-ai/glm-5-3-flash",
@@ -233,10 +233,9 @@
       },
       "modelsEndpoint": "/v1/models",
       "visionKeywords": [
-        "qwen",
-        "multimodal",
+        "qwen3.8-27b",
         "vision",
-        "image"
+        "multimodal"
       ],
       "preferred": [
         "qwen/qwen3.8-27b"
