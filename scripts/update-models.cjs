@@ -17,7 +17,8 @@ const OPENAI_COMPAT = {
   NVIDIA: { url: "https://integrate.api.nvidia.com/v1/models", envKey: "NVIDIA_API_KEY", keywords: ["vision", "vl", "image", "multimodal", "omni", "glm"] },
   OPENAI: { url: "https://api.openai.com/v1/models", envKey: "OPENAI_API_KEY", keywords: ["gpt-4o", "vision"] },
   MISTRAL: { url: "https://api.mistral.ai/v1/models", envKey: "MISTRAL_API_KEY", keywords: ["pixtral", "vision"] },
-  OPENROUTER: { url: "https://openrouter.ai/api/v1/models", envKey: "OPENROUTER_API_KEY", keywords: ["gemini", "gemma", "vision", "vl", "pixtral", "llama-4"], filterPrefix: "google/" },\n  GROQ: { url: "https://api.groq.com/openai/v1/models", envKey: "GROQ_API_KEY", keywords: ["qwen3.8", "qwen", "vision", "multimodal"] },
+  OPENROUTER: { url: "https://openrouter.ai/api/v1/models", envKey: "OPENROUTER_API_KEY", keywords: ["gemini", "gemma", "vision", "vl", "pixtral", "llama-4"], filterPrefix: "google/" },
+  GROQ: { url: "https://api.groq.com/openai/v1/models", envKey: "GROQ_API_KEY", keywords: ["qwen3.8", "qwen", "vision", "multimodal"] },
 };
 
 const GOOGLE = {
