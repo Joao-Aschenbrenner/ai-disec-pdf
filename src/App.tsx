@@ -719,6 +719,21 @@ export default function App() {
     }
   };
 
+  const replaceProcessedResult = (targetId: string, result: ProcessedPageResult) => {
+    setSplitPages(prev => {
+      const currentIndex = prev.findIndex(p => p.id === targetId);
+      if (currentIndex < 0) return prev;
+      if (Array.isArray(result)) {
+        return [
+          ...prev.slice(0, currentIndex),
+          ...result,
+          ...prev.slice(currentIndex + 1),
+        ];
+      }
+      return prev.map(p => p.id === targetId ? result : p);
+    });
+  };
+
   // Run bulk or sequential processing of all pages
   const processAllPages = async () => {
     if (splitPages.length === 0 || isProcessing) return;
@@ -750,21 +765,6 @@ export default function App() {
         // Update item status in UI to 'processing'
         setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
 
-        const applyProcessedResult = (result: ProcessedPageResult) => {
-          setSplitPages(prev => {
-            const currentIndex = prev.findIndex(p => p.id === page.id);
-            if (currentIndex < 0) return prev;
-            if (Array.isArray(result)) {
-              return [
-                ...prev.slice(0, currentIndex),
-                ...result,
-                ...prev.slice(currentIndex + 1),
-              ];
-            }
-            return prev.map(p => p.id === page.id ? result : p);
-          });
-        };
-
         const process = async () => {
           const result = await processSinglePage(page.id, page);
 
@@ -784,12 +784,12 @@ export default function App() {
               await new Promise(r => setTimeout(r, delayMs));
               // Re-process
               const retryResult = await processSinglePage(page.id, page);
-              applyProcessedResult(retryResult);
+              replaceProcessedResult(page.id, retryResult);
             } else {
-              applyProcessedResult(result);
+              replaceProcessedResult(page.id, result);
             }
           } else {
-            applyProcessedResult(result);
+            replaceProcessedResult(page.id, result);
           }
 
           // Remove self from active list
@@ -1201,7 +1201,7 @@ export default function App() {
                         for (const page of failed) {
                           setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                           const res = await processSinglePage(page.id, page);
-                          setSplitPages(prev => prev.map(p => p.id === page.id ? res : p));
+                          replaceProcessedResult(page.id, res);
                         }
                         setIsProcessing(false);
                         window.electronAPI?.endProcessing();
@@ -1596,7 +1596,7 @@ export default function App() {
                                 onClick={async () => {
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                                   const res = await processSinglePage(page.id, page);
-                                  setSplitPages(prev => prev.map(p => p.id === page.id ? res : p));
+                                  replaceProcessedResult(page.id, res);
                                 }}
                                 className="px-3 py-1 bg-rose-900 hover:bg-rose-800 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                               >
@@ -2080,7 +2080,7 @@ export default function App() {
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
                   const res = await processSinglePage(page.id, page, correctionMsg);
-                  setSplitPages(prev => prev.map(p => p.id === correctionPageId ? res : p));
+                  replaceProcessedResult(correctionPageId, res);
                 }}
                 className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-all cursor-pointer"
               >
