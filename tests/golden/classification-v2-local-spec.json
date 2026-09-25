@@ -68,7 +68,8 @@
     {
       "from": 51,
       "to": 52,
-      "documentClass": "GUIA_INSS"
+      "documentClass": "DARF",
+      "note": "Header Receita Federal/DARF wins even when description mentions INSS."
     },
     {
       "from": 53,
