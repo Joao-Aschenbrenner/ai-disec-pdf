@@ -27,6 +27,16 @@ describe("CLASSIFICATION-V2 signatures", () => {
     expect(r.documentClass).toBe("FOPAG_RESUMO");
   });
 
+  it("continuação do relatório BB permanece FOPAG_RESUMO", () => {
+    const r = classifyBySignatures("NOME CPF AGENCIA/CONTA ACEITO TIPO VALOR PAGINA 2 DE 3");
+    expect(r.documentClass).toBe("FOPAG_RESUMO");
+  });
+
+  it("continuação de extrato reconhece padrão de transações", () => {
+    const r = classifyBySignatures("PIX PAGAMENTO DE BOLETO RESGATE AUTOMATICO SALDO");
+    expect(r.documentClass).toBe("EXTRATO_CC");
+  });
+
   it("holerite individual usa assinatura mensalista/vencimentos/descontos", () => {
     const r = classifyBySignatures("FOLHA MENSAL MENSALISTA VENCIMENTOS DESCONTOS SALARIO BASE F.G.T.S.");
     expect(r.documentClass).toBe("HOLERITE");
