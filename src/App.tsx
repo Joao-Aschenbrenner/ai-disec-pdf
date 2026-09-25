@@ -889,7 +889,7 @@ export default function App() {
       };
 
       // Re-trigger filename calculation
-      let customFilename = generatePageFilename(page.originalFileName, index, updatedMetadata, filenameOptions);
+      let customFilename = generatePageFilename(page.originalFileName, page.sourcePageIndex ?? page.index, updatedMetadata, filenameOptions);
       if (removeOriginalName) {
         customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
       }
@@ -921,7 +921,7 @@ export default function App() {
     setSplitPages(prev => {
       return prev.map((page, idx) => {
         if (!page.metadata) return page;
-        let customFilename = generatePageFilename(page.originalFileName, idx, page.metadata, filenameOptions);
+        let customFilename = generatePageFilename(page.originalFileName, page.sourcePageIndex ?? page.index, page.metadata, filenameOptions);
         if (remove) {
           customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
         }
@@ -947,7 +947,7 @@ export default function App() {
       const updatedList = page.metadataList.map((d, i) =>
         i === docIdx ? { ...d, [field]: value } : d
       );
-      let customFilename = generateCombinedFilename(updatedList, index, filenameOptions);
+      let customFilename = generateCombinedFilename(updatedList, page.sourcePageIndex ?? page.index, filenameOptions);
       if (removeOriginalName) {
         customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
       }
@@ -1234,7 +1234,7 @@ export default function App() {
                           setFilenameOptions(newOpts);
                           setSplitPages(prev => prev.map((page, idx) => {
                             if (!page.metadata) return page;
-                            let f = generatePageFilename(page.originalFileName, idx, page.metadata, newOpts);
+                            let f = generatePageFilename(page.originalFileName, page.sourcePageIndex ?? page.index, page.metadata, newOpts);
                             if (removeOriginalName) f = f.substring(f.indexOf("_pag") + 1);
                             return { ...page, customFilename: f };
                           }));
