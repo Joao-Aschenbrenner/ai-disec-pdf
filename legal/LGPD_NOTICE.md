@@ -1,5 +1,7 @@
 # Aviso LGPD — AI Disec PDF
 
+> **Rascunho operacional. A base legal depende do contexto real de uso; recomenda-se revisão jurídica antes de produção.**
+
 **Lei Geral de Proteção de Dados Pessoais (Lei nº 13.709/2018)**  
 **Versão:** 1.0.0  
 **Data de vigência:** Junho de 2026
@@ -11,11 +13,7 @@
 
 ## 2. Base Legal para o Tratamento
 
-O tratamento de dados realizado pelo Software baseia-se no:
-
-- **Art. 7º, I** — consentimento do titular (você opta por utilizar o Software e escolher o provedor de IA);
-- **Art. 7º, II** — cumprimento de obrigação legal ou regulatória (quando aplicável);
-- **Art. 7º, V** — execução de contrato (uso do Software conforme os Termos de Uso).
+O Software não define automaticamente uma única base legal para todos os documentos. A organização que utiliza o DocSplit AI deve identificar e documentar a base legal aplicável ao seu contexto, finalidade e categoria de dados, inclusive quando houver documentos trabalhistas, financeiros ou de saúde.
 
 ## 3. Dados Tratados
 
@@ -26,6 +24,7 @@ O Software processa exclusivamente os arquivos PDF que você seleciona ativament
 - Datas (emissão, competência, vencimento)
 - Valores monetários
 - Nome do funcionário/empresa (quando presente no documento)
+- CPF/CNPJ, dados trabalhistas, financeiros e outros dados eventualmente presentes na imagem processada
 
 ## 4. Finalidade do Tratamento
 
