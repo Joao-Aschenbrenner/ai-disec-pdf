@@ -56,6 +56,20 @@ declare global {
       install: () => Promise<{ ok: boolean; error?: string; path?: string }>;
       pullModel: (model: string) => Promise<{ ok: boolean; model?: string; error?: string }>;
       onPullProgress: (fn: (p: { line: string; model: string }) => void) => () => void;
+      // Laya local
+      layaStatus: () => Promise<{
+        installed: boolean;
+        version: string | null;
+        pythonPath: string | null;
+        running: boolean;
+        health: any;
+        managedProcess: boolean;
+        port: number;
+      }>;
+      layaInstall: () => Promise<{ ok: boolean; error?: string; version?: string | null; pythonPath?: string | null }>;
+      layaStart: () => Promise<{ ok: boolean; running?: boolean; starting?: boolean; alreadyRunning?: boolean; error?: string }>;
+      layaStop: () => Promise<{ ok: boolean; stopped?: boolean; error?: string }>;
+      onLayaProgress: (fn: (p: { line: string }) => void) => () => void;
       // Codex OAuth
       codexLogin: () => Promise<{ ok: boolean; message?: string; error?: string }>;
       codexLogout: () => Promise<{ ok: boolean; error?: string }>;
@@ -231,6 +245,190 @@ function OllamaLocalSetup({ model, onModelChange }: { model: string; onModelChan
           <><Download className="w-4 h-4" /> Baixar {model}</>
         )}
       </button>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// Laya local — classificador System-1 auxiliar
+// ════════════════════════════════════════════════════════════
+function LayaSetup() {
+  const api = window.electronAPI;
+  const [status, setStatus] = useState<{
+    installed: boolean;
+    version: string | null;
+    running: boolean;
+    health: any;
+    managedProcess: boolean;
+    port: number;
+  } | null>(null);
+  const [busy, setBusy] = useState<"install" | "start" | "stop" | null>(null);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState("");
+
+  const refresh = async () => {
+    try {
+      const s = await api?.layaStatus?.();
+      if (s) setStatus(s);
+    } catch {}
+  };
+
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 2000);
+    const cleanup = api?.onLayaProgress?.((p) => {
+      if (p?.line) setProgress(p.line);
+    });
+    return () => {
+      window.clearInterval(timer);
+      cleanup?.();
+    };
+  }, []);
+
+  const install = async () => {
+    if (!api?.layaInstall) return;
+    setBusy("install");
+    setError("");
+    setProgress("Preparando ambiente isolado...");
+    try {
+      const result = await api.layaInstall();
+      if (!result.ok) {
+        setError(result.error || "Falha ao instalar Laya.");
+        return;
+      }
+      setProgress("Instalado. Iniciando serviço local...");
+      const started = await api.layaStart();
+      if (!started.ok) setError(started.error || "Laya instalado, mas não iniciou.");
+    } catch (e: any) {
+      setError(e.message || "Falha inesperada.");
+    } finally {
+      setBusy(null);
+      await refresh();
+    }
+  };
+
+  const start = async () => {
+    if (!api?.layaStart) return;
+    setBusy("start");
+    setError("");
+    setProgress("Iniciando checkpoint multilingual...");
+    try {
+      const result = await api.layaStart();
+      if (!result.ok) setError(result.error || "Falha ao iniciar Laya.");
+    } catch (e: any) {
+      setError(e.message || "Falha inesperada.");
+    } finally {
+      setBusy(null);
+      await refresh();
+    }
+  };
+
+  const stop = async () => {
+    if (!api?.layaStop) return;
+    setBusy("stop");
+    setError("");
+    try {
+      const result = await api.layaStop();
+      if (!result.ok) setError(result.error || "Falha ao parar Laya.");
+      else setProgress("");
+    } catch (e: any) {
+      setError(e.message || "Falha inesperada.");
+    } finally {
+      setBusy(null);
+      await refresh();
+    }
+  };
+
+  const stateLabel = status?.running
+    ? "ativo"
+    : status?.installed && status?.managedProcess
+      ? "iniciando"
+      : status?.installed
+        ? "instalado / parado"
+        : "não instalado";
+
+  return (
+    <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800 space-y-3">
+      <div className="flex items-start gap-3">
+        <div className="p-2 bg-violet-950/40 rounded-lg border border-violet-900/30">
+          <Cpu className="w-4 h-4 text-violet-300" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold text-slate-200">Laya local</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+              status?.running
+                ? "text-emerald-300 bg-emerald-950/50"
+                : status?.installed
+                  ? "text-amber-300 bg-amber-950/40"
+                  : "text-slate-400 bg-slate-900"
+            }`}>
+              {stateLabel}
+            </span>
+            {status?.version && <span className="text-[10px] text-slate-500">v{status.version}</span>}
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+            Apoia a classificação depois das regras locais. O VLM lê o documento; o Laya ajuda a decidir a classe quando há ambiguidade.
+          </p>
+          <p className="text-[10px] text-slate-500 mt-1">
+            Usa ambiente Python isolado e apenas o checkpoint multilingual. Se estiver desligado, o app continua com hard guards + revisão.
+          </p>
+        </div>
+      </div>
+
+      {status?.running && status.health?.loaded && (
+        <p className="text-[10px] text-emerald-400">
+          Checkpoint carregado: {Array.isArray(status.health.loaded) ? status.health.loaded.join(", ") : String(status.health.loaded)}
+        </p>
+      )}
+
+      {progress && (
+        <div className="max-h-20 overflow-y-auto rounded-lg bg-slate-950 border border-slate-800 p-2 text-[10px] text-slate-400 font-mono break-all">
+          {progress}
+        </div>
+      )}
+      {error && <p className="text-[11px] text-rose-400">{error}</p>}
+
+      <div className="flex gap-2">
+        {!status?.installed ? (
+          <button
+            type="button"
+            onClick={install}
+            disabled={busy !== null}
+            className="flex-1 px-3 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+          >
+            {busy === "install" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+            {busy === "install" ? "Instalando..." : "Instalar Laya"}
+          </button>
+        ) : status.running ? (
+          <button
+            type="button"
+            onClick={stop}
+            disabled={busy !== null}
+            className="flex-1 px-3 py-2 text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg disabled:opacity-50 cursor-pointer"
+          >
+            {busy === "stop" ? "Parando..." : "Parar Laya"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={start}
+            disabled={busy !== null}
+            className="flex-1 px-3 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+          >
+            {busy === "start" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            {busy === "start" ? "Iniciando..." : "Iniciar Laya"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={refresh}
+          className="px-3 py-2 text-xs font-bold text-slate-400 bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+          title="Atualizar status"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -1862,6 +2060,10 @@ export default function App() {
                   </p>
                 </div>
               )}
+
+              <div className="border-t border-slate-800 pt-4">
+                <LayaSetup />
+              </div>
             </div>
 
             <div className="flex gap-3 mt-6">
