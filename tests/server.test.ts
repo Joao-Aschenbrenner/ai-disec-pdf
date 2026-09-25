@@ -66,7 +66,7 @@ describe("Mock dos provedores de IA (catálogo externalizado)", () => {
 
   const providers = [
     "GOOGLE", "NVIDIA", "OPENAI", "ANTHROPIC",
-    "MISTRAL", "OPENROUTER",
+    "MISTRAL", "OPENROUTER", "GROQ",
     "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX",
   ] as const;
 
