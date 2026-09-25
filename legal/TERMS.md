@@ -1,5 +1,7 @@
 # Termos de Uso — AI Disec PDF
 
+> **Rascunho operacional. Recomenda-se revisão jurídica antes de uso em produção.**
+
 **Versão:** 1.0.0  
 **Data de vigência:** Junho de 2026  
 **Autor:** João Aschenbrenner
@@ -14,8 +16,10 @@ Este Software é fornecido para uso pessoal e profissional, sob licença MIT. Vo
 
 ## 3. Processamento de Dados
 
-- Todo o processamento de PDFs ocorre localmente na sua máquina.
-- As páginas dos documentos são enviadas exclusivamente para o provedor de IA selecionado por você (NVIDIA, Google, Mistral, OpenRouter, OpenAI, Anthropic, Ollama local/cloud, Codex) para fins de extração de metadados.
+- O split, organização, ZIP, regras locais e Laya podem operar localmente.
+- Quando um provedor de IA em nuvem é escolhido, imagens das páginas podem ser enviadas a esse provedor para leitura e extração.
+- O Laya local recebe texto/evidências de classificação e não precisa receber a imagem.
+- Provedores atualmente integrados incluem NVIDIA, Google, OpenRouter, Groq, OpenAI, Anthropic, Ollama local/cloud e Codex; integrações legadas/opcionais podem permanecer no backend.
 - Nenhum dado é armazenado em servidores terceiros além do necessário para a requisição à API de IA escolhida.
 - Recomenda-se não processar documentos contendo informações sensíveis sem consultar a política de privacidade do provedor de IA utilizado.
 
