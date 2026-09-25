@@ -71,6 +71,33 @@ function finalizeFilename(parts: string[]): string {
   return trimmed + suffix + extension;
 }
 
+export function makeWindowsSafeFilename(filename: string): string {
+  let stem = sanitizeFilename(String(filename || "").replace(/\.pdf$/i, ""));
+  if (!stem || stem === "desconhecido") stem = "documento";
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(stem)) {
+    stem = "_" + stem;
+  }
+  return finalizeFilename([stem]);
+}
+
+export function resolveFilenameConflict(filename: string, usedNames: Set<string>): string {
+  let candidate = makeWindowsSafeFilename(filename);
+  if (!usedNames.has(candidate.toLowerCase())) {
+    usedNames.add(candidate.toLowerCase());
+    return candidate;
+  }
+
+  const stem = candidate.replace(/\.pdf$/i, "");
+  let counter = 2;
+  do {
+    candidate = finalizeFilename([stem + "_" + counter]);
+    counter++;
+  } while (usedNames.has(candidate.toLowerCase()));
+
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
 function typeLabel(metadata: ExtractedMetadata): string {
   if (metadata.documentClass && classMap[metadata.documentClass]) {
     return classMap[metadata.documentClass];
