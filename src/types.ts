@@ -44,4 +44,8 @@ export interface SplitPage {
   retryAfter?: string;
   metadata?: ExtractedMetadata;
   metadataList?: ExtractedMetadata[];
+  /** Segmento gerado quando uma página física contém mais de um documento. */
+  sourcePageIndex?: number;
+  segmentIndex?: number;
+  segmentPosition?: 'top' | 'bottom';
 }
