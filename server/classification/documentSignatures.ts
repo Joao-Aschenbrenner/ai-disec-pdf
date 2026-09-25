@@ -54,7 +54,6 @@ const signatures: Signature[] = [
   },
   {
     documentClass: "FOPAG_RESUMO",
-    hard: ["RELATORIO FOLHA PAGAMENTOS"],
     anchors: [
       { re: /RELATORIO FOLHA PAGAMENTOS/, weight: 0.60, label: "relatorio folha" },
       { re: /NOME DA FOLHA/, weight: 0.20, label: "nome da folha" },
