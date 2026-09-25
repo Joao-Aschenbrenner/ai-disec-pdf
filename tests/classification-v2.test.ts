@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { classifyBySignatures } from "../server/classification/documentSignatures";
 import { routeDocument } from "../server/classification/documentRouter";
-import { generatePageFilename, MAX_FILENAME_LENGTH } from "../src/utils/fileHelpers";
+import { generatePageFilename, makeWindowsSafeFilename, resolveFilenameConflict, MAX_FILENAME_LENGTH } from "../src/utils/fileHelpers";
 
 describe("CLASSIFICATION-V2 signatures", () => {
   it("hard guard DANFE nunca vira folha", () => {
@@ -106,5 +106,18 @@ describe("SafeFilenameBuilder", () => {
       documentClass: "NFS"
     });
     expect(filename).toContain("_NFS_");
+  });
+
+  it("nome manual reservado do Windows e neutralizado", () => {
+    expect(makeWindowsSafeFilename("CON.pdf")).toBe("_CON.pdf");
+  });
+
+  it("duplicatas no ZIP recebem sufixo e continuam curtas", () => {
+    const used = new Set<string>();
+    const a = resolveFilenameConflict("pag9_HOL_documento.pdf", used);
+    const b = resolveFilenameConflict("pag9_HOL_documento.pdf", used);
+    expect(a).toBe("pag9_HOL_documento.pdf");
+    expect(b).toBe("pag9_HOL_documento_2.pdf");
+    expect(b.length).toBeLessThanOrEqual(MAX_FILENAME_LENGTH);
   });
 });
