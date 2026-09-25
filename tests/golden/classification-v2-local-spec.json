@@ -1,0 +1,118 @@
+{
+  "fixture": "LOCAL_ONLY:custeio-municipal-12-25okokok.pdf",
+  "commitRealPdf": false,
+  "reason": "PDF real contem dados pessoais/trabalhistas/financeiros; manter somente local.",
+  "pageCount": 129,
+  "expectedRanges": [
+    {
+      "from": 1,
+      "to": 4,
+      "documentClass": "EXTRATO_CC"
+    },
+    {
+      "from": 5,
+      "to": 5,
+      "documentClass": "NFS"
+    },
+    {
+      "from": 6,
+      "to": 8,
+      "documentClass": "FOPAG_RESUMO"
+    },
+    {
+      "from": 9,
+      "to": 27,
+      "documentClass": "HOLERITE",
+      "layout": "two-documents-per-physical-page"
+    },
+    {
+      "from": 28,
+      "to": 28,
+      "documentClass": "TED"
+    },
+    {
+      "from": 29,
+      "to": 41,
+      "documentClass": "NFS"
+    },
+    {
+      "from": 42,
+      "to": 43,
+      "documentClass": "TED"
+    },
+    {
+      "from": 44,
+      "to": 45,
+      "documentClass": "DARF"
+    },
+    {
+      "from": 46,
+      "to": 46,
+      "documentClass": "FATURA_ENERGIA"
+    },
+    {
+      "from": 47,
+      "to": 48,
+      "documentClass": "NFS"
+    },
+    {
+      "from": 49,
+      "to": 49,
+      "documentClass": "DARF"
+    },
+    {
+      "from": 50,
+      "to": 50,
+      "documentClass": "GUIA_ISS"
+    },
+    {
+      "from": 51,
+      "to": 52,
+      "documentClass": "GUIA_INSS"
+    },
+    {
+      "from": 53,
+      "to": 55,
+      "documentClass": "FOPAG_RESUMO"
+    },
+    {
+      "from": 56,
+      "to": 74,
+      "documentClass": "HOLERITE",
+      "layout": "two-documents-per-physical-page"
+    },
+    {
+      "from": 75,
+      "to": 77,
+      "documentClass": "FOPAG_13_RESUMO"
+    },
+    {
+      "from": 78,
+      "to": 96,
+      "documentClass": "HOLERITE_13",
+      "layout": "two-documents-per-physical-page"
+    },
+    {
+      "from": 97,
+      "to": 116,
+      "documentClass": "NFS"
+    },
+    {
+      "from": 117,
+      "to": 128,
+      "documentClass": "NFE_DANFE"
+    },
+    {
+      "from": 129,
+      "to": 129,
+      "documentClass": "EXTRATO_INVESTIMENTO"
+    }
+  ],
+  "releaseGates": {
+    "noWrongPayrollForInvoice": true,
+    "filenamesMaxChars": 80,
+    "noCrash": true,
+    "layaOptional": true,
+    "weakVlmMayNotOverrideHardGuard": true
+  }
+}
