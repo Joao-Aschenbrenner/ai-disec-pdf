@@ -21,9 +21,16 @@
     },
     {
       "from": 9,
-      "to": 27,
+      "to": 26,
       "documentClass": "HOLERITE",
       "layout": "two-documents-per-physical-page"
+    },
+    {
+      "from": 27,
+      "to": 27,
+      "documentClass": "HOLERITE",
+      "layout": "single-document-upper-half",
+      "note": "37 funcionarios no lote: ultima pagina possui apenas um holerite; nao dividir."
     },
     {
       "from": 28,
