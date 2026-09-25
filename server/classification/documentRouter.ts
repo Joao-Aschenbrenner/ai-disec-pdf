@@ -6,31 +6,14 @@ export interface RoutingResult {
   documentClass: DocumentClass;
   documentType: string;
   confidence: number;
-  source: "signature" | "signature+laya" | "laya" | "candidate" | "fallback";
+  source: "signature" | "signature+laya" | "laya" | "fallback";
   evidence: string[];
   needsReview: boolean;
 }
 
-function normalizeCandidate(candidate?: string): DocumentClass | null {
-  const c = String(candidate || "").toUpperCase().trim();
-  const aliases: Record<string, DocumentClass> = {
-    NFS: "NFS", NFS_E: "NFS", NOTA_FISCAL: "NFS",
-    NFE: "NFE_DANFE", DANFE: "NFE_DANFE", NFE_DANFE: "NFE_DANFE",
-    HOLERITE: "HOLERITE", FOLHA_PAGAMENTO: "HOLERITE",
-    HOLERITE_13: "HOLERITE_13", FOPAG_RESUMO: "FOPAG_RESUMO",
-    FOPAG_13_RESUMO: "FOPAG_13_RESUMO", DARF: "DARF",
-    GUIA_ISS: "GUIA_ISS", GUIA_INSS: "GUIA_INSS",
-    EXTRATO: "EXTRATO_CC", EXTRATO_CC: "EXTRATO_CC",
-    EXTRATO_INVESTIMENTO: "EXTRATO_INVESTIMENTO",
-    TED: "TED", FATURA_ENERGIA: "FATURA_ENERGIA",
-    PLANILHA: "PLANILHA", OUTRO: "OUTRO", OUTROS: "OUTRO"
-  };
-  return aliases[c] || null;
-}
-
 export async function routeDocument(
   classificationText: string,
-  candidate?: string
+  _candidate?: string
 ): Promise<RoutingResult> {
   const sig = classifyBySignatures(classificationText);
 
@@ -64,18 +47,6 @@ export async function routeDocument(
         needsReview: confidence < 0.78
       };
     }
-  }
-
-  const normalizedCandidate = normalizeCandidate(candidate);
-  if (normalizedCandidate && normalizedCandidate !== "OUTRO") {
-    return {
-      documentClass: normalizedCandidate,
-      documentType: toLegacyDocumentType(normalizedCandidate),
-      confidence: 0.55,
-      source: "candidate",
-      evidence: ["vlm-candidate-only"],
-      needsReview: true
-    };
   }
 
   if (sig.score >= 0.30) {
@@ -112,6 +83,8 @@ export async function applyDocumentRouting<T extends Record<string, any>>(raw: T
     ].filter(Boolean).join(" ")
   );
 
+  // A classe sugerida pelo VLM é deliberadamente ignorada como autoridade.
+  // Mantemos o segundo argumento apenas para compatibilidade de API/testes.
   const route = await routeDocument(classificationText, raw.documentClass || raw.documentType);
   const result: any = {
     ...raw,
