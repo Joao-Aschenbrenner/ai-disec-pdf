@@ -2,148 +2,166 @@
 
 # AI Disec PDF
 
-**Separador Inteligente de PDF com IA**
-
-[![GitHub Release](https://img.shields.io/github/v/release/Joao-Aschenbrenner/ai-disec-pdf?style=for-the-badge&label=Download&color=6d28d9)](https://github.com/Joao-Aschenbrenner/ai-disec-pdf/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-6d28d9?style=for-the-badge)](LICENSE)
-![Version](https://img.shields.io/badge/version-1.4.11-6d28d9?style=for-the-badge)
+**Separador inteligente de PDFs escaneados com classificação assistida por Laya**
 
 </div>
 
-Aplicação desktop (Electron + React) que divide PDFs contendo múltiplos documentos (notas fiscais, DARFs, holerites, extratos, boletos) em arquivos individuais, renomeados automaticamente com base no conteúdo de cada página via IA.
+Aplicação desktop em Electron + React para dividir, identificar, revisar e renomear documentos escaneados. A Classification V2 foi desenhada para funcionar mesmo quando o modelo visual é simples: o VLM lê campos/evidências, regras locais identificam assinaturas fortes e o Laya atua como segunda opinião para os casos ambíguos.
 
----
+## Classification V2
 
-## Funcionalidades
-
-- **Divisão inteligente** — extrai cada página de um PDF multifolha como arquivo independente
-- **Renomeação automática** — IA identifica o tipo de documento (NF-e, DARF, holerite, extrato, imposto) e nomeia cada arquivo com dados relevantes (empresa, valor, número da nota, funcionário)
-- **9 provedores de IA** — Google Gemini, OpenAI GPT-4o, Anthropic Claude, NVIDIA Llama Vision, Mistral OCR, OpenRouter, Ollama (local e cloud) e Codex
-- **Editor manual** — corrija ou preencha metadados extraídos; o nome do arquivo é recalculado automaticamente
-- **Preview interativo** — visualização lado a lado de cada página com seus dados extraídos
-- **Download em ZIP** — pacote organizado com todos os documentos processados
-- **Atualização automática** — auto-update via GitHub Releases
-- **Configuração flexível** — escolha quais componentes entram no nome do arquivo (tipo, número, empresa, valor, funcionário)
-
-## Provedores de IA
-
-| Provedor | Modelo | Imagens |
-|---|---|---|
-| Google | Gemini 2.5 Flash | Sim |
-| NVIDIA | Llama 3.2 11B Vision | Sim |
-| OpenAI | GPT-4o | Sim |
-| Anthropic | Claude Sonnet 4 | Sim |
-| Mistral | Mistral OCR | Sim |
-| OpenRouter | Gemma 4 26B (FREE) | Sim |
-| Ollama Cloud | Llama Vision | Sim |
-| Ollama Local | Llama 3.2 Vision 11B | Sim |
-| Codex | GPT-4o | Sim |
-
-
-## Download
-
-Baixe o instalador mais recente na [página de Releases](https://github.com/Joao-Aschenbrenner/ai-disec-pdf/releases/latest):
-
-```
-AI-Disec-PDF-Setup-1.4.11.exe
+```text
+PDF / página escaneada
+        ↓
+VLM: somente leitura de texto + extração de campos
+        ↓
+DocumentSignatures / hard guards
+        ↓
+Laya local (quando necessário e disponível)
+        ↓
+DocumentRouter
+        ↓
+extratores / validação
+        ↓
+SafeFilenameBuilder
+        ↓
+revisão manual quando a confiança não é suficiente
 ```
 
-## Como usar
+O modelo visual **não é mais autoridade final para documentType**. Isso evita que uma NFS-e ou DANFE seja transformada em folha de pagamento apenas porque o modelo interpretou palavras isoladas.
 
-1. **Instalar** — execute o instalador baixado
-2. **Abrir** — atalho no Desktop ou Menu Iniciar
-3. **Configurar chave** — clique em ⚙️, escolha um provedor e cole sua chave de API
-4. **Processar** — arraste ou selecione um PDF, clique em "Identificar & Organizar Páginas"
-5. **Baixar** — clique em "Baixar ZIP Processado"
+### Classes iniciais
 
-O app verifica atualizações automaticamente toda vez que inicia.
+- NFS / NFS-e
+- NF-e / DANFE
+- Holerite mensal
+- Holerite de 13º
+- Relatório de folha
+- Relatório de 13º
+- DARF
+- Guia ISS
+- Guia INSS
+- Extrato de conta corrente
+- Extrato de investimentos
+- TED / transferência
+- Conta de energia
+- Planilha / prestação consolidada
+- Outro / revisão
 
-## Stack
+## Laya
 
-| Camada | Tecnologia |
+Laya é opcional e roda localmente. Sem ele, o aplicativo continua usando signatures + fallback controlado.
+
+Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup-laya.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start-laya.ps1
+```
+
+Health:
+
+```text
+http://127.0.0.1:8000/health
+```
+
+O DocSplit consulta o Laya em `POST /v1/systemone`. O Laya recebe **texto/evidências**, não a imagem da página.
+
+Detalhes: [CLASSIFICATION_V2.md](CLASSIFICATION_V2.md).
+
+## Nomes de arquivo seguros
+
+A Classification V2 usa rótulos curtos:
+
+```text
+NFS_7225_CLINICA_MONTEIRO_1700.00.pdf
+NFE_134364_JVD_1440.30.pdf
+HOL_JOAO_SILVA.pdf
+13S_MARIA_SOUZA.pdf
+DARF_0561_6550.69.pdf
+EXTINV_2025-12.pdf
+```
+
+O nome final é limitado a **80 caracteres**. Entidades longas são encurtadas e, quando necessário, o final recebe um hash curto determinístico.
+
+## Provedores
+
+| Provedor | Papel atual |
 |---|---|
-| Frontend | React 19 + TypeScript + Tailwind CSS 4 |
-| Backend | Express + TypeScript (executado no Electron) |
-| Desktop | Electron 34 + electron-builder |
-| IA | Google Gemini / OpenAI / Anthropic / NVIDIA / Mistral / OpenRouter / Ollama / Codex |
-| PDF | pdf-lib + pdfjs-dist + sharp |
-| Testes | Vitest (445 testes) |
-| Build | Vite 6 + esbuild |
+| NVIDIA | GLM-5.3-Flash padrão; Nemotron Omni no tier preciso |
+| Google | Gemini 2.5 Flash |
+| OpenAI | GPT-4o |
+| Anthropic | Claude Sonnet |
+| OpenRouter | modelos compatíveis configurados no catálogo |
+| Groq | Qwen 3.8 27B multimodal |
+| Ollama Local | opção offline |
+| Ollama Cloud | opção cloud |
+| Codex | integração existente |
+| Mistral | backend legado/opcional; removido do caminho principal da UI |
 
-## Estrutura do projeto
+Os IDs ficam em `server/models.json` e podem ser revisados pelo atualizador do catálogo.
 
-```
-ai-disec-pdf/
-├── assets/          # Ícones (SVG, PNG, ICO)
-├── electron/        # main.cjs, preload.cjs (auto-update, power save)
-├── legal/           # Termos de uso, privacidade, LGPD
-├── server/          # Express + integração com 8 provedores de IA
-├── src/             # React + Tailwind (interface)
-│   ├── utils/       # Helpers (fileHelpers, pdfToImage)
-│   ├── App.tsx      # Componente principal
-│   ├── types.ts     # Tipos TypeScript (metadados, opções)
-│   ├── main.tsx     # Entry point
-│   └── index.css    # Estilos globais
-├── tests/           # 386 testes (Vitest)
-├── scripts/         # Scripts de release
-├── dist/            # Build de produção
-└── release/         # Instaladores gerados
-```
+## Privacidade
+
+Split, ZIP, regras de assinatura, roteamento e Laya podem rodar localmente. Quando um provedor cloud é escolhido, a imagem da página é enviada à API desse provedor para leitura/extração. Consulte [legal/PRIVACY_POLICY.md](legal/PRIVACY_POLICY.md).
 
 ## Desenvolvimento
 
 ```bash
-git clone https://github.com/Joao-Aschenbrenner/ai-disec-pdf.git
-cd ai-disec-pdf
 npm install
-
-# Servidor web (Vite dev server + Express)
 npm run dev
-
-# Electron + servidor
-npm run electron:dev
-
-# Testes
-npm run test
-
-# Build produção
+npm test
+npm run lint
 npm run build
+```
 
-# Gerar instalador
+## Desktop
+
+```bash
+npm run electron:dev
 npm run electron:build
 ```
 
-### Variáveis de ambiente
+## Estrutura relevante
 
-```bash
-PORT=3001                    # porta do servidor (opcional, padrão 3001)
-APP_URL="http://localhost:3001"
+```text
+server/
+  classification/
+    documentTaxonomy.ts
+    documentSignatures.ts
+    documentRouter.ts
+    extractionPrompt.ts
+    layaClient.ts
+  server.ts
+  models.json
+
+src/
+  App.tsx
+  types.ts
+  utils/fileHelpers.ts
+
+scripts/
+  setup-laya.ps1
+  start-laya.ps1
+
+tests/
+  classification-v2.test.ts
 ```
 
-### Publicar atualização
+## Regra de release
 
-```bash
-# 1. Altere a versão em package.json
-# 2. Defina o token
-$env:GH_TOKEN = "ghp_seu_token"
+Uma versão nova só deve ser criada depois de:
 
-# 3. Publique
-npm run release
+1. `npm run lint`
+2. `npm test`
+3. `npm run build`
+4. auditoria local no Windows/Electron
+5. teste com PDF real
+6. validação de nomes <= 80 caracteres
+7. validação do instalador NSIS
 
-# Usuários existentes recebem a atualização ao abrir o app
-```
+Não fazer bump/tag/release antes desse gate.
 
 ## Licença
 
-Distribuído sob licença **MIT**. Veja [LICENSE](LICENSE) para mais informações.
-
-Documentos legais adicionais em [`legal/`](legal/):
-- [Termos de Uso](legal/TERMS.md)
-- [Política de Privacidade](legal/PRIVACY_POLICY.md)
-- [Aviso LGPD](legal/LGPD_NOTICE.md)
-
----
-
-<div align="center">
-  <sub>Feito por <a href="https://github.com/Joao-Aschenbrenner">João Aschenbrenner</a></sub>
-</div>
+MIT.
