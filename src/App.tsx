@@ -67,7 +67,7 @@ import { sanitizeFilename, generatePageFilename, generateCombinedFilename } from
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 import { version as appVersion } from "../package.json";
 
-const MAX_CONCURRENT_REQUESTS = 10;
+const MAX_CONCURRENT_REQUESTS = 4; // mais estável em tiers gratuitos e reduz 429
 
 let pageIdCounter = 0;
 function nextPageId(): string {
@@ -1585,7 +1585,6 @@ export default function App() {
                   <li><strong className="text-slate-200">Google Gemini 2.5 Flash</strong> — Rápido, suporta imagens</li>
                   <li><strong className="text-slate-200">OpenAI GPT-4o</strong> — Modelo multimodal da OpenAI</li>
                   <li><strong className="text-slate-200">Anthropic Claude Sonnet 4</strong> — Multimodal</li>
-                  <li><strong className="text-slate-200">Mistral OCR</strong> — Opcional; pode exigir créditos</li>
                   <li><strong className="text-slate-200">OpenRouter</strong> — Modelos compatíveis</li>
                   <li><strong className="text-slate-200">Groq</strong> — Qwen 3.8 multimodal</li>
                   <li><strong className="text-slate-200">Laya local</strong> — apoio à classificação; não recebe a imagem</li>
@@ -1656,7 +1655,6 @@ export default function App() {
                     <option value="GOOGLE">Google Gemini 2.5 Flash</option>
                     <option value="OPENAI">OpenAI (GPT-4o)</option>
                     <option value="ANTHROPIC">Anthropic (Claude Sonnet 4)</option>
-                    <option value="MISTRAL">Mistral OCR (opcional / pode exigir créditos)</option>
                     <option value="OPENROUTER">OpenRouter (modelos free compatíveis)</option>
                     <option value="GROQ">Groq (Qwen 3.8 27B multimodal)</option>
                     <option value="OLLAMA_CLOUD">Ollama Cloud (token ollama.com)</option>
