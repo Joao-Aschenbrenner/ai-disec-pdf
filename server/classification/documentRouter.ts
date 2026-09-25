@@ -43,7 +43,7 @@ export async function routeDocument(
     // Agreement with signatures is stronger than either source in isolation.
     const agrees = laya.documentClass === sig.documentClass && sig.score >= 0.30;
     const layaConf = laya.confidence || 0;
-    if (agrees || layaConf >= 0.82) {
+    if (agrees || layaConf >= 0.90) {
       const confidence = agrees ? Math.min(0.97, Math.max(sig.score, layaConf) + 0.08) : layaConf;
       return {
         documentClass: laya.documentClass,
@@ -51,7 +51,8 @@ export async function routeDocument(
         confidence,
         source: agrees ? "signature+laya" : "laya",
         evidence: [...sig.evidence, `laya:${laya.documentClass}`],
-        needsReview: confidence < 0.78
+        // Laya sozinho permanece provisório até calibrarmos o threshold no golden real.
+        needsReview: !agrees || confidence < 0.78
       };
     }
   }
