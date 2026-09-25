@@ -8,13 +8,35 @@ export interface LayaDecision {
 }
 
 const DEFAULT_LAYA_URL = "http://127.0.0.1:8000";
+const ALLOWED_LAYA_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+
+function resolveLayaUrl(): string | null {
+  const rawUrl = (process.env.LAYA_URL || DEFAULT_LAYA_URL).trim();
+  try {
+    const parsed = new URL(rawUrl);
+    if (
+      parsed.protocol !== "http:" ||
+      parsed.username ||
+      parsed.password ||
+      !ALLOWED_LAYA_HOSTS.has(parsed.hostname.toLowerCase())
+    ) {
+      return null;
+    }
+    return parsed.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
 
 export async function classifyWithLaya(text: string, timeoutMs = 2500): Promise<LayaDecision> {
   if (!text || text.trim().length < 20) {
     return { available: false, reason: "texto insuficiente" };
   }
 
-  const baseUrl = (process.env.LAYA_URL || DEFAULT_LAYA_URL).replace(/\/$/, "");
+  const baseUrl = resolveLayaUrl();
+  if (!baseUrl) {
+    return { available: false, reason: "URL Laya inválida: apenas loopback HTTP é permitido" };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -66,7 +88,10 @@ export async function classifyWithLaya(text: string, timeoutMs = 2500): Promise<
 }
 
 export async function getLayaHealth(timeoutMs = 500): Promise<{ healthy: boolean; url: string }> {
-  const baseUrl = (process.env.LAYA_URL || DEFAULT_LAYA_URL).replace(/\/$/, "");
+  const baseUrl = resolveLayaUrl();
+  if (!baseUrl) {
+    return { healthy: false, url: DEFAULT_LAYA_URL };
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

@@ -813,15 +813,42 @@ export default function App() {
         try {
           const segments = await splitPdfPageIntoHorizontalHalves(page.base64);
           segments.forEach(s => blobUrlsRef.current.push(s.blobUrl));
-          return result.documents.map((metadata: ExtractedMetadata, idx: number) =>
-            buildProcessedPage(`${id}-s${idx + 1}`, page, metadata, {
-              base64: segments[idx].base64,
-              blobUrl: segments[idx].blobUrl,
+          const segmentedResults: SplitPage[] = [];
+
+          // Mesmo quando o VLM detecta dois documentos, cada metade precisa
+          // ser enviada novamente para extração antes de entrar no ZIP.
+          for (const segment of segments) {
+            const segmentPage: SplitPage = {
+              ...page,
+              id: `${id}-s${segment.segmentIndex + 1}`,
+              base64: segment.base64,
+              blobUrl: segment.blobUrl,
               sourcePageIndex: page.sourcePageIndex ?? page.index,
-              segmentIndex: idx,
-              segmentPosition: segments[idx].position,
-            })
-          );
+              segmentIndex: segment.segmentIndex,
+              segmentPosition: segment.position,
+              status: "processing",
+            };
+
+            try {
+              const segmentImage = await pdfBase64ToJpeg(segment.base64);
+              const segmentResult = await requestExtraction(segmentImage, segmentPage, correction);
+              const segmentMeta: ExtractedMetadata =
+                segmentResult?._multiple && Array.isArray(segmentResult.documents)
+                  ? segmentResult.documents[0]
+                  : segmentResult;
+
+              segmentedResults.push(buildProcessedPage(segmentPage.id, segmentPage, segmentMeta));
+            } catch (segmentError: any) {
+              segmentedResults.push({
+                ...segmentPage,
+                status: "failed",
+                error: segmentError?.message || "Falha ao processar segmento",
+                retryAfter: segmentError?.retryAfter,
+              });
+            }
+          }
+
+          return segmentedResults;
         } catch (segmentError) {
           console.warn("[segment] Falha ao separar 2 documentos; mantendo página combinada.", segmentError);
         }

@@ -5,12 +5,12 @@
     "NVIDIA": {
       "baseUrl": "https://integrate.api.nvidia.com",
       "models": [
-        "z-ai/glm-5-3-flash",
+        "z-ai/glm-5.3-flash",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
       ],
       "tiers": {
-        "fast": "z-ai/glm-5-3-flash",
-        "medium": "z-ai/glm-5-3-flash",
+        "fast": "z-ai/glm-5.3-flash",
+        "medium": "z-ai/glm-5.3-flash",
         "precise": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
       },
       "modelsEndpoint": "/v1/models",
@@ -20,10 +20,10 @@
         "image",
         "multimodal",
         "omni",
-        "glm-5-3-flash"
+        "glm-5.3-flash"
       ],
       "preferred": [
-        "z-ai/glm-5-3-flash",
+        "z-ai/glm-5.3-flash",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
       ],
       "_comment": "CLASSIFICATION-V2: GLM-5.3-Flash como padrao multimodal; Nemotron Omni como fallback OCR/document intelligence."

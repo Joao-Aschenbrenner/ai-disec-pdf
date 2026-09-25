@@ -5,17 +5,18 @@
 
 ## 1. Coleta de Dados
 
-O AI Disec PDF opera integralmente no ambiente local do usuário. Nenhum dado pessoal é coletado, armazenado ou transmitido para servidores controlados pelo autor.
+O aplicativo e o servidor interno rodam localmente na máquina do usuário. O autor não coleta nem armazena os PDFs, imagens, textos ou metadados processados. Quando o usuário escolhe um provedor de IA em nuvem, a imagem da página e o prompt necessário para a extração são enviados diretamente à API desse provedor; esse tráfego não passa por servidores controlados pelo autor.
 
 ## 2. Processamento Local
 
-- O aplicativo e o servidor interno rodam exclusivamente em sua máquina.
-- Os arquivos PDF Processados permanecem em seu sistema de arquivos local.
+- O split, a geração de ZIP, as regras de classificação, os nomes dos arquivos e o Laya local podem operar inteiramente na máquina do usuário.
+- Os arquivos PDF processados e gerados permanecem no sistema de arquivos local, sob controle do usuário.
+- Ollama Local e Laya local não enviam dados a provedores cloud.
 - Nenhuma telemetria, analytics ou rastreamento está embutido no Software.
 
 ## 3. Dados Compartilhados com Provedores de IA
 
-Para realizar a extração de metadados, as imagens das páginas dos PDFs são enviadas ao provedor de IA selecionado pelo usuário. Recomendamos consultar a política de privacidade de cada provedor:
+No modo cloud, as imagens das páginas dos PDFs e o prompt de extração são enviados somente ao provedor explicitamente selecionado pelo usuário. No modo local, esses dados permanecem na máquina. O provedor escolhido pode aplicar sua própria política de retenção, treinamento e uso; consulte as políticas abaixo:
 
 | Provedor    | Política de Privacidade                                       |
 |-------------|---------------------------------------------------------------|
@@ -29,8 +30,9 @@ Para realizar a extração de metadados, as imagens das páginas dos PDFs são e
 
 ## 4. Segurança
 
-- As chaves de API fornecidas pelo usuário são armazenadas apenas no arquivo `.env` local e nunca são transmitidas a terceiros além do provedor de IA correspondente.
-- Recomenda-se manter o arquivo `.env` fora do controle de versão (já configurado via `.gitignore`).
+- As configurações e chaves fornecidas pelo usuário são armazenadas localmente em `~/.ai-disec-pdf/settings.json` e nunca são enviadas ao autor.
+- Uma chave só é enviada ao endpoint do provedor correspondente quando o usuário solicita uma operação cloud.
+- O arquivo `.env` é usado apenas para desenvolvimento/configuração local e deve permanecer fora do controle de versão.
 
 ## 5. Direitos do Usuário (LGPD)
 

@@ -119,7 +119,7 @@ export async function imageLikelyHasTwoStackedDocuments(jpegBase64: string): Pro
 
     const hasTwoContentBlocks = topInk > 0.012 && bottomInk > 0.012;
     const separatorIsMeaningfullyBlank =
-      bestGap < 0.018 &&
+      bestGap < 0.03 &&
       bestGap < Math.min(topInk, bottomInk) * 0.65;
 
     return hasTwoContentBlocks && separatorIsMeaningfullyBlank;

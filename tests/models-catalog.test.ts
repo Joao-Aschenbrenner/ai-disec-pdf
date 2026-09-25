@@ -10,6 +10,7 @@ import { startServer, stopServer } from "../server/server";
 const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const savedSettings = fs.existsSync(SETTINGS_FILE) ? fs.readFileSync(SETTINGS_FILE, "utf8") : null;
+const MOCK_API_KEY = "x".repeat(8);
 
 describe("Catálogo de modelos (server/models.json)", () => {
   it("catálogo existe e tem a estrutura esperada", () => {
@@ -106,7 +107,7 @@ describe("getProviderConfig (catálogo e fallback)", () => {
     expect(getProviderConfig("MISTRAL").model).not.toBe("open-mistral-vision");
     // NVIDIA default da Classification V2 é GLM-5.3-Flash; Nemotron Omni fica como fallback preciso
     expect(getProviderConfig("NVIDIA").model).not.toBe("meta/llama-3.2-90b-vision-instruct");
-    expect(getProviderConfig("NVIDIA").model).toBe("z-ai/glm-5-3-flash");
+    expect(getProviderConfig("NVIDIA").model).toBe("z-ai/glm-5.3-flash");
     expect(getProviderConfig("OPENROUTER").model).toBe("google/gemma-4-26b-a4b-it:free");
   });
 
@@ -134,7 +135,7 @@ describe("getProviderConfig (catálogo e fallback)", () => {
       expect(m).not.toBe("microsoft/phi-3-vision-128k-instruct");
       expect(m).not.toMatch(/nano-12b-v2-vl/);
     }
-    expect(nvidia.tiers!.medium).toBe("z-ai/glm-5-3-flash");
+    expect(nvidia.tiers!.medium).toBe("z-ai/glm-5.3-flash");
     expect(nvidia.tiers!.precise).toBe("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning");
   });
 });
@@ -186,7 +187,7 @@ describe("Mock dos 8 provedores de IA", () => {
   });
 
   it.each(providers)("deve processar com provider %s usando catálogo externalizado", async (provider) => {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider, apiKey: "mock-key" }));
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider, apiKey: MOCK_API_KEY }));
 
     let capturedUrl = "";
     let capturedBody: any;

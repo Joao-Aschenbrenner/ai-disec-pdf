@@ -166,7 +166,8 @@ async function startLayaService({ silent = false } = {}) {
       ...process.env,
       LAYA_HOST: "127.0.0.1",
       LAYA_PORT: String(LAYA_PORT),
-      LAYA_DEVICE: process.env.LAYA_DEVICE || "auto",
+      // Laya 0.3.20 aceita dispositivos Torch reais; "auto" não é válido.
+      LAYA_DEVICE: process.env.LAYA_DEVICE || "cpu",
       LAYA_PRELOAD: "1",
       LAYA_MODELS: "multilingual",
       LAYA_THREADS: process.env.LAYA_THREADS || String(physicalThreads),

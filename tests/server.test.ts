@@ -7,6 +7,7 @@ import os from "os";
 const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const savedSettings = fs.existsSync(SETTINGS_FILE) ? fs.readFileSync(SETTINGS_FILE, "utf8") : null;
+const MOCK_API_KEY = "x".repeat(8);
 
 describe("Servidor de Extração (API)", () => {
   const PORT = 3002;
@@ -109,7 +110,7 @@ describe("Mock dos provedores de IA (catálogo externalizado)", () => {
   });
 
   it.each(providers)("deve processar com provider %s", async (provider) => {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider, apiKey: "mock-key" }));
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider, apiKey: MOCK_API_KEY }));
 
     vi.spyOn(globalThis as any, "fetch").mockImplementation(
       (url: string | URL, init?: any) => {

@@ -16,7 +16,7 @@ const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 // Catálogo de modelos: lê server/models.json (atualizado mensalmente via CI).
 // Fallback hardcoded caso o arquivo não exista ou esteja corrompido.
 const FALLBACK_MODELS: Record<string, { baseUrl: string; model: string }> = {
-  NVIDIA: { baseUrl: "https://integrate.api.nvidia.com", model: "z-ai/glm-5-3-flash" },
+  NVIDIA: { baseUrl: "https://integrate.api.nvidia.com", model: "z-ai/glm-5.3-flash" },
   GOOGLE: { baseUrl: "https://generativelanguage.googleapis.com", model: "gemini-2.5-flash" },
   OPENAI: { baseUrl: "https://api.openai.com", model: "gpt-4o" },
   ANTHROPIC: { baseUrl: "https://api.anthropic.com", model: "claude-sonnet-4-20250514" },
@@ -328,10 +328,20 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
        const modelTier = settings.modelTier || "medium";
        let aiResponse;
        try {
-         // Helper for OpenAI-compatible providers (OpenRouter, NVIDIA)
-         interface OpenAICompatConfig { baseUrl: string; model: string; apiKey: string; }
+         // Helper for OpenAI-compatible providers. The endpoint is selected from
+         // this fixed allowlist; no request-controlled URL is ever fetched.
+         type OpenAICompatProvider = "OPENROUTER" | "GROQ" | "OLLAMA_CLOUD" | "CODEX" | "NVIDIA";
+         interface OpenAICompatConfig { provider: OpenAICompatProvider; model: string; apiKey: string; }
+         const OPENAI_COMPAT_BASE_URLS: Record<OpenAICompatProvider, string> = {
+           OPENROUTER: "https://openrouter.ai/api",
+           GROQ: "https://api.groq.com/openai",
+           OLLAMA_CLOUD: "https://chat.api.ollama.ai",
+           CODEX: "https://api.openai.com",
+           NVIDIA: "https://integrate.api.nvidia.com",
+         };
          const callOpenAICompatible = (config: OpenAICompatConfig, image: string, promptText: string) => {
-           return fetch(`${config.baseUrl}/v1/chat/completions`, {
+           const endpoint = new URL("/v1/chat/completions", OPENAI_COMPAT_BASE_URLS[config.provider]).toString();
+           return fetch(endpoint, {
              method: "POST",
              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.apiKey}` },
              body: JSON.stringify({
@@ -421,12 +431,12 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
              const openrouterModel = getModelByTier("OPENROUTER", modelTier);
              console.log(`[AI] Enviando para OpenRouter (${openrouterModel})...`);
-             aiResponse = await callOpenAICompatible({ baseUrl: "https://openrouter.ai/api", model: openrouterModel, apiKey }, imageBase64, prompt);
+             aiResponse = await callOpenAICompatible({ provider: "OPENROUTER", model: openrouterModel, apiKey }, imageBase64, prompt);
            } else if (provider === "GROQ") {
              if (!apiKey) throw new Error("Chave de API Groq não configurada.");
              const groqModel = getModelByTier("GROQ", modelTier);
              console.log(`[AI] Enviando para Groq (${groqModel})...`);
-             aiResponse = await callOpenAICompatible({ baseUrl: "https://api.groq.com/openai", model: groqModel, apiKey }, imageBase64, prompt);
+             aiResponse = await callOpenAICompatible({ provider: "GROQ", model: groqModel, apiKey }, imageBase64, prompt);
            } else if (provider === "LOCAL_OLLAMA") {
               // Ollama local — sem chave de API. Endpoint /api/chat (não /v1/chat/completions).
               // O modelo escolhido nas Configurações (settings.model) tem prioridade sobre o tier selecionado.
@@ -466,7 +476,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               if (!apiKey) throw new Error("Token Ollama Cloud não configurado. Obtenha em https://ollama.com/signup.");
               const ollamaCloudModel = getModelByTier("OLLAMA_CLOUD", modelTier);
               console.log(`[AI] Enviando para Ollama Cloud (${ollamaCloudModel})...`);
-              aiResponse = await callOpenAICompatible({ baseUrl: "https://chat.api.ollama.ai", model: ollamaCloudModel, apiKey }, imageBase64, prompt);
+              aiResponse = await callOpenAICompatible({ provider: "OLLAMA_CLOUD", model: ollamaCloudModel, apiKey }, imageBase64, prompt);
             } else if (provider === "CODEX") {
               // Codex Pro: tenta ler token do OAuth login (~/.codex/auth.json), senão usa apiKey
               let codexKey = apiKey;
@@ -482,12 +492,12 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               if (!codexKey) throw new Error("Login Codex necessário. Clique em 'Sign in with ChatGPT' nas Configurações, ou cole uma API key da OpenAI.");
               const codexModel = getModelByTier("CODEX", modelTier);
               console.log(`[AI] Enviando para OpenAI/Codex (${codexModel})...`);
-              aiResponse = await callOpenAICompatible({ baseUrl: "https://api.openai.com", model: codexModel, apiKey: codexKey }, imageBase64, prompt);
+              aiResponse = await callOpenAICompatible({ provider: "CODEX", model: codexModel, apiKey: codexKey }, imageBase64, prompt);
             } else {
               // NVIDIA (padrão)
               const nvidiaModel = getModelByTier("NVIDIA", modelTier);
               console.log(`[AI] Enviando para NVIDIA (${nvidiaModel})...`);
-              aiResponse = await callOpenAICompatible({ baseUrl: "https://integrate.api.nvidia.com", model: nvidiaModel, apiKey }, imageBase64, prompt);
+              aiResponse = await callOpenAICompatible({ provider: "NVIDIA", model: nvidiaModel, apiKey }, imageBase64, prompt);
             }
 } catch (aiErr) {
           await logError("Falha ao chamar o provedor de IA", aiErr);

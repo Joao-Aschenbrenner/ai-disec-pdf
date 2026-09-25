@@ -9,7 +9,7 @@ if (-not (Test-Path $Python)) {
 
 $env:LAYA_HOST = "127.0.0.1"
 $env:LAYA_PORT = "8000"
-$env:LAYA_DEVICE = if ($env:LAYA_DEVICE) { $env:LAYA_DEVICE } else { "auto" }
+$env:LAYA_DEVICE = if ($env:LAYA_DEVICE) { $env:LAYA_DEVICE } else { "cpu" }
 $env:LAYA_PRELOAD = "1"
 $env:LAYA_MODELS = "multilingual"
 if (-not $env:LAYA_THREADS) {

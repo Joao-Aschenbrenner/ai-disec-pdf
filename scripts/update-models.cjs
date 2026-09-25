@@ -14,7 +14,7 @@ const CATALOG_PATH = path.join(__dirname, "..", "server", "models.json");
 
 // Providers com schema OpenAI-compatível (data[].id) — exceto Google e Anthropic.
 const OPENAI_COMPAT = {
-  NVIDIA: { url: "https://integrate.api.nvidia.com/v1/models", envKey: "NVIDIA_API_KEY", keywords: ["vision", "vl", "image", "multimodal", "omni", "glm-5-3-flash"] },
+  NVIDIA: { url: "https://integrate.api.nvidia.com/v1/models", envKey: "NVIDIA_API_KEY", keywords: ["vision", "vl", "image", "multimodal", "omni", "glm-5.3-flash"] },
   OPENAI: { url: "https://api.openai.com/v1/models", envKey: "OPENAI_API_KEY", keywords: ["gpt-4o", "vision"] },
   MISTRAL: { url: "https://api.mistral.ai/v1/models", envKey: "MISTRAL_API_KEY", keywords: ["pixtral", "vision"] },
   OPENROUTER: { url: "https://openrouter.ai/api/v1/models", envKey: "OPENROUTER_API_KEY", keywords: ["gemini", "gemma", "vision", "vl", "pixtral", "llama-4"], filterPrefix: "google/" },
