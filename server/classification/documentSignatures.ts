@@ -47,7 +47,9 @@ const signatures: Signature[] = [
     anchors: [
       { re: /RELATORIO FOLHA PAGAMENTOS/, weight: 0.55, label: "relatorio folha" },
       { re: /(?:13.?\s*SALARIO|13O SALARIO|PGTO 13)/, weight: 0.40, label: "13 salario" },
-      { re: /QUANTIDADE DE PAGAMENTOS/, weight: 0.20, label: "quantidade pagamentos" }
+      { re: /QUANTIDADE DE PAGAMENTOS/, weight: 0.20, label: "quantidade pagamentos" },
+      { re: /NOME\s+CPF\s+AGENCIA\/?CONTA\s+ACEITO\s+TIPO\s+VALOR/, weight: 0.35, label: "grade folha BB" },
+      { re: /PAGINA\s+[123]\s+DE\s+3/, weight: 0.15, label: "pagina folha 1-3" }
     ]
   },
   {
