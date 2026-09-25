@@ -50,22 +50,18 @@ O modelo visual **não é mais autoridade final para documentType**. Isso evita 
 
 ## Laya
 
-Laya é opcional e roda localmente. Sem ele, o aplicativo continua usando signatures + fallback controlado.
+Laya é opcional e roda localmente. No desktop, abra **Configurações > Laya local** para instalar/iniciar. O Electron cria uma venv isolada em `~/.ai-disec-pdf/laya/venv`, fixa a versão usada pela release e tenta fazer auto-start nas execuções seguintes.
 
-Windows:
+Para desenvolvimento também existem os helpers:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/setup-laya.ps1
 powershell -ExecutionPolicy Bypass -File scripts/start-laya.ps1
 ```
 
-Health:
+Health: `http://127.0.0.1:8000/health`.
 
-```text
-http://127.0.0.1:8000/health
-```
-
-O DocSplit consulta o Laya em `POST /v1/systemone`. O Laya recebe **texto/evidências**, não a imagem da página.
+O DocSplit consulta o Laya em `POST /v1/systemone`. O Laya recebe **texto/evidências**, não a imagem da página. Decisão feita somente pelo Laya continua marcada para revisão até calibrarmos o golden real.
 
 Detalhes: [CLASSIFICATION_V2.md](CLASSIFICATION_V2.md).
 
