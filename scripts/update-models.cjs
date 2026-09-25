@@ -4,7 +4,7 @@
 // Roda localmente (npm run update-models) e mensalmente via .github/workflows/update-models.yml.
 // Requer as chaves das APIs em variáveis de ambiente:
 //   NVIDIA_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY,
-//   MISTRAL_API_KEY, OPENROUTER_API_KEY
+//   MISTRAL_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY
 // Providers sem chave são pulados (mantêm os modelos atuais do catálogo).
 
 const fs = require("fs");
@@ -14,10 +14,10 @@ const CATALOG_PATH = path.join(__dirname, "..", "server", "models.json");
 
 // Providers com schema OpenAI-compatível (data[].id) — exceto Google e Anthropic.
 const OPENAI_COMPAT = {
-  NVIDIA: { url: "https://integrate.api.nvidia.com/v1/models", envKey: "NVIDIA_API_KEY", keywords: ["vision", "vl", "image", "multimodal", "scout", "nemotron-vision", "pixtral"] },
+  NVIDIA: { url: "https://integrate.api.nvidia.com/v1/models", envKey: "NVIDIA_API_KEY", keywords: ["vision", "vl", "image", "multimodal", "omni", "glm"] },
   OPENAI: { url: "https://api.openai.com/v1/models", envKey: "OPENAI_API_KEY", keywords: ["gpt-4o", "vision"] },
   MISTRAL: { url: "https://api.mistral.ai/v1/models", envKey: "MISTRAL_API_KEY", keywords: ["pixtral", "vision"] },
-  OPENROUTER: { url: "https://openrouter.ai/api/v1/models", envKey: "OPENROUTER_API_KEY", keywords: ["gemini", "gemma", "vision", "vl", "pixtral", "llama-4"], filterPrefix: "google/" },
+  OPENROUTER: { url: "https://openrouter.ai/api/v1/models", envKey: "OPENROUTER_API_KEY", keywords: ["gemini", "gemma", "vision", "vl", "pixtral", "llama-4"], filterPrefix: "google/" },\n  GROQ: { url: "https://api.groq.com/openai/v1/models", envKey: "GROQ_API_KEY", keywords: ["qwen3.8", "qwen", "vision", "multimodal"] },
 };
 
 const GOOGLE = {
