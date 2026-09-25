@@ -56,7 +56,9 @@ const signatures: Signature[] = [
     anchors: [
       { re: /RELATORIO FOLHA PAGAMENTOS/, weight: 0.60, label: "relatorio folha" },
       { re: /NOME DA FOLHA/, weight: 0.20, label: "nome da folha" },
-      { re: /QUANTIDADE DE PAGAMENTOS/, weight: 0.20, label: "quantidade pagamentos" }
+      { re: /QUANTIDADE DE PAGAMENTOS/, weight: 0.20, label: "quantidade pagamentos" },
+      { re: /NOME\s+CPF\s+AGENCIA\/?CONTA\s+ACEITO\s+TIPO\s+VALOR/, weight: 0.55, label: "grade folha BB" },
+      { re: /PAGINA\s+[123]\s+DE\s+3/, weight: 0.20, label: "pagina folha 1-3" }
     ]
   },
   {
@@ -115,7 +117,10 @@ const signatures: Signature[] = [
     anchors: [
       { re: /EXTRATO DE CONTA CORRENTE/, weight: 0.65, label: "extrato conta corrente" },
       { re: /LANCAMENTOS/, weight: 0.15, label: "lancamentos" },
-      { re: /SALDO ANTERIOR/, weight: 0.15, label: "saldo anterior" }
+      { re: /SALDO ANTERIOR/, weight: 0.15, label: "saldo anterior" },
+      { re: /PAGAMENTO DE BOLETO/, weight: 0.18, label: "pagamento boleto" },
+      { re: /RESGATE AUTOMATICO/, weight: 0.18, label: "resgate automatico" },
+      { re: /\bPIX\b/, weight: 0.10, label: "pix" }
     ]
   },
   {
