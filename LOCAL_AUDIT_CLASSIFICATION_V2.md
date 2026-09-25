@@ -59,9 +59,9 @@ Validar especialmente:
 - DARF nunca vira folha;
 - relatório de folha não vira holerite individual;
 - holerite e 13º são distinguidos;
-- páginas com dois holerites continuam sendo detectadas como múltiplos documentos;
+- páginas físicas com dois holerites geram dois PDFs independentes (top/bottom);\n- página com apenas um holerite não sofre split falso-positivo;
 - extrato de investimentos é separado de extrato de conta;
-- nomes finais têm no máximo 80 caracteres;
+- nomes finais têm no máximo 80 caracteres;\n- nomes duplicados dentro do ZIP recebem sufixo e não sobrescrevem o arquivo anterior;
 - nenhum nome contém caracteres inválidos do Windows.
 
 ## 5. Modelos
@@ -102,7 +102,9 @@ BUILD=PASS|FAIL
 LAYA_HEALTH=PASS|FAIL
 ELECTRON=PASS|FAIL
 REAL_PDF=PASS|FAIL
+TWO_DOC_SPLIT=PASS|FAIL
 SAFE_FILENAMES=PASS|FAIL
+ZIP_COLLISION=PASS|FAIL
 GLM_SMOKE=PASS|FAIL
 GROQ_SMOKE=PASS|FAIL
 
