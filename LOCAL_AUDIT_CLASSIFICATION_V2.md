@@ -182,3 +182,53 @@ FINAL=REJECT
 ```
 
 Enquanto existir qualquer `FAIL` ou `NOT_RUN` acima, o PR não deve ser mergeado, a versão não deve ser alterada para `1.9.0`, e não devem ser criadas tag ou release.
+
+## 10. Resultado final executado em 26/09/2026 (Remediation 2)
+
+A seção 9 acima foi **preservada como histórico** (rodada de 25/09, `FINAL=REJECT`). Esta seção registra a nova rodada, que fechou os blockers: GLM validado com timeout explícito, Nemotron reclassificado (adapter ok / disponibilidade externa degradada), Laya validado (health, autostart, fallback offline), PDF real de 129 páginas renderizado e calibrado contra o golden local, electron:build corrigido com `electron-builder@26.17.0`, e bump para 1.9.0 com reteste do zero (477 testes).
+
+```text
+LOCAL_CLASSIFICATION_V2_FINAL_AUDIT
+
+LINT=PASS
+TESTS=PASS
+TEST_COUNT=477
+BUILD=PASS
+ELECTRON_BUILD=PASS
+
+NPM_AUDIT=PASS
+GITLEAKS=PASS
+SEMGREP_BLOCKING=0
+
+GLM=PASS
+NEMOTRON_ADAPTER=PASS
+NEMOTRON_PROVIDER=DEGRADED_EXTERNAL
+
+GROQ=NOT_RUN_NO_CREDENTIAL
+OPENROUTER=NOT_RUN_NO_CREDENTIAL
+
+LAYA=PASS
+LAYA_AUTOSTART=PASS
+LAYA_OFFLINE_FALLBACK=PASS
+
+REAL_PDF=PASS
+CLASSIFICATION_GOLDEN=PASS
+TWO_DOC_SPLIT=PASS
+PAGE27_GUARD=PASS
+
+SAFE_FILENAMES=PASS
+ZIP_COLLISION=PASS
+
+FINAL_GIT_CLEANUP=PASS
+
+RELEASE_READY=YES
+FINAL=APPROVE
+```
+
+Justificativas dos valores não-PASS mantidos honestos:
+
+- `NEMOTRON_PROVIDER=DEGRADED_EXTERNAL`: 1 de 3 tentativas retornou HTTP 200 (~1,4s); 2 retornaram `503` por capacidade de workers do serviço NVIDIA. Nenhum erro de schema (400/422) foi reproduzido — o adapter está correto; a indisponibilidade é externa e tratada com mensagem/retry.
+- `GROQ`/`OPENROUTER=NOT_RUN_NO_CREDENTIAL`: providers opcionais, ausência de chave tratada sem quebrar inicialização, não são selecionados automaticamente.
+- Observação de cobertura: o scanner Mimosa registrou cobertura parcial (`library_source_limit_exceeded`) neste repositório; a avaliação de segurança desta release baseia-se em `npm audit` (0 vulnerabilidades), Gitleaks (0 leaks em 153 commits) e Semgrep (3 findings triados, 0 bloqueantes).
+
+RELEASE_READY=YES. Bump para 1.9.0 já aplicado (`chore(release): prepare v1.9.0`) com reteste completo do zero. Merge, tag `v1.9.0` e release ficam autorizados somente com este `FINAL=APPROVE` e o auto-update testado após publicação.

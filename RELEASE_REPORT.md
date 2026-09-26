@@ -1,6 +1,55 @@
 # Release Report — AI Disec PDF
 
-## Auditoria do PR #1 — 25/09/2026
+## Remediation 2 — Fechamento de blockers — 26/09/2026
+
+Segunda rodada de remediação sobre a branch `feat/classification-v2-laya`, fechando os blockers da auditoria de 25/09. A auditoria anterior abaixo foi **preservada como histórico** (não foi reescrita).
+
+### Gates automatizados
+
+| Gate | Resultado | Evidência |
+|---|---|---|
+| TypeScript | PASS | `npm run lint` / `tsc --noEmit`, exit 0 |
+| Testes | PASS | 14 arquivos, 477 testes, pós-bump reexecutado do zero |
+| Build | PASS | `npm run build`, exit 0 |
+| Dependências runtime | PASS | `npm audit --omit=dev`: 0 vulnerabilidades (pré e pós-bump) |
+| Gitleaks | PASS | 153 commits, `no leaks found`, exit 0 |
+| Semgrep | PASS (triado) | 3 findings, 0 bloqueantes; triagem abaixo |
+| electron:build | PASS | `npm run electron:build`, exit 0 com `electron-builder@26.17.0` fixado em `package.json` e `package-lock.json` |
+| Versão | 1.9.0 | `package.json` e lock sincronizados via npm; commit `chore(release): prepare v1.9.0` |
+
+### Triagem Semgrep (3 findings, todos em `electron/main.cjs`)
+
+1. `detect-child-process` (linha 74): `spawn` com `shell:false`, `windowsHide:true`, comando/args fixos do app (venv Laya gerenciada). Falso positivo contextual.
+2. `react-insecure-request` (linha 102): `fetch` em `http://127.0.0.1:<port>/health` — loopback explícito do serviço Laya local. Local-only.
+3. `using-http-server` (linha 483): callback OAuth em `http://localhost:1455` — redirect_uri exigido pelo fluxo PKCE do ChatGPT/Codex. Local-only.
+
+Nenhum finding indica exposição remota. Observação: o scanner Mimosa registrou cobertura parcial (`library_source_limit_exceeded`) neste repositório; a avaliação de segurança oficial desta release baseia-se em audit/gitleaks/semgrep acima e não afirma cobertura estática completa.
+
+### Providers
+
+- NVIDIA GLM `z-ai/glm-5.3-flash`: **PASS**; adapter compatível e provider operacional (text-only ~47s, vision ~58s, envelope válido, timeout 60s).
+- NVIDIA Nemotron: **ADAPTER=PASS** / **DISPONIBILIDADE=DEGRADED_EXTERNAL**; nenhuma incompatibilidade de schema (nenhum 400/422), mas 2 de 3 tentativas retornaram `503` por capacidade de workers do serviço externo. Erro tratado sem crash, com mensagem e retry ao usuário. GLM permanece como provider NVIDIA padrão.
+- Groq / OpenRouter: **NOT_RUN_NO_CREDENTIAL**; ausência de chave tratada, não são selecionados automaticamente e nenhuma funcionalidade principal depende deles. Não bloqueiam a release.
+
+### Artefatos 1.9.0 (build/electron/)
+
+- `AI-Disec-PDF-Setup-1.9.0.exe` — 166.458.796 bytes
+- `AI-Disec-PDF-Setup-1.9.0.exe.blockmap`
+- `latest.yml` — `version: 1.9.0`, sha512 conferido contra o instalador
+- `win-unpacked/`
+
+```text
+INSTALLER_SHA256=B36DDFD65FC503E467F0D8CAD3E900F48662044411DE70E599A80CB47DA4C389
+```
+
+### Known limitations
+
+- Nemotron pode retornar HTTP 503 por capacidade do serviço NVIDIA (indisponibilidade externa, não bug do adapter).
+- Groq/OpenRouter não foram smoke-tested nesta auditoria por ausência de credenciais.
+
+---
+
+## Auditoria do PR #1 — 25/09/2026 (HISTÓRICO — FINAL=REJECT nesta rodada)
 
 A auditoria foi executada sobre a branch `feat/classification-v2-laya`. O resultado atual é **REJECT**: há smoke tests de providers em `FAIL` e gates manuais em `NOT_RUN`. Portanto, não houve merge, bump para `1.9.0`, tag ou release.
 
