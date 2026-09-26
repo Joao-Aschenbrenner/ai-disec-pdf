@@ -1,4 +1,21 @@
-import { createCanvas, DOMMatrix, Image, ImageData } from "canvas";
+import { Canvas, createCanvas, DOMMatrix, Image, ImageData } from "canvas";
+
+class NodeCanvasFactory {
+  create(width: number, height: number) {
+    const canvas = createCanvas(width, height);
+    return { canvas, context: canvas.getContext("2d") };
+  }
+
+  reset(canvasAndContext: { canvas: Canvas; context: unknown }, width: number, height: number) {
+    canvasAndContext.canvas.width = width;
+    canvasAndContext.canvas.height = height;
+  }
+
+  destroy(canvasAndContext: { canvas: Canvas; context: unknown }) {
+    canvasAndContext.canvas.width = 0;
+    canvasAndContext.canvas.height = 0;
+  }
+}
 
 /**
  * Renderiza cada página do PDF para um PNG real no Node.js.
@@ -11,11 +28,13 @@ export async function pdfBufferToPngBuffers(pdfBuffer: Buffer): Promise<Buffer[]
   // pdfjs-dist espera alguns objetos de DOM mesmo quando renderiza em canvas.
   const globals = globalThis as Record<string, unknown>;
   globals.Image = Image;
+  globals.HTMLImageElement = Image;
+  globals.HTMLCanvasElement = Canvas;
   globals.ImageData = ImageData;
   globals.DOMMatrix = DOMMatrix;
 
   const data = new Uint8Array(pdfBuffer);
-  const document = await getDocument({ data, useSystemFonts: true }).promise;
+  const document = await getDocument({ data, useSystemFonts: true, CanvasFactory: NodeCanvasFactory }).promise;
   const pages: Buffer[] = [];
 
   try {

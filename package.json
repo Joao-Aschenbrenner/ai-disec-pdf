@@ -28,11 +28,10 @@
       "dist/**/*",
       "electron/**/*",
       "server/models.json",
-      "package.json",
-      ".env"
+      "package.json"
     ],
     "directories": {
-      "output": "release"
+      "output": "build/electron"
     },
     "win": {
       "target": "nsis",
@@ -89,7 +88,7 @@
     "autoprefixer": "^10.4.21",
     "cross-env": "^10.1.0",
     "electron": "^42.11.8",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^26.17.0",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

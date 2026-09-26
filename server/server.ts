@@ -339,18 +339,35 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            CODEX: "https://api.openai.com",
            NVIDIA: "https://integrate.api.nvidia.com",
          };
-         const callOpenAICompatible = (config: OpenAICompatConfig, image: string, promptText: string) => {
+         const callOpenAICompatible = async (config: OpenAICompatConfig, image: string, promptText: string) => {
            const endpoint = new URL("/v1/chat/completions", OPENAI_COMPAT_BASE_URLS[config.provider]).toString();
-           return fetch(endpoint, {
-             method: "POST",
-             headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.apiKey}` },
-             body: JSON.stringify({
-               model: config.model,
-               messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image}`, detail: "high" } }, { type: "text", text: promptText }] }],
-                temperature: 0.1,
-                max_tokens: 1600,
-              }),
-           });
+           const controller = new AbortController();
+           const timeout = setTimeout(() => controller.abort(), 60_000);
+           const providerOptions = config.provider === "NVIDIA"
+             ? config.model === "z-ai/glm-5.3-flash"
+               ? { reasoning_effort: "low", chat_template_kwargs: { clear_thinking: true } }
+               : config.model === "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+                 ? { chat_template_kwargs: { enable_thinking: false } }
+                 : {}
+             : {};
+
+           try {
+             return await fetch(endpoint, {
+               method: "POST",
+               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.apiKey}` },
+               body: JSON.stringify({
+                 model: config.model,
+                 messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image}`, detail: "high" } }, { type: "text", text: promptText }] }],
+                 temperature: 0.1,
+                 max_tokens: 1024,
+                 stream: false,
+                 ...providerOptions,
+               }),
+               signal: controller.signal,
+             });
+           } finally {
+             clearTimeout(timeout);
+           }
          };
 
           if (provider === "GOOGLE") {

@@ -933,7 +933,7 @@ export default function App() {
 
       return buildProcessedPage(id, page, metadata);
     } catch (err: any) {
-      console.error(`Page ${page.index + 1} processing failed:`, err);
+      console.error("Page processing failed", page.index + 1, err);
       return {
         id,
         ...page,
@@ -1933,7 +1933,7 @@ export default function App() {
                     4
                   </div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-200">Revisão Integrada & ZIP Download</h4>
+                    <h4 className="text-xs font-bold text-slate-200">Revisão Integrada e ZIP Download</h4>
                     <p className="text-[12px] text-slate-400 leading-normal mt-0.5">Edite em tempo real qualquer valor diretamente na interface Bento antes de empacotar todos os PDFs processados.</p>
                   </div>
                 </div>
