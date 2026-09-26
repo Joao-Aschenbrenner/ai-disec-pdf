@@ -1,17 +1,16 @@
 {
   "_comment": "Catalogo de modelos de visao suportados por cada provider. Atualizado automaticamente 1x por mes via .github/workflows/update-models.yml. O server lê este arquivo em runtime com fallback hardcoded em server.ts.",
-  "_updated": "2026-08-27",
+  "_updated": "2026-09-25",
   "providers": {
     "NVIDIA": {
       "baseUrl": "https://integrate.api.nvidia.com",
       "models": [
-        "meta/llama-3.2-11b-vision-instruct",
-        "meta/llama-3.2-90b-vision-instruct",
+        "z-ai/glm-5.3-flash",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
       ],
       "tiers": {
-        "fast": "meta/llama-3.2-11b-vision-instruct",
-        "medium": "meta/llama-3.2-11b-vision-instruct",
+        "fast": "z-ai/glm-5.3-flash",
+        "medium": "z-ai/glm-5.3-flash",
         "precise": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
       },
       "modelsEndpoint": "/v1/models",
@@ -20,18 +19,14 @@
         "vl",
         "image",
         "multimodal",
-        "scout",
-        "nemotron-vision",
-        "nemotron-nano",
-        "phi-3-vision",
-        "llama-3.2",
-        "neva",
-        "vila",
-        "omni"
+        "omni",
+        "glm-5.3-flash"
       ],
       "preferred": [
-        "meta/llama-3.2-11b-vision-instruct"
-      ]
+        "z-ai/glm-5.3-flash",
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"
+      ],
+      "_comment": "CLASSIFICATION-V2: GLM-5.3-Flash como padrao multimodal; Nemotron Omni como fallback OCR/document intelligence."
     },
     "GOOGLE": {
       "baseUrl": "https://generativelanguage.googleapis.com",
@@ -99,7 +94,7 @@
       ]
     },
     "MISTRAL": {
-      "_comment": "Mistral nao tem modelo de visao direta. Usa OCR (v1/ocr) + classificacao em 2 passos.",
+      "_comment": "Opcional/pago: OCR em nuvem. Nao usar como provider padrao em CLASSIFICATION-V2.",
       "baseUrl": "https://api.mistral.ai",
       "models": [
         "mistral-ocr-latest"
@@ -116,7 +111,8 @@
         "fast": "mistral-ocr-latest",
         "medium": "mistral-ocr-latest",
         "precise": "mistral-ocr-latest"
-      }
+      },
+      "optional": true
     },
     "OPENROUTER": {
       "_comment": "OpenRouter free models de visao.",
@@ -223,6 +219,27 @@
         "medium": "gpt-4o",
         "precise": "gpt-4o"
       }
+    },
+    "GROQ": {
+      "_comment": "Groq OpenAI-compatible. Qwen 3.8 27B e multimodal e substitui IDs preview/deprecados.",
+      "baseUrl": "https://api.groq.com/openai",
+      "models": [
+        "qwen/qwen3.8-27b"
+      ],
+      "tiers": {
+        "fast": "qwen/qwen3.8-27b",
+        "medium": "qwen/qwen3.8-27b",
+        "precise": "qwen/qwen3.8-27b"
+      },
+      "modelsEndpoint": "/v1/models",
+      "visionKeywords": [
+        "qwen3.8-27b",
+        "vision",
+        "multimodal"
+      ],
+      "preferred": [
+        "qwen/qwen3.8-27b"
+      ]
     }
   }
 }

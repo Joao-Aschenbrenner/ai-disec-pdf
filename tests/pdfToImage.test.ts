@@ -65,4 +65,13 @@ describe("PDF para Imagem (Sharp)", () => {
       console.log(`  Página ${index + 1}: ${(bufferSize / 1024).toFixed(2)} KB`);
     });
   });
+
+  it("deve renderizar dimensões da página, não uma imagem placeholder fixa", async () => {
+    const result = await pdfBufferToPngBase64(textPdfBuffer);
+    const png = Buffer.from(result[0], "base64");
+
+    expect(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))).toBe(true);
+    expect(png.readUInt32BE(16)).toBeGreaterThan(800);
+    expect(png.readUInt32BE(20)).toBeGreaterThan(1000);
+  });
 });

@@ -1,0 +1,173 @@
+import { describe, it, expect } from "vitest";
+import { PDFDocument } from "pdf-lib";
+import { classifyBySignatures } from "../server/classification/documentSignatures";
+import { routeDocument } from "../server/classification/documentRouter";
+import { generatePageFilename, makeWindowsSafeFilename, resolveFilenameConflict, MAX_FILENAME_LENGTH } from "../src/utils/fileHelpers";
+import { splitPdfPageIntoHorizontalHalves } from "../src/utils/pageSegmenter";
+
+describe("CLASSIFICATION-V2 signatures", () => {
+  it("hard guard DANFE nunca vira folha", () => {
+    const r = classifyBySignatures("DANFE DOCUMENTO AUXILIAR DA NOTA FISCAL ELETRONICA CHAVE DE ACESSO");
+    expect(r.documentClass).toBe("NFE_DANFE");
+    expect(r.hardGuard).toBe(true);
+  });
+
+  it("hard guard NFS-e reconhece prestador/tomador", () => {
+    const r = classifyBySignatures("NOTA FISCAL DE SERVICOS ELETRONICA NFS-e PRESTADOR DE SERVICOS TOMADOR DE SERVICOS");
+    expect(r.documentClass).toBe("NFS");
+    expect(r.score).toBeGreaterThan(0.9);
+  });
+
+  it("DARF nao pode ser folha", () => {
+    const r = classifyBySignatures("Receita Federal Documento de Arrecadacao de Receitas Federais DARF");
+    expect(r.documentClass).toBe("DARF");
+    expect(r.hardGuard).toBe(true);
+  });
+
+  it("relatorio folha e diferente de holerite individual", () => {
+    const r = classifyBySignatures("BANCO DO BRASIL RELATORIO FOLHA PAGAMENTOS NOME DA FOLHA QUANTIDADE DE PAGAMENTOS 38");
+    expect(r.documentClass).toBe("FOPAG_RESUMO");
+  });
+
+  it("continuação do relatório BB permanece FOPAG_RESUMO", () => {
+    const r = classifyBySignatures("NOME CPF AGENCIA/CONTA ACEITO TIPO VALOR PAGINA 2 DE 3");
+    expect(r.documentClass).toBe("FOPAG_RESUMO");
+  });
+
+  it("continuação de extrato reconhece padrão de transações", () => {
+    const r = classifyBySignatures("PIX PAGAMENTO DE BOLETO RESGATE AUTOMATICO SALDO");
+    expect(r.documentClass).toBe("EXTRATO_CC");
+  });
+
+  it("continuação da folha de 13o permanece FOPAG_13_RESUMO", () => {
+    const r = classifyBySignatures("NOME CPF AGENCIA/CONTA ACEITO TIPO VALOR PGTO 13 SALARIO PAGINA 2 DE 3");
+    expect(r.documentClass).toBe("FOPAG_13_RESUMO");
+  });
+
+  it("holerite individual usa assinatura mensalista/vencimentos/descontos", () => {
+    const r = classifyBySignatures("FOLHA MENSAL MENSALISTA VENCIMENTOS DESCONTOS SALARIO BASE F.G.T.S.");
+    expect(r.documentClass).toBe("HOLERITE");
+  });
+
+  it("13 salario individual nao vira folha-resumo", () => {
+    const r = classifyBySignatures("13o Integral PARCELA 13 SALARIO VENCIMENTOS DESCONTOS MENSALISTA");
+    expect(r.documentClass).toBe("HOLERITE_13");
+  });
+
+  it("extrato de investimentos separado de conta corrente", () => {
+    const r = classifyBySignatures("Extratos - Investimentos Fundos - Mensal Aplicacao Resgate");
+    expect(r.documentClass).toBe("EXTRATO_INVESTIMENTO");
+  });
+
+  it("fatura CPFL reconhecida", () => {
+    const r = classifyBySignatures("CPFL ENERGIA ELETRICA CONTA DE ENERGIA KWH");
+    expect(r.documentClass).toBe("FATURA_ENERGIA");
+  });
+});
+
+describe("CLASSIFICATION-V2 router", () => {
+  it("assinatura forte vence candidato errado de VLM fraco", async () => {
+    const r = await routeDocument(
+      "DANFE DOCUMENTO AUXILIAR DA NOTA FISCAL ELETRONICA CHAVE DE ACESSO",
+      "folha_pagamento"
+    );
+    expect(r.documentClass).toBe("NFE_DANFE");
+    expect(r.documentType).toBe("nota_fiscal");
+    expect(r.source).toBe("signature");
+    expect(r.needsReview).toBe(false);
+  });
+
+  it("NFS forte vence candidato folha_pagamento", async () => {
+    const r = await routeDocument(
+      "NOTA FISCAL DE SERVICOS ELETRONICA NFS-e PRESTADOR DE SERVICOS TOMADOR DE SERVICOS",
+      "folha_pagamento"
+    );
+    expect(r.documentClass).toBe("NFS");
+    expect(r.documentType).toBe("nota_fiscal");
+  });
+
+  it("candidato do VLM nao vira autoridade quando nao ha evidencia", async () => {
+    const r = await routeDocument("texto generico sem assinatura suficiente", "folha_pagamento", { useLaya: false });
+    expect(r.documentClass).toBe("OUTRO");
+    expect(r.documentType).toBe("outros");
+    expect(r.source).toBe("fallback");
+    expect(r.needsReview).toBe(true);
+  });
+});
+
+describe("SafeFilenameBuilder", () => {
+  it("nome CLASSIFICATION-V2 nunca passa de 80 caracteres", () => {
+    const filename = generatePageFilename("x.pdf", 103, {
+      isNotaFiscal: true,
+      notaNumber: "000000000000001234567890",
+      companyName: "CLINICA MEDICA COM UM NOME ABSURDAMENTE GRANDE QUE NAO CABE NO WINDOWS",
+      valor: 123456.78,
+      pessoaNome: null,
+      documentType: "nota_fiscal",
+      documentClass: "NFS"
+    });
+    expect(filename.length).toBeLessThanOrEqual(MAX_FILENAME_LENGTH);
+    expect(filename.endsWith(".pdf")).toBe(true);
+  });
+
+  it("usa rotulo curto da classe fina", () => {
+    const filename = generatePageFilename("x.pdf", 0, {
+      isNotaFiscal: true,
+      notaNumber: "7225",
+      companyName: "CLINICA MONTEIRO",
+      valor: 1700,
+      pessoaNome: null,
+      documentType: "nota_fiscal",
+      documentClass: "NFS"
+    });
+    expect(filename).toContain("_NFS_");
+  });
+
+  it("nome manual reservado do Windows e neutralizado", () => {
+    expect(makeWindowsSafeFilename("CON.pdf")).toBe("_CON.pdf");
+  });
+
+  it("nome Windows-safe preserva casas decimais", () => {
+    expect(makeWindowsSafeFilename("pag5_NFS_7225_CLINICA_1700.00.pdf"))
+      .toBe("pag5_NFS_7225_CLINICA_1700.00.pdf");
+  });
+
+  it("duplicatas no ZIP recebem sufixo e continuam curtas", () => {
+    const used = new Set<string>();
+    const a = resolveFilenameConflict("pag9_HOL_documento.pdf", used);
+    const b = resolveFilenameConflict("pag9_HOL_documento.pdf", used);
+    expect(a).toBe("pag9_HOL_documento.pdf");
+    expect(b).toBe("pag9_HOL_documento_2.pdf");
+    expect(b.length).toBeLessThanOrEqual(MAX_FILENAME_LENGTH);
+  });
+});
+
+
+describe("PageSegmenter", () => {
+  it("corta uma página em metades superior e inferior reais", async () => {
+    const source = await PDFDocument.create();
+    source.addPage([600, 800]);
+    const bytes = await source.save();
+    const base64 = Buffer.from(bytes).toString("base64");
+
+    const segments = await splitPdfPageIntoHorizontalHalves(base64);
+    expect(segments).toHaveLength(2);
+    expect(segments[0].position).toBe("top");
+    expect(segments[1].position).toBe("bottom");
+
+    const top = await PDFDocument.load(Buffer.from(segments[0].base64, "base64"));
+    const bottom = await PDFDocument.load(Buffer.from(segments[1].base64, "base64"));
+    const topCrop = top.getPage(0).getCropBox();
+    const bottomCrop = bottom.getPage(0).getCropBox();
+
+    expect(topCrop.width).toBe(600);
+    expect(topCrop.height).toBe(400);
+    expect(topCrop.y).toBe(400);
+    expect(bottomCrop.width).toBe(600);
+    expect(bottomCrop.height).toBe(400);
+    expect(bottomCrop.y).toBe(0);
+
+    URL.revokeObjectURL(segments[0].blobUrl);
+    URL.revokeObjectURL(segments[1].blobUrl);
+  });
+});

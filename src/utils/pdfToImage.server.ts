@@ -1,22 +1,59 @@
-// Placeholder PDF conversion using Canvas (no PDF parsing)
-import { createCanvas } from "canvas";
+import { Canvas, createCanvas, DOMMatrix, Image, ImageData } from "canvas";
+
+class NodeCanvasFactory {
+  create(width: number, height: number) {
+    const canvas = createCanvas(width, height);
+    return { canvas, context: canvas.getContext("2d") };
+  }
+
+  reset(canvasAndContext: { canvas: Canvas; context: unknown }, width: number, height: number) {
+    canvasAndContext.canvas.width = width;
+    canvasAndContext.canvas.height = height;
+  }
+
+  destroy(canvasAndContext: { canvas: Canvas; context: unknown }) {
+    canvasAndContext.canvas.width = 0;
+    canvasAndContext.canvas.height = 0;
+  }
+}
 
 /**
- * Converte um buffer PDF em um array de buffers PNG (um por página).
- * Implementação placeholder que gera uma imagem PNG genérica usando Canvas.
- * VERSÃO PARA NODE.JS (servidor).
+ * Renderiza cada página do PDF para um PNG real no Node.js.
+ * O caminho server-side é usado pelos testes e por integrações que não têm
+ * acesso ao OffscreenCanvas do navegador.
  */
-export async function pdfBufferToPngBuffers(_pdfBuffer: Buffer): Promise<Buffer[]> {
-  const width = 800;
-  const height = 1200;
-  const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(width / 4, height / 4, width / 2, height / 2);
-  const pngBuffer = canvas.toBuffer("image/png");
-  return [pngBuffer];
+export async function pdfBufferToPngBuffers(pdfBuffer: Buffer): Promise<Buffer[]> {
+  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+  // pdfjs-dist espera alguns objetos de DOM mesmo quando renderiza em canvas.
+  const globals = globalThis as Record<string, unknown>;
+  globals.Image = Image;
+  globals.HTMLImageElement = Image;
+  globals.HTMLCanvasElement = Canvas;
+  globals.ImageData = ImageData;
+  globals.DOMMatrix = DOMMatrix;
+
+  const data = new Uint8Array(pdfBuffer);
+  const document = await getDocument({ data, useSystemFonts: true, CanvasFactory: NodeCanvasFactory }).promise;
+  const pages: Buffer[] = [];
+
+  try {
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber++) {
+      const page = await document.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+      const context = canvas.getContext("2d");
+
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: context as any, viewport }).promise;
+      pages.push(canvas.toBuffer("image/png"));
+    }
+  } finally {
+    await document.destroy();
+  }
+
+  return pages;
 }
 
 /**

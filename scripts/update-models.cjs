@@ -4,7 +4,7 @@
 // Roda localmente (npm run update-models) e mensalmente via .github/workflows/update-models.yml.
 // Requer as chaves das APIs em variáveis de ambiente:
 //   NVIDIA_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY,
-//   MISTRAL_API_KEY, OPENROUTER_API_KEY
+//   MISTRAL_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY
 // Providers sem chave são pulados (mantêm os modelos atuais do catálogo).
 
 const fs = require("fs");
@@ -14,10 +14,11 @@ const CATALOG_PATH = path.join(__dirname, "..", "server", "models.json");
 
 // Providers com schema OpenAI-compatível (data[].id) — exceto Google e Anthropic.
 const OPENAI_COMPAT = {
-  NVIDIA: { url: "https://integrate.api.nvidia.com/v1/models", envKey: "NVIDIA_API_KEY", keywords: ["vision", "vl", "image", "multimodal", "scout", "nemotron-vision", "pixtral"] },
+  NVIDIA: { url: "https://integrate.api.nvidia.com/v1/models", envKey: "NVIDIA_API_KEY", keywords: ["vision", "vl", "image", "multimodal", "omni", "glm-5.3-flash"] },
   OPENAI: { url: "https://api.openai.com/v1/models", envKey: "OPENAI_API_KEY", keywords: ["gpt-4o", "vision"] },
   MISTRAL: { url: "https://api.mistral.ai/v1/models", envKey: "MISTRAL_API_KEY", keywords: ["pixtral", "vision"] },
   OPENROUTER: { url: "https://openrouter.ai/api/v1/models", envKey: "OPENROUTER_API_KEY", keywords: ["gemini", "gemma", "vision", "vl", "pixtral", "llama-4"], filterPrefix: "google/" },
+  GROQ: { url: "https://api.groq.com/openai/v1/models", envKey: "GROQ_API_KEY", keywords: ["qwen3.8-27b", "vision", "multimodal"] },
 };
 
 const GOOGLE = {
@@ -47,8 +48,8 @@ function pickPreferred(models, preferredList, keywords) {
   // Filtra apenas modelos que parecem suportar visão (por keywords) e existem na lista.
   const visionModels = models.filter((m) => isVisionModel(m, keywords));
   if (visionModels.length === 0) {
-    warn(`Nenhum modelo de visão encontrado por keywords=${JSON.stringify(keywords)}; mantendo lista completa.`);
-    return models;
+    warn(`Nenhum modelo de visão encontrado por keywords=${JSON.stringify(keywords)}; catálogo atual será preservado.`);
+    return [];
   }
   // Usa a ordem de preferred: primeiro modelo de preferred que apareça nos visionModels.
   const ordered = [];
@@ -95,6 +96,10 @@ function extractOpenAICompatModels(data) {
 async function updateProvider(catalog, providerName) {
   const entry = catalog.providers[providerName];
   if (!entry) { warn(`Provider ${providerName} não está no catálogo, pulando.`); return false; }
+  if (entry.optional) {
+    log(`${providerName}: provider opcional/curado; atualização automática desativada.`);
+    return false;
+  }
 
   if (providerName === "GOOGLE") {
     const key = process.env[GOOGLE.envKey];

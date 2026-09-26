@@ -10,6 +10,7 @@ import { startServer, stopServer } from "../server/server";
 const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const savedSettings = fs.existsSync(SETTINGS_FILE) ? fs.readFileSync(SETTINGS_FILE, "utf8") : null;
+const MOCK_API_KEY = "x".repeat(8);
 
 describe("Catálogo de modelos (server/models.json)", () => {
   it("catálogo existe e tem a estrutura esperada", () => {
@@ -17,7 +18,7 @@ describe("Catálogo de modelos (server/models.json)", () => {
     expect(fs.existsSync(catalogPath)).toBe(true);
     const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
     expect(catalog.providers).toBeTypeOf("object");
-    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER"];
+    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ"];
     for (const p of expected) {
       expect(catalog.providers[p], `provider ${p} ausente`).toBeDefined();
       expect(catalog.providers[p].baseUrl).toBeTypeOf("string");
@@ -37,9 +38,9 @@ describe("Catálogo de modelos (server/models.json)", () => {
     }
   });
 
-  it("catálogo cobre os 9 providers (6 cloud + 3 novos)", () => {
+  it("catálogo cobre os providers ativos e legados", () => {
     const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "server", "models.json"), "utf8"));
-    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
+    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
     for (const p of expected) {
       expect(catalog.providers[p], `${p} ausente do catálogo`).toBeDefined();
     }
@@ -66,9 +67,9 @@ describe("Catálogo de modelos (server/models.json)", () => {
 });
 
 describe("getProviderConfig (catálogo e fallback)", () => {
-  it("FALLBACK_MODELS exportado cobre os 7 providers", async () => {
+  it("FALLBACK_MODELS exportado cobre os providers configurados", async () => {
     const { FALLBACK_MODELS } = await import("../server/server");
-    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
+    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
     for (const p of expected) {
       expect(FALLBACK_MODELS[p], `${p} ausente do fallback`).toBeDefined();
       if (p !== "LOCAL_OLLAMA") {
@@ -88,7 +89,7 @@ describe("getProviderConfig (catálogo e fallback)", () => {
 
   it("todos os providers com visão têm config válida via catálogo", async () => {
     const { getProviderConfig } = await import("../server/server");
-    const providers = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
+    const providers = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
     for (const p of providers) {
       const cfg = getProviderConfig(p);
       expect(cfg.baseUrl, `${p}: baseUrl`).toBeTypeOf("string");
@@ -104,9 +105,9 @@ describe("getProviderConfig (catálogo e fallback)", () => {
     // Modelos que sabemos que foram descontinuados/lentos e não devem ser o default
     expect(getProviderConfig("ANTHROPIC").model).not.toBe("claude-3-sonnet-20240229");
     expect(getProviderConfig("MISTRAL").model).not.toBe("open-mistral-vision");
-    // NVIDIA default agora é llama-3.2-11b-vision (nano-8b entrou em EOL em 2026-08-26)
+    // NVIDIA default da Classification V2 é GLM-5.3-Flash; Nemotron Omni fica como fallback preciso
     expect(getProviderConfig("NVIDIA").model).not.toBe("meta/llama-3.2-90b-vision-instruct");
-    expect(getProviderConfig("NVIDIA").model).toBe("meta/llama-3.2-11b-vision-instruct");
+    expect(getProviderConfig("NVIDIA").model).toBe("z-ai/glm-5.3-flash");
     expect(getProviderConfig("OPENROUTER").model).toBe("google/gemma-4-26b-a4b-it:free");
   });
 
@@ -134,6 +135,7 @@ describe("getProviderConfig (catálogo e fallback)", () => {
       expect(m).not.toBe("microsoft/phi-3-vision-128k-instruct");
       expect(m).not.toMatch(/nano-12b-v2-vl/);
     }
+    expect(nvidia.tiers!.medium).toBe("z-ai/glm-5.3-flash");
     expect(nvidia.tiers!.precise).toBe("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning");
   });
 });
@@ -146,7 +148,7 @@ describe("Mock dos 8 provedores de IA", () => {
 
   const providers = [
     "GOOGLE", "NVIDIA", "OPENAI", "ANTHROPIC",
-    "MISTRAL", "OPENROUTER",
+    "MISTRAL", "OPENROUTER", "GROQ",
   ] as const;
 
   function mockResponseForProvider(provider: string) {
@@ -185,7 +187,7 @@ describe("Mock dos 8 provedores de IA", () => {
   });
 
   it.each(providers)("deve processar com provider %s usando catálogo externalizado", async (provider) => {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider, apiKey: "mock-key" }));
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider, apiKey: MOCK_API_KEY }));
 
     let capturedUrl = "";
     let capturedBody: any;

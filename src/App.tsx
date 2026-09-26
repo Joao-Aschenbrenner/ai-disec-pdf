@@ -56,6 +56,20 @@ declare global {
       install: () => Promise<{ ok: boolean; error?: string; path?: string }>;
       pullModel: (model: string) => Promise<{ ok: boolean; model?: string; error?: string }>;
       onPullProgress: (fn: (p: { line: string; model: string }) => void) => () => void;
+      // Laya local
+      layaStatus: () => Promise<{
+        installed: boolean;
+        version: string | null;
+        pythonPath: string | null;
+        running: boolean;
+        health: any;
+        managedProcess: boolean;
+        port: number;
+      }>;
+      layaInstall: () => Promise<{ ok: boolean; error?: string; version?: string | null; pythonPath?: string | null }>;
+      layaStart: () => Promise<{ ok: boolean; running?: boolean; starting?: boolean; alreadyRunning?: boolean; error?: string }>;
+      layaStop: () => Promise<{ ok: boolean; stopped?: boolean; error?: string }>;
+      onLayaProgress: (fn: (p: { line: string }) => void) => () => void;
       // Codex OAuth
       codexLogin: () => Promise<{ ok: boolean; message?: string; error?: string }>;
       codexLogout: () => Promise<{ ok: boolean; error?: string }>;
@@ -63,11 +77,12 @@ declare global {
     };
   }
 }
-import { sanitizeFilename, generatePageFilename, generateCombinedFilename } from "./utils/fileHelpers";
+import { sanitizeFilename, generatePageFilename, generateCombinedFilename, makeWindowsSafeFilename, resolveFilenameConflict } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
+import { imageLikelyHasTwoStackedDocuments, splitPdfPageIntoHorizontalHalves } from "./utils/pageSegmenter";
 import { version as appVersion } from "../package.json";
 
-const MAX_CONCURRENT_REQUESTS = 10;
+const MAX_CONCURRENT_REQUESTS = 4; // mais estável em tiers gratuitos e reduz 429
 
 let pageIdCounter = 0;
 function nextPageId(): string {
@@ -230,6 +245,190 @@ function OllamaLocalSetup({ model, onModelChange }: { model: string; onModelChan
           <><Download className="w-4 h-4" /> Baixar {model}</>
         )}
       </button>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// Laya local — classificador System-1 auxiliar
+// ════════════════════════════════════════════════════════════
+function LayaSetup() {
+  const api = window.electronAPI;
+  const [status, setStatus] = useState<{
+    installed: boolean;
+    version: string | null;
+    running: boolean;
+    health: any;
+    managedProcess: boolean;
+    port: number;
+  } | null>(null);
+  const [busy, setBusy] = useState<"install" | "start" | "stop" | null>(null);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState("");
+
+  const refresh = async () => {
+    try {
+      const s = await api?.layaStatus?.();
+      if (s) setStatus(s);
+    } catch {}
+  };
+
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 2000);
+    const cleanup = api?.onLayaProgress?.((p) => {
+      if (p?.line) setProgress(p.line);
+    });
+    return () => {
+      window.clearInterval(timer);
+      cleanup?.();
+    };
+  }, []);
+
+  const install = async () => {
+    if (!api?.layaInstall) return;
+    setBusy("install");
+    setError("");
+    setProgress("Preparando ambiente isolado...");
+    try {
+      const result = await api.layaInstall();
+      if (!result.ok) {
+        setError(result.error || "Falha ao instalar Laya.");
+        return;
+      }
+      setProgress("Instalado. Iniciando serviço local...");
+      const started = await api.layaStart();
+      if (!started.ok) setError(started.error || "Laya instalado, mas não iniciou.");
+    } catch (e: any) {
+      setError(e.message || "Falha inesperada.");
+    } finally {
+      setBusy(null);
+      await refresh();
+    }
+  };
+
+  const start = async () => {
+    if (!api?.layaStart) return;
+    setBusy("start");
+    setError("");
+    setProgress("Iniciando checkpoint multilingual...");
+    try {
+      const result = await api.layaStart();
+      if (!result.ok) setError(result.error || "Falha ao iniciar Laya.");
+    } catch (e: any) {
+      setError(e.message || "Falha inesperada.");
+    } finally {
+      setBusy(null);
+      await refresh();
+    }
+  };
+
+  const stop = async () => {
+    if (!api?.layaStop) return;
+    setBusy("stop");
+    setError("");
+    try {
+      const result = await api.layaStop();
+      if (!result.ok) setError(result.error || "Falha ao parar Laya.");
+      else setProgress("");
+    } catch (e: any) {
+      setError(e.message || "Falha inesperada.");
+    } finally {
+      setBusy(null);
+      await refresh();
+    }
+  };
+
+  const stateLabel = status?.running
+    ? "ativo"
+    : status?.installed && status?.managedProcess
+      ? "iniciando"
+      : status?.installed
+        ? "instalado / parado"
+        : "não instalado";
+
+  return (
+    <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-800 space-y-3">
+      <div className="flex items-start gap-3">
+        <div className="p-2 bg-violet-950/40 rounded-lg border border-violet-900/30">
+          <Cpu className="w-4 h-4 text-violet-300" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold text-slate-200">Laya local</span>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+              status?.running
+                ? "text-emerald-300 bg-emerald-950/50"
+                : status?.installed
+                  ? "text-amber-300 bg-amber-950/40"
+                  : "text-slate-400 bg-slate-900"
+            }`}>
+              {stateLabel}
+            </span>
+            {status?.version && <span className="text-[10px] text-slate-500">v{status.version}</span>}
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+            Apoia a classificação depois das regras locais. O VLM lê o documento; o Laya ajuda a decidir a classe quando há ambiguidade.
+          </p>
+          <p className="text-[10px] text-slate-500 mt-1">
+            Usa ambiente Python isolado e apenas o checkpoint multilingual. Se estiver desligado, o app continua com hard guards + revisão.
+          </p>
+        </div>
+      </div>
+
+      {status?.running && status.health?.loaded && (
+        <p className="text-[10px] text-emerald-400">
+          Checkpoint carregado: {Array.isArray(status.health.loaded) ? status.health.loaded.join(", ") : String(status.health.loaded)}
+        </p>
+      )}
+
+      {progress && (
+        <div className="max-h-20 overflow-y-auto rounded-lg bg-slate-950 border border-slate-800 p-2 text-[10px] text-slate-400 font-mono break-all">
+          {progress}
+        </div>
+      )}
+      {error && <p className="text-[11px] text-rose-400">{error}</p>}
+
+      <div className="flex gap-2">
+        {!status?.installed ? (
+          <button
+            type="button"
+            onClick={install}
+            disabled={busy !== null}
+            className="flex-1 px-3 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+          >
+            {busy === "install" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+            {busy === "install" ? "Instalando..." : "Instalar Laya"}
+          </button>
+        ) : status.running ? (
+          <button
+            type="button"
+            onClick={stop}
+            disabled={busy !== null}
+            className="flex-1 px-3 py-2 text-xs font-bold text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg disabled:opacity-50 cursor-pointer"
+          >
+            {busy === "stop" ? "Parando..." : "Parar Laya"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={start}
+            disabled={busy !== null}
+            className="flex-1 px-3 py-2 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+          >
+            {busy === "start" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+            {busy === "start" ? "Iniciando..." : "Iniciar Laya"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={refresh}
+          className="px-3 py-2 text-xs font-bold text-slate-400 bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+          title="Atualizar status"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
+      </div>
     </div>
   );
 }
@@ -538,39 +737,131 @@ export default function App() {
     }
   };
 
-  // Callback to trigger backend OCR on page index
-  const processSinglePage = async (id: string, page: SplitPage, correction?: string): Promise<SplitPage> => {
+  type ProcessedPageResult = SplitPage | SplitPage[];
+
+  const requestExtraction = async (
+    imageBase64: string,
+    page: SplitPage,
+    correction?: string
+  ): Promise<any> => {
+    const response = await fetch("/api/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pdfBase64: imageBase64,
+        originalName: page.originalFileName,
+        pageIndex: page.sourcePageIndex ?? page.index,
+        ...(correction ? { correction } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      const errJson = await response.json();
+      const err = new Error(errJson.error || "Erro de requisição.") as any;
+      err.retryAfter = errJson.retryAfter;
+      throw err;
+    }
+    return response.json();
+  };
+
+  const buildProcessedPage = (
+    id: string,
+    page: SplitPage,
+    metadata: ExtractedMetadata,
+    overrides?: Partial<SplitPage>
+  ): SplitPage => {
+    const targetPage = { ...page, ...overrides };
+    let customFilename = generatePageFilename(
+      targetPage.originalFileName,
+      targetPage.sourcePageIndex ?? targetPage.index,
+      metadata,
+      filenameOptions
+    );
+    if (removeOriginalName) {
+      const marker = customFilename.indexOf("_pag");
+      if (marker >= 0) customFilename = customFilename.substring(marker + 1);
+    }
+    return {
+      ...targetPage,
+      id,
+      status: "success",
+      metadata,
+      metadataList: undefined,
+      customFilename,
+    };
+  };
+
+  // Processa uma página. Quando uma página física contém dois holerites,
+  // retorna dois SplitPage reais (PDFs cropados), não apenas metadataList.
+  const processSinglePage = async (
+    id: string,
+    page: SplitPage,
+    correction?: string
+  ): Promise<ProcessedPageResult> => {
     try {
       const imageBase64 = await pdfBase64ToJpeg(page.base64);
-      const response = await fetch("/api/extract", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          pdfBase64: imageBase64,
-          originalName: page.originalFileName,
-          pageIndex: page.index,
-          ...(correction ? { correction } : {}),
-        }),
-      });
+      const result = await requestExtraction(imageBase64, page, correction);
 
-      if (!response.ok) {
-        const errJson = await response.json();
-        const err = new Error(errJson.error || "Erro de requisição.") as any;
-        err.retryAfter = errJson.retryAfter;
-        throw err;
+      // Caso a IA já tenha identificado 2 documentos, convertemos imediatamente
+      // a página física em dois PDFs independentes, preservando ordem topo -> baixo.
+      if (
+        result._multiple &&
+        Array.isArray(result.documents) &&
+        result.documents.length === 2 &&
+        page.segmentIndex === undefined
+      ) {
+        try {
+          const segments = await splitPdfPageIntoHorizontalHalves(page.base64);
+          segments.forEach(s => blobUrlsRef.current.push(s.blobUrl));
+          const segmentedResults: SplitPage[] = [];
+
+          // Mesmo quando o VLM detecta dois documentos, cada metade precisa
+          // ser enviada novamente para extração antes de entrar no ZIP.
+          for (const segment of segments) {
+            const segmentPage: SplitPage = {
+              ...page,
+              id: `${id}-s${segment.segmentIndex + 1}`,
+              base64: segment.base64,
+              blobUrl: segment.blobUrl,
+              sourcePageIndex: page.sourcePageIndex ?? page.index,
+              segmentIndex: segment.segmentIndex,
+              segmentPosition: segment.position,
+              status: "processing",
+            };
+
+            try {
+              const segmentImage = await pdfBase64ToJpeg(segment.base64);
+              const segmentResult = await requestExtraction(segmentImage, segmentPage, correction);
+              const segmentMeta: ExtractedMetadata =
+                segmentResult?._multiple && Array.isArray(segmentResult.documents)
+                  ? segmentResult.documents[0]
+                  : segmentResult;
+
+              segmentedResults.push(buildProcessedPage(segmentPage.id, segmentPage, segmentMeta));
+            } catch (segmentError: any) {
+              segmentedResults.push({
+                ...segmentPage,
+                status: "failed",
+                error: segmentError?.message || "Falha ao processar segmento",
+                retryAfter: segmentError?.retryAfter,
+              });
+            }
+          }
+
+          return segmentedResults;
+        } catch (segmentError) {
+          console.warn("[segment] Falha ao separar 2 documentos; mantendo página combinada.", segmentError);
+        }
       }
 
-      const result = await response.json();
-
-      // Handle multiple documents per page (array response) → combined entry
+      // Compatibilidade para arrays inesperados (>2 ou página já segmentada).
       if (result._multiple && Array.isArray(result.documents)) {
         const docs = result.documents as ExtractedMetadata[];
         const firstMeta = docs[0];
-        let customFilename = generateCombinedFilename(docs, page.index, filenameOptions);
+        let customFilename = generateCombinedFilename(docs, page.sourcePageIndex ?? page.index, filenameOptions);
         if (removeOriginalName) {
-          customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
+          const marker = customFilename.indexOf("_pag");
+          if (marker >= 0) customFilename = customFilename.substring(marker + 1);
         }
         return {
           id,
@@ -583,20 +874,66 @@ export default function App() {
       }
 
       const metadata = result as ExtractedMetadata;
-      let customFilename = generatePageFilename(page.originalFileName, page.index, metadata, filenameOptions);
-      if (removeOriginalName) {
-        customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
+
+      // IA fraca pode não perceber os dois holerites. Depois que o router local
+      // confirma HOLERITE, usamos layout conservador para decidir se vale reprocessar
+      // as duas metades separadamente.
+      const isIndividualPayroll =
+        metadata.documentClass === "HOLERITE" ||
+        metadata.documentClass === "HOLERITE_13";
+
+      if (
+        isIndividualPayroll &&
+        page.segmentIndex === undefined &&
+        await imageLikelyHasTwoStackedDocuments(imageBase64)
+      ) {
+        try {
+          const segments = await splitPdfPageIntoHorizontalHalves(page.base64);
+          segments.forEach(s => blobUrlsRef.current.push(s.blobUrl));
+          const segmentedResults: SplitPage[] = [];
+
+          for (const segment of segments) {
+            const segmentPage: SplitPage = {
+              ...page,
+              id: `${id}-s${segment.segmentIndex + 1}`,
+              base64: segment.base64,
+              blobUrl: segment.blobUrl,
+              sourcePageIndex: page.sourcePageIndex ?? page.index,
+              segmentIndex: segment.segmentIndex,
+              segmentPosition: segment.position,
+              status: "processing",
+            };
+
+            try {
+              const segmentImage = await pdfBase64ToJpeg(segment.base64);
+              const segmentResult = await requestExtraction(segmentImage, segmentPage, correction);
+              const segmentMeta: ExtractedMetadata =
+                segmentResult?._multiple && Array.isArray(segmentResult.documents)
+                  ? segmentResult.documents[0]
+                  : segmentResult;
+
+              segmentedResults.push(
+                buildProcessedPage(segmentPage.id, segmentPage, segmentMeta)
+              );
+            } catch (segmentError: any) {
+              segmentedResults.push({
+                ...segmentPage,
+                status: "failed",
+                error: segmentError?.message || "Falha ao processar segmento",
+                retryAfter: segmentError?.retryAfter,
+              });
+            }
+          }
+
+          if (segmentedResults.length === 2) return segmentedResults;
+        } catch (segmentError) {
+          console.warn("[segment] Detector sugeriu 2 documentos, mas crop falhou.", segmentError);
+        }
       }
 
-      return {
-        id,
-        ...page,
-        status: "success",
-        metadata,
-        customFilename,
-      };
+      return buildProcessedPage(id, page, metadata);
     } catch (err: any) {
-      console.error(`Page ${page.index + 1} processing failed:`, err);
+      console.error("Page processing failed", page.index + 1, err);
       return {
         id,
         ...page,
@@ -605,6 +942,21 @@ export default function App() {
         retryAfter: err.retryAfter,
       };
     }
+  };
+
+  const replaceProcessedResult = (targetId: string, result: ProcessedPageResult) => {
+    setSplitPages(prev => {
+      const currentIndex = prev.findIndex(p => p.id === targetId);
+      if (currentIndex < 0) return prev;
+      if (Array.isArray(result)) {
+        return [
+          ...prev.slice(0, currentIndex),
+          ...result,
+          ...prev.slice(currentIndex + 1),
+        ];
+      }
+      return prev.map(p => p.id === targetId ? result : p);
+    });
   };
 
   // Run bulk or sequential processing of all pages
@@ -641,8 +993,9 @@ export default function App() {
         const process = async () => {
           const result = await processSinglePage(page.id, page);
 
-          // Auto-retry failed pages with backoff
-          if (result.status === "failed") {
+          // Auto-retry apenas quando a página física inteira falhou.
+          // Segmentos já materializados podem ser reprocessados individualmente pela UI.
+          if (!Array.isArray(result) && result.status === "failed") {
             const attempt = (retries[page.id] || 0) + 1;
             retries[page.id] = attempt;
             
@@ -656,12 +1009,12 @@ export default function App() {
               await new Promise(r => setTimeout(r, delayMs));
               // Re-process
               const retryResult = await processSinglePage(page.id, page);
-              setSplitPages(prev => prev.map(p => p.id === page.id ? retryResult : p));
+              replaceProcessedResult(page.id, retryResult);
             } else {
-              setSplitPages(prev => prev.map(p => p.id === page.id ? result : p));
+              replaceProcessedResult(page.id, result);
             }
           } else {
-            setSplitPages(prev => prev.map(p => p.id === page.id ? result : p));
+            replaceProcessedResult(page.id, result);
           }
 
           // Remove self from active list
@@ -712,6 +1065,7 @@ export default function App() {
     const cleanOriginalName = sanitizeFilename(selectedFile?.name.replace(/\.pdf$/i, "") || "documentos");
     
     let addedCount = 0;
+    const usedZipNames = new Set<string>();
     
     for (const page of splitPages) {
       // Decode base64 to binary ArrayBuffer/Uint8Array
@@ -722,7 +1076,8 @@ export default function App() {
         bytes[i] = binaryString.charCodeAt(i);
       }
       
-      zip.file(page.customFilename, bytes);
+      const zipFilename = resolveFilenameConflict(page.customFilename, usedZipNames);
+      zip.file(zipFilename, bytes);
       addedCount++;
     }
 
@@ -757,11 +1112,20 @@ export default function App() {
 
       const updatedMetadata = {
         ...page.metadata,
-        [field]: value
+        [field]: value,
+        ...(field === "documentType"
+          ? {
+              documentClass: undefined,
+              needsReview: false,
+              classificationSource: "manual",
+              classificationConfidence: 1,
+              classificationEvidence: ["manual-confirmation"],
+            }
+          : {}),
       };
 
       // Re-trigger filename calculation
-      let customFilename = generatePageFilename(page.originalFileName, index, updatedMetadata, filenameOptions);
+      let customFilename = generatePageFilename(page.originalFileName, page.sourcePageIndex ?? page.index, updatedMetadata, filenameOptions);
       if (removeOriginalName) {
         customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
       }
@@ -781,7 +1145,7 @@ export default function App() {
       const next = [...prev];
       next[index] = {
         ...next[index],
-        customFilename: filename.endsWith(".pdf") ? filename : `${filename}.pdf`
+        customFilename: makeWindowsSafeFilename(filename)
       };
       return next;
     });
@@ -793,7 +1157,7 @@ export default function App() {
     setSplitPages(prev => {
       return prev.map((page, idx) => {
         if (!page.metadata) return page;
-        let customFilename = generatePageFilename(page.originalFileName, idx, page.metadata, filenameOptions);
+        let customFilename = generatePageFilename(page.originalFileName, page.sourcePageIndex ?? page.index, page.metadata, filenameOptions);
         if (remove) {
           customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
         }
@@ -819,7 +1183,7 @@ export default function App() {
       const updatedList = page.metadataList.map((d, i) =>
         i === docIdx ? { ...d, [field]: value } : d
       );
-      let customFilename = generateCombinedFilename(updatedList, index, filenameOptions);
+      let customFilename = generateCombinedFilename(updatedList, page.sourcePageIndex ?? page.index, filenameOptions);
       if (removeOriginalName) {
         customFilename = customFilename.substring(customFilename.indexOf("_pag") + 1);
       }
@@ -855,6 +1219,7 @@ export default function App() {
   const totalPages = splitPages.length;
   const processedCount = splitPages.filter(p => p.status === "success").length;
   const failedCount = splitPages.filter(p => p.status === "failed").length;
+  const reviewCount = splitPages.filter(p => p.status === "success" && p.metadata?.needsReview).length;
   const pendingCount = splitPages.filter(p => p.status === "pending" || p.status === "processing" || p.status === "failed").length;
   
   const notaFiscalCount = splitPages.filter(p => p.metadata?.documentType === "nota_fiscal").length;
@@ -1071,7 +1436,7 @@ export default function App() {
                         for (const page of failed) {
                           setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                           const res = await processSinglePage(page.id, page);
-                          setSplitPages(prev => prev.map(p => p.id === page.id ? res : p));
+                          replaceProcessedResult(page.id, res);
                         }
                         setIsProcessing(false);
                         window.electronAPI?.endProcessing();
@@ -1106,7 +1471,7 @@ export default function App() {
                           setFilenameOptions(newOpts);
                           setSplitPages(prev => prev.map((page, idx) => {
                             if (!page.metadata) return page;
-                            let f = generatePageFilename(page.originalFileName, idx, page.metadata, newOpts);
+                            let f = generatePageFilename(page.originalFileName, page.sourcePageIndex ?? page.index, page.metadata, newOpts);
                             if (removeOriginalName) f = f.substring(f.indexOf("_pag") + 1);
                             return { ...page, customFilename: f };
                           }));
@@ -1209,6 +1574,12 @@ export default function App() {
                     <p className="text-xs text-slate-400 mt-1">Configure os nomes inteligentes ou edite as informações geradas por inteligência artificial.</p>
                   </div>
                   
+                  {reviewCount > 0 && (
+                    <span className="text-[10px] font-bold bg-amber-950/40 border border-amber-800/30 text-amber-300 px-2.5 py-1.5 rounded-lg">
+                      {reviewCount} para revisar
+                    </span>
+                  )}
+                  
                   {processedCount > 0 && (
                     <button
                       onClick={downloadAllAsZip}
@@ -1273,7 +1644,15 @@ export default function App() {
                                   Lendo...
                                 </span>
                               )}
-                              {page.status === "success" && (
+                              {page.status === "success" && page.metadata?.needsReview ? (
+                                <span
+                                  className="text-[10px] font-bold bg-amber-950/50 border border-amber-800/30 text-amber-300 px-2.5 py-1 rounded-md flex items-center gap-1 cursor-help"
+                                  title={`Baixa confiança • fonte: ${page.metadata.classificationSource || "desconhecida"}`}
+                                >
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  Revisar
+                                </span>
+                              ) : page.status === "success" && (
                                 <span className="text-[10px] font-bold bg-emerald-950/50 border border-emerald-900/30 text-emerald-400 px-2.5 py-1 rounded-md flex items-center gap-1">
                                   <Check className="w-3.5 h-3.5" />
                                   Pronto
@@ -1305,6 +1684,28 @@ export default function App() {
                           {/* Editable extracted metadata details (Rendered upon success) */}
                           {hasResult && page.metadata && (
                             <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+                              <div className="flex items-center gap-2 flex-wrap mb-3">
+                                {page.metadata.documentClass && (
+                                  <span className="text-[9px] font-bold px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-300">
+                                    {page.metadata.documentClass}
+                                  </span>
+                                )}
+                                {page.metadata.classificationSource && (
+                                  <span className="text-[9px] px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-500">
+                                    fonte: {page.metadata.classificationSource}
+                                  </span>
+                                )}
+                                {typeof page.metadata.classificationConfidence === "number" && (
+                                  <span className="text-[9px] px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-500">
+                                    confiança: {Math.round(page.metadata.classificationConfidence * 100)}%
+                                  </span>
+                                )}
+                                {page.metadata.needsReview && (
+                                  <span className="text-[9px] font-bold px-2 py-1 rounded bg-amber-950/40 border border-amber-800/30 text-amber-300">
+                                    confirme o tipo antes de usar
+                                  </span>
+                                )}
+                              </div>
                               {page.metadataList && page.metadataList.length > 1 ? (
                                 <>
                                   <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-800">
@@ -1466,7 +1867,7 @@ export default function App() {
                                 onClick={async () => {
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                                   const res = await processSinglePage(page.id, page);
-                                  setSplitPages(prev => prev.map(p => p.id === page.id ? res : p));
+                                  replaceProcessedResult(page.id, res);
                                 }}
                                 className="px-3 py-1 bg-rose-900 hover:bg-rose-800 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                               >
@@ -1532,7 +1933,7 @@ export default function App() {
                     4
                   </div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-200">Revisão Integrada & ZIP Download</h4>
+                    <h4 className="text-xs font-bold text-slate-200">Revisão Integrada e ZIP Download</h4>
                     <p className="text-[12px] text-slate-400 leading-normal mt-0.5">Edite em tempo real qualquer valor diretamente na interface Bento antes de empacotar todos os PDFs processados.</p>
                   </div>
                 </div>
@@ -1585,8 +1986,9 @@ export default function App() {
                   <li><strong className="text-slate-200">Google Gemini 2.5 Flash</strong> — Rápido, suporta imagens</li>
                   <li><strong className="text-slate-200">OpenAI GPT-4o</strong> — Modelo multimodal da OpenAI</li>
                   <li><strong className="text-slate-200">Anthropic Claude Sonnet 4</strong> — Multimodal</li>
-                  <li><strong className="text-slate-200">Mistral OCR</strong> — OCR em nuvem</li>
-                  <li><strong className="text-slate-200">OpenRouter</strong> — Modelos grátis de visão</li>
+                  <li><strong className="text-slate-200">OpenRouter</strong> — Modelos compatíveis</li>
+                  <li><strong className="text-slate-200">Groq</strong> — Qwen 3.8 multimodal</li>
+                  <li><strong className="text-slate-200">Laya local</strong> — apoio à classificação; não recebe a imagem</li>
                   <li><strong className="text-slate-200">Ollama Cloud</strong> — Llama Vision via Ollama</li>
                   <li><strong className="text-slate-200">Codex Pro</strong> — Limite elevado via login OAuth</li>
                   <li><strong className="text-slate-200">Ollama Local</strong> — 100% offline, download automático</li>
@@ -1650,12 +2052,12 @@ export default function App() {
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
                 >
                   <optgroup label="Modelos na Nuvem (API Key)">
-                    <option value="NVIDIA">NVIDIA (Llama 3.2 11B Vision — rápido, grátis)</option>
+                    <option value="NVIDIA">NVIDIA (GLM-5.3-Flash — padrão)</option>
                     <option value="GOOGLE">Google Gemini 2.5 Flash</option>
                     <option value="OPENAI">OpenAI (GPT-4o)</option>
                     <option value="ANTHROPIC">Anthropic (Claude Sonnet 4)</option>
-                    <option value="MISTRAL">Mistral (OCR + classificação)</option>
-                    <option value="OPENROUTER">OpenRouter (Gemma 4 26B — FREE)</option>
+                    <option value="OPENROUTER">OpenRouter (modelos free compatíveis)</option>
+                    <option value="GROQ">Groq (Qwen 3.8 27B multimodal)</option>
                     <option value="OLLAMA_CLOUD">Ollama Cloud (token ollama.com)</option>
                     <option value="CODEX">Codex Pro (login OAuth)</option>
                   </optgroup>
@@ -1731,6 +2133,10 @@ export default function App() {
                   </p>
                 </div>
               )}
+
+              <div className="border-t border-slate-800 pt-4">
+                <LayaSetup />
+              </div>
             </div>
 
             <div className="flex gap-3 mt-6">
@@ -1949,7 +2355,7 @@ export default function App() {
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
                   const res = await processSinglePage(page.id, page, correctionMsg);
-                  setSplitPages(prev => prev.map(p => p.id === correctionPageId ? res : p));
+                  replaceProcessedResult(correctionPageId, res);
                 }}
                 className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-all cursor-pointer"
               >

@@ -2,7 +2,7 @@
   "name": "ai-disec-pdf",
   "author": "João Aschenbrenner",
   "private": true,
-  "version": "1.8.1",
+  "version": "1.9.0",
   "description": "AI Disec PDF - Separador Inteligente de PDF com IA",
   "type": "module",
   "main": "electron/main.cjs",
@@ -10,7 +10,7 @@
     "dev": "tsx server/bin/dev-server.ts",
     "build": "vite build && esbuild server/bin/dev-server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild server/bin/server-module.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server-module.cjs && node -e \"require('fs').copyFileSync('server/models.json','dist/models.json')\"",
     "start": "node dist/server.cjs",
-    "electron:dev": "npx cross-env NODE_ENV=development npx electron .",
+    "electron:dev": "node scripts/electron-dev.cjs",
     "electron:build": "npm run build && npx electron-builder",
     "electron:publish": "npm run build && npx electron-builder --publish always",
     "release": "npm run build && npx electron-builder --win --publish never && node scripts/release.cjs",
@@ -28,11 +28,10 @@
       "dist/**/*",
       "electron/**/*",
       "server/models.json",
-      "package.json",
-      ".env"
+      "package.json"
     ],
     "directories": {
-      "output": "release"
+      "output": "build/electron"
     },
     "win": {
       "target": "nsis",
@@ -88,8 +87,8 @@
     "@types/pdfjs-dist": "^2.10.377",
     "autoprefixer": "^10.4.21",
     "cross-env": "^10.1.0",
-    "electron": "^34.0.0",
-    "electron-builder": "^26.15.3",
+    "electron": "^42.11.8",
+    "electron-builder": "^26.17.0",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

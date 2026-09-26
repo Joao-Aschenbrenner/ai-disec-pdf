@@ -1,5 +1,8 @@
 import { ExtractedMetadata, FilenameOptions, DEFAULT_FILENAME_OPTIONS } from "../types";
 
+export const MAX_FILENAME_LENGTH = 80;
+export const MAX_ENTITY_LENGTH = 28;
+
 const typeMap: Record<string, string> = {
   extrato: "extrato",
   planilha: "planilha",
@@ -9,6 +12,24 @@ const typeMap: Record<string, string> = {
   outros: "outros",
   nao_identificado: "nao_identificado",
   not_a_fiscal: "NF",
+};
+
+const classMap: Record<string, string> = {
+  NFS: "NFS",
+  NFE_DANFE: "NFE",
+  HOLERITE: "HOL",
+  HOLERITE_13: "13S",
+  FOPAG_RESUMO: "FOPAG",
+  FOPAG_13_RESUMO: "FOPAG13",
+  DARF: "DARF",
+  GUIA_ISS: "ISS",
+  GUIA_INSS: "INSS",
+  EXTRATO_CC: "EXTCC",
+  EXTRATO_INVESTIMENTO: "EXTINV",
+  TED: "TED",
+  FATURA_ENERGIA: "ENERGIA",
+  PLANILHA: "TAB",
+  OUTRO: "DOC",
 };
 
 export function sanitizeFilename(str: string): string {
@@ -22,6 +43,78 @@ export function sanitizeFilename(str: string): string {
     .replace(/__+/g, "_");
 }
 
+function shortEntity(str: string): string {
+  const clean = sanitizeFilename(str);
+  if (clean.length <= MAX_ENTITY_LENGTH) return clean;
+  return clean.slice(0, MAX_ENTITY_LENGTH).replace(/_+$/g, "");
+}
+
+function shortHash(input: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).toUpperCase().slice(0, 6).padStart(6, "0");
+}
+
+function finalizeFilename(parts: string[]): string {
+  const compact = parts.filter(Boolean).join("_").replace(/__+/g, "_") || "documento";
+  const extension = ".pdf";
+  if (compact.length + extension.length <= MAX_FILENAME_LENGTH) {
+    return compact + extension;
+  }
+
+  const suffix = "_" + shortHash(compact);
+  const maxStem = MAX_FILENAME_LENGTH - extension.length - suffix.length;
+  const trimmed = compact.slice(0, Math.max(8, maxStem)).replace(/[_.-]+$/g, "");
+  return trimmed + suffix + extension;
+}
+
+export function makeWindowsSafeFilename(filename: string): string {
+  let stem = String(filename || "")
+    .replace(/\.pdf$/i, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "")
+    .trim()
+    .replace(/\s+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/[. ]+$/g, "");
+
+  if (!stem) stem = "documento";
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(stem)) {
+    stem = "_" + stem;
+  }
+  return finalizeFilename([stem]);
+}
+
+export function resolveFilenameConflict(filename: string, usedNames: Set<string>): string {
+  let candidate = makeWindowsSafeFilename(filename);
+  if (!usedNames.has(candidate.toLowerCase())) {
+    usedNames.add(candidate.toLowerCase());
+    return candidate;
+  }
+
+  const stem = candidate.replace(/\.pdf$/i, "");
+  let counter = 2;
+  do {
+    candidate = finalizeFilename([stem + "_" + counter]);
+    counter++;
+  } while (usedNames.has(candidate.toLowerCase()));
+
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
+function typeLabel(metadata: ExtractedMetadata): string {
+  if (metadata.documentClass && classMap[metadata.documentClass]) {
+    return classMap[metadata.documentClass];
+  }
+  const isInvoice = metadata.isNotaFiscal || metadata.documentType === "nota_fiscal";
+  return isInvoice ? "NF" : (typeMap[metadata.documentType] || "DOC");
+}
+
 export function generatePageFilename(
   originalFilename: string,
   index: number,
@@ -32,42 +125,39 @@ export function generatePageFilename(
   const isInvoice = metadata.isNotaFiscal || metadata.documentType === "nota_fiscal";
   const parts: string[] = [];
 
-  if (opts.showPageNumber) {
-    parts.push(`pag${index + 1}`);
-  }
-
-  if (opts.showType) {
-    if (isInvoice) {
-      parts.push("NF");
-    } else {
-      parts.push(typeMap[metadata.documentType] || "documento");
-    }
-  }
+  if (opts.showPageNumber) parts.push(`pag${index + 1}`);
+  if (opts.showType) parts.push(typeLabel(metadata));
 
   if (isInvoice && opts.showNotaNumber && metadata.notaNumber) {
-    parts.push(sanitizeFilename(metadata.notaNumber));
+    parts.push(shortEntity(metadata.notaNumber));
   }
 
   if (opts.showCompanyName && metadata.documentType !== "nao_identificado") {
     let name = "";
-    if (metadata.documentType === "folha_pagamento" && opts.showPessoaNome && metadata.pessoaNome) {
-      name = sanitizeFilename(metadata.pessoaNome);
+    if (
+      (metadata.documentClass === "HOLERITE" || metadata.documentClass === "HOLERITE_13" || metadata.documentType === "folha_pagamento") &&
+      opts.showPessoaNome &&
+      metadata.pessoaNome
+    ) {
+      name = shortEntity(metadata.pessoaNome);
     } else if (metadata.companyName) {
-      name = sanitizeFilename(metadata.companyName);
+      name = shortEntity(metadata.companyName);
     }
     if (name) parts.push(name);
   }
 
-  if (opts.showValor && metadata.documentType !== "folha_pagamento") {
+  const isIndividualPayroll =
+    metadata.documentClass === "HOLERITE" ||
+    metadata.documentClass === "HOLERITE_13" ||
+    (!metadata.documentClass && metadata.documentType === "folha_pagamento");
+
+  if (opts.showValor && !isIndividualPayroll) {
     parts.push(metadata.valor !== null && metadata.valor !== undefined
       ? parseFloat(metadata.valor.toString()).toFixed(2)
       : "sem_valor");
   }
 
-  let filename = parts.join("_");
-  if (!filename) filename = "documento";
-
-  return `${filename}.pdf`;
+  return finalizeFilename(parts);
 }
 
 export function generateCombinedFilename(
@@ -78,41 +168,32 @@ export function generateCombinedFilename(
   const opts = { ...DEFAULT_FILENAME_OPTIONS, ...options };
   const parts: string[] = [];
 
-  if (opts.showPageNumber) {
-    parts.push(`pag${index + 1}`);
-  }
+  if (opts.showPageNumber) parts.push(`pag${index + 1}`);
+  parts.push(String(docs.length));
+  if (opts.showType) parts.push(typeLabel(docs[0] || ({} as ExtractedMetadata)) + "s");
 
-  parts.push(`${docs.length}`);
-
-  if (opts.showType) {
-    const typeLabel = typeMap[docs[0]?.documentType || ""] || "documento";
-    parts.push(`${typeLabel}s`);
-  }
-
-  for (const doc of docs) {
+  for (const doc of docs.slice(0, 3)) {
     if (doc.documentType === "nao_identificado") {
-      const valor = opts.showValor && doc.valor != null
-        ? parseFloat(doc.valor.toString()).toFixed(2) : "sem_valor";
-      parts.push(`nao_identificado_${valor}`);
-      continue;
-    }
-    let name = "desconhecido";
-    if (doc.documentType === "folha_pagamento" && opts.showPessoaNome && doc.pessoaNome) {
-      name = sanitizeFilename(doc.pessoaNome);
-    } else if (opts.showCompanyName && doc.companyName) {
-      name = sanitizeFilename(doc.companyName);
-    }
-    if (doc.documentType === "folha_pagamento") {
-      parts.push(name);
-    } else {
-      const valor = opts.showValor && doc.valor != null
+      const legacyValue = opts.showValor && doc.valor != null
         ? parseFloat(doc.valor.toString()).toFixed(2)
         : "sem_valor";
-      parts.push(`${name}_${valor}`);
+      parts.push(doc.documentClass ? "REV" : "nao_identificado_" + legacyValue);
+      continue;
+    }
+
+    const isPayroll = doc.documentClass?.startsWith("HOLERITE") || (!doc.documentClass && doc.documentType === "folha_pagamento");
+    if (isPayroll && opts.showPessoaNome && doc.pessoaNome) {
+      parts.push(shortEntity(doc.pessoaNome));
+      continue;
+    }
+
+    if (opts.showCompanyName && doc.companyName) {
+      parts.push(shortEntity(doc.companyName));
+    }
+    if (opts.showValor && doc.valor != null && !isPayroll) {
+      parts.push(parseFloat(doc.valor.toString()).toFixed(2));
     }
   }
 
-  let filename = parts.join("_");
-  if (!filename) filename = "documento";
-  return `${filename}.pdf`;
+  return finalizeFilename(parts);
 }

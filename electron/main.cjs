@@ -2,7 +2,7 @@ const { app, BrowserWindow, Menu, ipcMain, powerSaveBlocker, powerMonitor, shell
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { execSync, spawn } = require("child_process");
+const { execSync, spawn, spawnSync } = require("child_process");
 
 // Carrega .env antes de qualquer coisa
 try {
@@ -17,6 +17,254 @@ let autoUpdater = null;
 try { autoUpdater = require("electron-updater").autoUpdater; } catch (e) { console.warn("[main] electron-updater not available:", e.message); }
 
 let processingBlockerId = null;
+
+// ════════════════════════════════════════════════════════════
+// Laya local — venv própria + lifecycle gerenciado pelo Electron
+// ════════════════════════════════════════════════════════════
+const LAYA_VERSION = "0.3.20";
+const LAYA_PORT = 8000;
+const LAYA_HOME = path.join(os.homedir(), ".ai-disec-pdf", "laya");
+const LAYA_VENV = path.join(LAYA_HOME, "venv");
+let layaProcess = null;
+
+function getLayaPythonPath() {
+  return process.platform === "win32"
+    ? path.join(LAYA_VENV, "Scripts", "python.exe")
+    : path.join(LAYA_VENV, "bin", "python");
+}
+
+function findSystemPython() {
+  const candidates = process.platform === "win32"
+    ? [
+        { command: "py", prefix: ["-3.11"] },
+        { command: "py", prefix: ["-3"] },
+        { command: "python", prefix: [] },
+      ]
+    : [
+        { command: "python3", prefix: [] },
+        { command: "python", prefix: [] },
+      ];
+
+  for (const candidate of candidates) {
+    try {
+      const r = spawnSync(
+        candidate.command,
+        [...candidate.prefix, "-c", "import sys; assert sys.version_info >= (3,10); print(sys.executable)"],
+        { encoding: "utf8", windowsHide: true, timeout: 5000 }
+      );
+      if (r.status === 0) {
+        return {
+          ...candidate,
+          executable: String(r.stdout || "").trim() || candidate.command,
+        };
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+function sendLayaProgress(line) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("laya:progress", { line: String(line || "") });
+  }
+}
+
+function runProcess(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      ...options,
+      shell: false,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stdout?.on("data", chunk => {
+      const text = chunk.toString();
+      text.split(/\r?\n/).filter(Boolean).forEach(sendLayaProgress);
+    });
+    child.stderr?.on("data", chunk => {
+      const text = chunk.toString();
+      stderr += text;
+      text.split(/\r?\n/).filter(Boolean).forEach(line => sendLayaProgress(line));
+    });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code === 0) resolve({ code: 0 });
+      else reject(new Error(`Processo saiu com código ${code}: ${stderr.slice(-1000)}`));
+    });
+  });
+}
+
+async function layaHealth(timeoutMs = 700) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`http://127.0.0.1:${LAYA_PORT}/health`, { signal: controller.signal });
+    if (!response.ok) return { running: false, health: null };
+    const health = await response.json().catch(() => null);
+    if (!health || health.status !== "ok") return { running: false, health: null };
+    return { running: true, health };
+  } catch {
+    return { running: false, health: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function getLayaInstallInfo() {
+  const pythonPath = getLayaPythonPath();
+  if (!fs.existsSync(pythonPath)) {
+    return { installed: false, version: null, pythonPath: null };
+  }
+  try {
+    const r = spawnSync(
+      pythonPath,
+      ["-I", "-c", "import laya; print(getattr(laya, '__version__', 'unknown'))"],
+      { encoding: "utf8", windowsHide: true, timeout: 10000 }
+    );
+    if (r.status !== 0) return { installed: false, version: null, pythonPath };
+    return {
+      installed: true,
+      version: String(r.stdout || "").trim() || "unknown",
+      pythonPath,
+    };
+  } catch {
+    return { installed: false, version: null, pythonPath };
+  }
+}
+
+async function getLayaStatus() {
+  const install = getLayaInstallInfo();
+  const health = await layaHealth();
+  return {
+    ...install,
+    ...health,
+    managedProcess: Boolean(layaProcess && !layaProcess.killed),
+    port: LAYA_PORT,
+  };
+}
+
+async function startLayaService({ silent = false } = {}) {
+  const current = await layaHealth();
+  if (current.running) return { ok: true, running: true, alreadyRunning: true };
+
+  const install = getLayaInstallInfo();
+  if (!install.installed || !install.pythonPath) {
+    return { ok: false, running: false, error: "Laya ainda não está instalado." };
+  }
+
+  if (layaProcess && !layaProcess.killed) {
+    return { ok: true, running: false, starting: true };
+  }
+
+  const physicalThreads = Math.max(1, Math.floor(os.cpus().length / 2));
+  layaProcess = spawn(install.pythonPath, ["-m", "laya.serve"], {
+    shell: false,
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      LAYA_HOST: "127.0.0.1",
+      LAYA_PORT: String(LAYA_PORT),
+      // Laya 0.3.20 aceita dispositivos Torch reais; "auto" não é válido.
+      LAYA_DEVICE: process.env.LAYA_DEVICE || "cpu",
+      LAYA_PRELOAD: "1",
+      LAYA_MODELS: "multilingual",
+      LAYA_THREADS: process.env.LAYA_THREADS || String(physicalThreads),
+      LAYA_LOG_LEVEL: silent ? "warning" : "info",
+    },
+  });
+
+  layaProcess.stdout?.on("data", chunk => {
+    chunk.toString().split(/\r?\n/).filter(Boolean).forEach(line => {
+      console.log("[laya]", line);
+      sendLayaProgress(line);
+    });
+  });
+  layaProcess.stderr?.on("data", chunk => {
+    chunk.toString().split(/\r?\n/).filter(Boolean).forEach(line => {
+      console.log("[laya]", line);
+      sendLayaProgress(line);
+    });
+  });
+  layaProcess.on("error", err => {
+    console.error("[laya] Falha ao iniciar:", err.message);
+    sendLayaProgress("Falha ao iniciar Laya: " + err.message);
+    layaProcess = null;
+  });
+  layaProcess.on("close", code => {
+    console.log("[laya] Processo finalizado:", code);
+    sendLayaProgress("Laya finalizado (código " + code + ").");
+    layaProcess = null;
+  });
+
+  sendLayaProgress("Laya iniciando com checkpoint multilingual...");
+  return { ok: true, running: false, starting: true };
+}
+
+function stopLayaService() {
+  if (!layaProcess || layaProcess.killed) {
+    layaProcess = null;
+    return { ok: true, stopped: true };
+  }
+  try {
+    layaProcess.kill();
+    layaProcess = null;
+    return { ok: true, stopped: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+ipcMain.handle("laya:status", async () => getLayaStatus());
+
+ipcMain.handle("laya:install", async () => {
+  try {
+    const existing = getLayaInstallInfo();
+    if (existing.installed) {
+      return { ok: true, ...existing, alreadyInstalled: true };
+    }
+
+    const systemPython = findSystemPython();
+    if (!systemPython) {
+      return {
+        ok: false,
+        error: "Python 3.10+ não encontrado. Instale Python 3.11 e marque a opção de adicionar ao PATH.",
+      };
+    }
+
+    fs.mkdirSync(LAYA_HOME, { recursive: true });
+    const venvPython = getLayaPythonPath();
+    if (!fs.existsSync(venvPython)) {
+      sendLayaProgress("Criando ambiente Python isolado para o Laya...");
+      await runProcess(
+        systemPython.command,
+        [...systemPython.prefix, "-m", "venv", LAYA_VENV]
+      );
+    }
+
+    sendLayaProgress("Atualizando pip do ambiente Laya...");
+    await runProcess(venvPython, ["-m", "pip", "install", "--upgrade", "pip"]);
+
+    sendLayaProgress(`Instalando laya[serve]==${LAYA_VERSION}...`);
+    await runProcess(venvPython, ["-m", "pip", "install", `laya[serve]==${LAYA_VERSION}`]);
+
+    const installed = getLayaInstallInfo();
+    if (!installed.installed) {
+      return { ok: false, error: "A instalação terminou, mas o módulo Laya não pôde ser importado." };
+    }
+
+    sendLayaProgress(`Laya ${installed.version} instalado.`);
+    return { ok: true, ...installed };
+  } catch (e) {
+    console.error("[laya] Erro na instalação:", e);
+    return { ok: false, error: e.message || String(e) };
+  }
+});
+
+ipcMain.handle("laya:start", async () => startLayaService({ silent: false }));
+ipcMain.handle("laya:stop", async () => stopLayaService());
+
 
 ipcMain.on("processing-started", () => {
   if (processingBlockerId === null) {
@@ -421,6 +669,9 @@ app.whenReady().then(async () => {
     if (ok) {
       console.log("[main] Server started. Creating window...");
       createWindow();
+      if (getLayaInstallInfo().installed) {
+        startLayaService({ silent: true }).catch(err => console.warn("[laya] Auto-start falhou:", err.message));
+      }
       app.on("activate", () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
       });
@@ -432,6 +683,10 @@ app.whenReady().then(async () => {
     console.error("[main] App error:", err);
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  stopLayaService();
 });
 
 app.on("window-all-closed", () => {

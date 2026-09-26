@@ -49,6 +49,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("ollama:pull-progress", cb);
   },
 
+  // Laya local: instalação isolada + lifecycle
+  layaStatus: () => ipcRenderer.invoke("laya:status"),
+  layaInstall: () => ipcRenderer.invoke("laya:install"),
+  layaStart: () => ipcRenderer.invoke("laya:start"),
+  layaStop: () => ipcRenderer.invoke("laya:stop"),
+  onLayaProgress: (fn) => {
+    const cb = (_e, progress) => fn(progress);
+    ipcRenderer.on("laya:progress", cb);
+    return () => ipcRenderer.removeListener("laya:progress", cb);
+  },
+
   // Codex OAuth login
   codexLogin: () => ipcRenderer.invoke("codex:login"),
   codexLogout: () => ipcRenderer.invoke("codex:logout"),

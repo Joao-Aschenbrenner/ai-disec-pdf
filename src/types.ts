@@ -5,6 +5,13 @@ export interface ExtractedMetadata {
   valor: number | null;
   pessoaNome: string | null;
   documentType: 'nota_fiscal' | 'imposto' | 'darf' | 'extrato' | 'planilha' | 'folha_pagamento' | 'outros' | 'nao_identificado';
+  /** Classe fina definida pelo CLASSIFICATION-V2. Mantemos documentType para compatibilidade da UI. */
+  documentClass?: string;
+  classificationText?: string;
+  classificationConfidence?: number;
+  classificationSource?: string;
+  classificationEvidence?: string[];
+  needsReview?: boolean;
 }
 
 export interface FilenameOptions {
@@ -37,4 +44,8 @@ export interface SplitPage {
   retryAfter?: string;
   metadata?: ExtractedMetadata;
   metadataList?: ExtractedMetadata[];
+  /** Segmento gerado quando uma página física contém mais de um documento. */
+  sourcePageIndex?: number;
+  segmentIndex?: number;
+  segmentPosition?: 'top' | 'bottom';
 }
