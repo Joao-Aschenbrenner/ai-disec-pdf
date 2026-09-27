@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import dotenv from "dotenv";
-import { applyDocumentRouting } from "./classification/documentRouter";
 import { applyDocumentRoutingV3, routeDocumentV3 } from "./classification/v3Router";
 import { resolveSequence } from "./classification/sequenceResolver";
 import { getLearningStats, rememberConfirmedClassification, findConfirmedPattern } from "./classification/learningStore";
@@ -328,7 +327,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
       // Seleciona provedor de IA
        const provider = settings.provider || "GOOGLE";
-       const modelTier = settings.modelTier || "medium";
+       const configuredTier = settings.modelTier || "auto";
+       const hintedTier = v3Hint?.modelTier === "fast" ? "fast" : "medium";
+       // Automático nunca promove sozinho para o tier precise/Nemotron.
+       const modelTier = configuredTier === "auto" ? hintedTier : configuredTier;
        let aiResponse;
        try {
          // Helper for OpenAI-compatible providers. The endpoint is selected from
@@ -632,8 +634,12 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
        await logError("Unhandled exception in /api/extract", error);
        await logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", error.message || "Erro desconhecido");
        console.error("[AI OCR Error]:", error);
-       return res.status(500).json({
-         error: error.message || "Erro desconhecido ao processar documento."
+       const aborted = error?.name === "AbortError" || /aborted/i.test(String(error?.message || ""));
+       return res.status(aborted ? 504 : 500).json({
+         error: aborted
+           ? "Tempo limite do provedor excedido. Tente novamente; o Classification V3 aplicará backoff."
+           : (error.message || "Erro desconhecido ao processar documento."),
+         retryable: aborted
        });
      }
   });
@@ -739,7 +745,7 @@ app.get("/api/settings", (req, res) => {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
       return res.json(data);
     }
-    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "medium" });
+    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
   } catch {
     return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "medium" });
   }
@@ -768,7 +774,7 @@ function getSettings() {
       return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
     }
   } catch {}
-  return { provider: "NVIDIA", apiKey: "", model: "", modelTier: "medium" };
+  return { provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" };
 }
 
 // ─── Models API ───────────────────────────────────────
@@ -833,7 +839,7 @@ app.get("/api/logs", (req, res) => {
   }
 
   return new Promise<void>((resolve) => {
-    serverInstance = app.listen(PORT, "0.0.0.0", () => {
+    serverInstance = app.listen(PORT, "127.0.0.1", () => {
       console.log(`Server running on http://localhost:${PORT}`);
       resolve();
     });
