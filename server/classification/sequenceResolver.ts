@@ -107,8 +107,14 @@ export function resolveSequence(pages: SequencePage[]): SequenceResolution[] {
       }
     }
 
-    // Contexto só muda a página se for claramente melhor que a decisão atual.
-    if (bestClass && bestScore >= Math.max(0.72, current.confidence + 0.12)) {
+    // Quando a página já está marcada para revisão, a confidence do Laya não é
+    // calibrada e pode vir como 1.0 mesmo estando errada. Nesse caso, contexto
+    // forte de anterior+seguinte pode corrigir sem precisar "superar 100%".
+    const requiredScore = current.needsReview
+      ? 0.78
+      : Math.max(0.72, current.confidence + 0.12);
+
+    if (bestClass && bestScore >= requiredScore) {
       return {
         ...current,
         documentClass: bestClass,
