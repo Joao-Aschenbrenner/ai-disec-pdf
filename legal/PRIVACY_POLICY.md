@@ -12,7 +12,7 @@ O aplicativo e o servidor interno rodam localmente na máquina do usuário. O au
 - O split, a geração de ZIP, as regras de classificação, o SequenceResolver, os nomes dos arquivos, o Learning Store e o Laya local podem operar inteiramente na máquina do usuário.
 - Os arquivos PDF processados e gerados permanecem no sistema de arquivos local, sob controle do usuário.
 - Ollama Local e Laya local não enviam dados a provedores cloud.
-- O Learning Store da Classification V3 é salvo localmente em `~/.ai-disec-pdf/learning-store.json` e armazena fingerprints de tokens/classes confirmadas, não a imagem/base64 nem o texto integral do documento.
+- O Learning Store da Classification V3 é salvo localmente em `~/.ai-disec-pdf/learning-store.json` e armazena fingerprints de tokens com hash/classes confirmadas, não a imagem/base64 nem o texto integral do documento.
 - Nenhum fine-tuning automático é executado sem uma etapa futura explícita de treinamento/validação.
 - Nenhuma telemetria, analytics ou rastreamento está embutido no Software.
 
