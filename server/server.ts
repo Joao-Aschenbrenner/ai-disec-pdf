@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import { applyDocumentRoutingV3, routeDocumentV3 } from "./classification/v3Router";
 import { resolveSequence, toSequenceLegacyType } from "./classification/sequenceResolver";
 import { getLearningStats, rememberConfirmedClassification, findConfirmedPattern } from "./classification/learningStore";
+import { DOCUMENT_CLASSES } from "./classification/documentTaxonomy";
 import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { getLayaHealth } from "./classification/layaClient";
 
@@ -727,8 +728,8 @@ app.get("/api/learning/stats", (_req, res) => {
 app.post("/api/learning/confirm", (req, res) => {
   try {
     const { documentClass, text, previousClass, nextClass } = req.body || {};
-    if (!documentClass || !text || String(text).trim().length < 20) {
-      return res.status(400).json({ error: "documentClass e texto útil são obrigatórios" });
+    if (!documentClass || !DOCUMENT_CLASSES.includes(documentClass) || !text || String(text).trim().length < 20) {
+      return res.status(400).json({ error: "documentClass válido e texto útil são obrigatórios" });
     }
     const saved = rememberConfirmedClassification({
       documentClass,
