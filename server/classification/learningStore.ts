@@ -127,7 +127,6 @@ export function getLearningStats() {
   return {
     examples: examples.length,
     byClass,
-    file: STORE_FILE,
     autoFineTune: false,
   };
 }
