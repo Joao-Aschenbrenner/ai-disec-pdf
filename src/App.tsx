@@ -1174,6 +1174,7 @@ export default function App() {
       const queue = workingPages.filter(p => p.status !== "success");
       const concurrencyLimit = providerConcurrency(currentProvider);
       const activePromises: Promise<void>[] = [];
+      const finalPhysical = new Map<string, SplitPage>();
 
       while (queue.length > 0 || activePromises.length > 0) {
         while (queue.length > 0 && activePromises.length < concurrencyLimit) {
@@ -1188,6 +1189,7 @@ export default function App() {
           const process = async () => {
             const result = await processWithRetry(page);
             replaceProcessedResult(page.id, result);
+            finalPhysical.set(page.id, Array.isArray(result) ? result[0] : result);
             const idx = activePromises.indexOf(promise);
             if (idx !== -1) activePromises.splice(idx, 1);
           };
@@ -1198,6 +1200,97 @@ export default function App() {
 
         if (activePromises.length > 0) {
           await Promise.race(activePromises);
+        }
+      }
+
+      // PASSAGEM 3: reavalia a sequência já com classificationText vindo do VLM.
+      // É aqui que "página 2 do extrato" pode vencer um falso TED isolado do Laya.
+      const finalSequenceInput = workingPages
+        .map(page => finalPhysical.get(page.id))
+        .filter((page): page is SplitPage => Boolean(page?.metadata))
+        .map(page => ({
+          pageIndex: page.sourcePageIndex ?? page.index,
+          documentClass: page.metadata!.documentClass || "OUTRO",
+          confidence: Number(page.metadata!.classificationConfidence || 0),
+          source: page.metadata!.classificationSource || "fallback",
+          text: page.metadata!.classificationText || page.localText || "",
+          needsReview: Boolean(page.metadata!.needsReview),
+        }));
+
+      if (finalSequenceInput.length > 1) {
+        setSplitPages(prev => prev.map(page =>
+          page.status === "success"
+            ? { ...page, processingStage: "validating", processingProgress: 96 }
+            : page
+        ));
+
+        const seqRes = await fetch("/api/classification/sequence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pages: finalSequenceInput }),
+        });
+        const seqData = await seqRes.json().catch(() => ({}));
+
+        if (seqRes.ok && Array.isArray(seqData.pages)) {
+          const seqByPage = new Map<number, any>(
+            seqData.pages.map((item: any) => [Number(item.pageIndex), item])
+          );
+
+          setSplitPages(prev => prev.map(page => {
+            if (!page.metadata) return page;
+            const seq: any = seqByPage.get(page.sourcePageIndex ?? page.index);
+            if (!seq?.sequenceAdjusted) {
+              return {
+                ...page,
+                processingStage: page.metadata.needsReview ? "review" : "done",
+                processingProgress: 100,
+              };
+            }
+
+            const currentConfidence = Number(page.metadata.classificationConfidence || 0);
+            const sequenceConfidence = Number(seq.confidence || 0);
+            if (sequenceConfidence <= currentConfidence && !page.metadata.needsReview) {
+              return {
+                ...page,
+                processingStage: "done",
+                processingProgress: 100,
+              };
+            }
+
+            const updatedMetadata: ExtractedMetadata = {
+              ...page.metadata,
+              documentClass: seq.documentClass,
+              documentType: seq.documentType,
+              classificationConfidence: sequenceConfidence,
+              classificationSource: "sequence",
+              classificationEvidence: [
+                ...(page.metadata.classificationEvidence || []),
+                `sequence:${seq.sequenceReason || "context"}`,
+              ],
+              sequenceAdjusted: true,
+              sequenceReason: seq.sequenceReason,
+              needsReview: Boolean(seq.needsReview),
+            };
+
+            let customFilename = generatePageFilename(
+              page.originalFileName,
+              page.sourcePageIndex ?? page.index,
+              updatedMetadata,
+              filenameOptions
+            );
+            if (removeOriginalName) {
+              const marker = customFilename.indexOf("_pag");
+              if (marker >= 0) customFilename = customFilename.substring(marker + 1);
+            }
+
+            return {
+              ...page,
+              metadata: updatedMetadata,
+              customFilename,
+              processingStage: updatedMetadata.needsReview ? "review" : "done",
+              processingProgress: 100,
+            };
+          }));
         }
       }
     } catch (error: any) {
