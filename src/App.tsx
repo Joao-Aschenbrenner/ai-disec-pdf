@@ -760,6 +760,34 @@ export default function App() {
 
   type ProcessedPageResult = SplitPage | SplitPage[];
 
+  const updatePageStage = (
+    id: string,
+    processingStage: SplitPage["processingStage"],
+    processingProgress: number
+  ) => {
+    setSplitPages(prev => prev.map(p =>
+      p.id === id ? { ...p, processingStage, processingProgress } : p
+    ));
+  };
+
+  async function mapPool<T, R>(
+    items: T[],
+    concurrency: number,
+    worker: (item: T, index: number) => Promise<R>
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let cursor = 0;
+    const runners = Array.from({ length: Math.max(1, Math.min(concurrency, items.length || 1)) }, async () => {
+      while (true) {
+        const index = cursor++;
+        if (index >= items.length) return;
+        results[index] = await worker(items[index], index);
+      }
+    });
+    await Promise.all(runners);
+    return results;
+  }
+
   const requestExtraction = async (
     imageBase64: string,
     page: SplitPage,
@@ -772,14 +800,16 @@ export default function App() {
         pdfBase64: imageBase64,
         originalName: page.originalFileName,
         pageIndex: page.sourcePageIndex ?? page.index,
+        v3Hint: page.v3Hint,
         ...(correction ? { correction } : {}),
       }),
     });
 
     if (!response.ok) {
-      const errJson = await response.json();
+      const errJson = await response.json().catch(() => ({}));
       const err = new Error(errJson.error || "Erro de requisição.") as any;
       err.retryAfter = errJson.retryAfter;
+      err.status = response.status;
       throw err;
     }
     return response.json();
@@ -806,76 +836,88 @@ export default function App() {
       ...targetPage,
       id,
       status: "success",
+      processingStage: metadata.needsReview ? "review" : "done",
+      processingProgress: 100,
       metadata,
       metadataList: undefined,
       customFilename,
     };
   };
 
-  // Processa uma página. Quando uma página física contém dois holerites,
-  // retorna dois SplitPage reais (PDFs cropados), não apenas metadataList.
+  const splitAndProcessStackedPage = async (
+    id: string,
+    page: SplitPage,
+    separatorRatio: number,
+    correction?: string
+  ): Promise<SplitPage[]> => {
+    const segments = await splitPdfPageAtRatio(page.base64, separatorRatio);
+    segments.forEach(s => blobUrlsRef.current.push(s.blobUrl));
+    const results: SplitPage[] = [];
+
+    // Segmentos são deliberadamente processados em sequência para manter ordem topo -> baixo
+    // e para não duplicar carga no provider.
+    for (const segment of segments) {
+      const segmentPage: SplitPage = {
+        ...page,
+        id: `${id}-s${segment.segmentIndex + 1}`,
+        base64: segment.base64,
+        blobUrl: segment.blobUrl,
+        sourcePageIndex: page.sourcePageIndex ?? page.index,
+        segmentIndex: segment.segmentIndex,
+        segmentPosition: segment.position,
+        status: "processing",
+        processingStage: "extracting",
+        processingProgress: 55,
+      };
+      const segmentResult = await processSinglePage(segmentPage.id, segmentPage, correction);
+      if (Array.isArray(segmentResult)) {
+        results.push(...segmentResult);
+      } else {
+        results.push(segmentResult);
+      }
+    }
+    return results;
+  };
+
   const processSinglePage = async (
     id: string,
     page: SplitPage,
     correction?: string
   ): Promise<ProcessedPageResult> => {
     try {
+      updatePageStage(id, "extracting", 50);
       const imageBase64 = await pdfBase64ToJpeg(page.base64);
-      const result = await requestExtraction(imageBase64, page, correction);
 
-      // Caso a IA já tenha identificado 2 documentos, convertemos imediatamente
-      // a página física em dois PDFs independentes, preservando ordem topo -> baixo.
+      // V3: se a primeira/segunda passagem já indicou holerite, detecta layout ANTES
+      // de mandar a página física inteira ao VLM.
+      const hintedPayroll =
+        page.v3Hint?.documentClass === "HOLERITE" ||
+        page.v3Hint?.documentClass === "HOLERITE_13";
+
+      if (hintedPayroll && page.segmentIndex === undefined) {
+        updatePageStage(id, "identifying", 42);
+        const layout = await detectStackedDocumentSeparator(imageBase64);
+        if (layout.likely && layout.separatorRatio !== null) {
+          return splitAndProcessStackedPage(id, page, layout.separatorRatio, correction);
+        }
+      }
+
+      updatePageStage(id, "extracting", 62);
+      const result = await requestExtraction(imageBase64, page, correction);
+      updatePageStage(id, "validating", 82);
+
+      // Se o VLM encontrou dois documentos, materializa dois PDFs. Tenta usar o
+      // separador visual real e cai para 50/50 somente se não houver separador confiável.
       if (
         result._multiple &&
         Array.isArray(result.documents) &&
         result.documents.length === 2 &&
         page.segmentIndex === undefined
       ) {
-        try {
-          const segments = await splitPdfPageIntoHorizontalHalves(page.base64);
-          segments.forEach(s => blobUrlsRef.current.push(s.blobUrl));
-          const segmentedResults: SplitPage[] = [];
-
-          // Mesmo quando o VLM detecta dois documentos, cada metade precisa
-          // ser enviada novamente para extração antes de entrar no ZIP.
-          for (const segment of segments) {
-            const segmentPage: SplitPage = {
-              ...page,
-              id: `${id}-s${segment.segmentIndex + 1}`,
-              base64: segment.base64,
-              blobUrl: segment.blobUrl,
-              sourcePageIndex: page.sourcePageIndex ?? page.index,
-              segmentIndex: segment.segmentIndex,
-              segmentPosition: segment.position,
-              status: "processing",
-            };
-
-            try {
-              const segmentImage = await pdfBase64ToJpeg(segment.base64);
-              const segmentResult = await requestExtraction(segmentImage, segmentPage, correction);
-              const segmentMeta: ExtractedMetadata =
-                segmentResult?._multiple && Array.isArray(segmentResult.documents)
-                  ? segmentResult.documents[0]
-                  : segmentResult;
-
-              segmentedResults.push(buildProcessedPage(segmentPage.id, segmentPage, segmentMeta));
-            } catch (segmentError: any) {
-              segmentedResults.push({
-                ...segmentPage,
-                status: "failed",
-                error: segmentError?.message || "Falha ao processar segmento",
-                retryAfter: segmentError?.retryAfter,
-              });
-            }
-          }
-
-          return segmentedResults;
-        } catch (segmentError) {
-          console.warn("[segment] Falha ao separar 2 documentos; mantendo página combinada.", segmentError);
-        }
+        const layout = await detectStackedDocumentSeparator(imageBase64);
+        return splitAndProcessStackedPage(id, page, layout.separatorRatio ?? 0.5, correction);
       }
 
-      // Compatibilidade para arrays inesperados (>2 ou página já segmentada).
       if (result._multiple && Array.isArray(result.documents)) {
         const docs = result.documents as ExtractedMetadata[];
         const firstMeta = docs[0];
@@ -888,6 +930,8 @@ export default function App() {
           id,
           ...page,
           status: "success",
+          processingStage: docs.some(d => d.needsReview) ? "review" : "done",
+          processingProgress: 100,
           metadata: firstMeta,
           metadataList: docs,
           customFilename,
@@ -895,74 +939,71 @@ export default function App() {
       }
 
       const metadata = result as ExtractedMetadata;
-
-      // IA fraca pode não perceber os dois holerites. Depois que o router local
-      // confirma HOLERITE, usamos layout conservador para decidir se vale reprocessar
-      // as duas metades separadamente.
       const isIndividualPayroll =
         metadata.documentClass === "HOLERITE" ||
         metadata.documentClass === "HOLERITE_13";
 
-      if (
-        isIndividualPayroll &&
-        page.segmentIndex === undefined &&
-        await imageLikelyHasTwoStackedDocuments(imageBase64)
-      ) {
-        try {
-          const segments = await splitPdfPageIntoHorizontalHalves(page.base64);
-          segments.forEach(s => blobUrlsRef.current.push(s.blobUrl));
-          const segmentedResults: SplitPage[] = [];
-
-          for (const segment of segments) {
-            const segmentPage: SplitPage = {
-              ...page,
-              id: `${id}-s${segment.segmentIndex + 1}`,
-              base64: segment.base64,
-              blobUrl: segment.blobUrl,
-              sourcePageIndex: page.sourcePageIndex ?? page.index,
-              segmentIndex: segment.segmentIndex,
-              segmentPosition: segment.position,
-              status: "processing",
-            };
-
-            try {
-              const segmentImage = await pdfBase64ToJpeg(segment.base64);
-              const segmentResult = await requestExtraction(segmentImage, segmentPage, correction);
-              const segmentMeta: ExtractedMetadata =
-                segmentResult?._multiple && Array.isArray(segmentResult.documents)
-                  ? segmentResult.documents[0]
-                  : segmentResult;
-
-              segmentedResults.push(
-                buildProcessedPage(segmentPage.id, segmentPage, segmentMeta)
-              );
-            } catch (segmentError: any) {
-              segmentedResults.push({
-                ...segmentPage,
-                status: "failed",
-                error: segmentError?.message || "Falha ao processar segmento",
-                retryAfter: segmentError?.retryAfter,
-              });
-            }
-          }
-
-          if (segmentedResults.length === 2) return segmentedResults;
-        } catch (segmentError) {
-          console.warn("[segment] Detector sugeriu 2 documentos, mas crop falhou.", segmentError);
+      // Fallback: quando o texto local não permitiu antecipar a classe, o resultado
+      // final ainda pode acionar o detector de layout.
+      if (isIndividualPayroll && page.segmentIndex === undefined) {
+        const layout = await detectStackedDocumentSeparator(imageBase64);
+        if (layout.likely && layout.separatorRatio !== null) {
+          return splitAndProcessStackedPage(id, page, layout.separatorRatio, correction);
         }
       }
 
+      updatePageStage(id, "confirming", 94);
       return buildProcessedPage(id, page, metadata);
     } catch (err: any) {
-      console.error("Page processing failed", page.index + 1, err);
+      const aborted = err?.name === "AbortError" || /aborted/i.test(String(err?.message || ""));
+      const message = aborted
+        ? "Tempo limite do provedor excedido. A página será tentada novamente."
+        : (err?.message || "Erro de processamento");
+      console.error("Page processing failed", page.index + 1, message);
       return {
         id,
         ...page,
         status: "failed",
-        error: err.message || "Erro de processamento",
-        retryAfter: err.retryAfter,
+        processingStage: "failed",
+        processingProgress: 100,
+        error: message,
+        retryAfter: err?.retryAfter,
       };
     }
+  };
+
+  const processWithRetry = async (
+    page: SplitPage,
+    correction?: string
+  ): Promise<ProcessedPageResult> => {
+    const delays = [2000, 5000, 10000];
+    let last: ProcessedPageResult | null = null;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const result = await processSinglePage(page.id, page, correction);
+      last = result;
+
+      if (Array.isArray(result)) return result;
+      if (result.status !== "failed") return result;
+      if (attempt === 3) return result;
+
+      let delayMs = delays[attempt - 1];
+      if (result.retryAfter) {
+        const match = result.retryAfter.match(/(\d+)/);
+        if (match) delayMs = Math.max(delayMs, parseInt(match[1], 10) * 1000);
+      }
+
+      updatePageStage(page.id, "retrying", 48);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+
+    return last || {
+      ...page,
+      status: "failed",
+      processingStage: "failed",
+      processingProgress: 100,
+      error: "Falha após 3 tentativas",
+    };
   };
 
   const replaceProcessedResult = (targetId: string, result: ProcessedPageResult) => {
@@ -980,80 +1021,192 @@ export default function App() {
     });
   };
 
-  // Run bulk or sequential processing of all pages
+  const runV3Prepasses = async (pages: SplitPage[]): Promise<SplitPage[]> => {
+    const healthRes = await fetch("/api/classification/health");
+    const health = await healthRes.json().catch(() => ({}));
+    if (!healthRes.ok || !health?.laya?.healthy) {
+      const error: any = new Error("Classification V3 exige Laya ativo. Abra Configurações e inicie o Laya.");
+      error.code = "LAYA_REQUIRED";
+      throw error;
+    }
+
+    // PASSAGEM 1A: extrai camada de texto local. Em scan puro isso retorna vazio,
+    // e a página será classificada pelo Laya depois que o VLM produzir classificationText.
+    const withText = await mapPool(pages, 4, async (page) => {
+      updatePageStage(page.id, "preparing", 8);
+      let localText = "";
+      try {
+        localText = await extractEmbeddedPdfText(page.base64);
+      } catch {
+        localText = "";
+      }
+      updatePageStage(page.id, "laya", 18);
+      return {
+        ...page,
+        localText: hasUsefulEmbeddedText(localText) ? localText : "",
+        processingStage: "laya" as const,
+        processingProgress: 18,
+      };
+    });
+    setSplitPages(withText);
+
+    const pass1Res = await fetch("/api/classification/pass1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pages: withText.map(p => ({
+          pageIndex: p.sourcePageIndex ?? p.index,
+          text: p.localText || "",
+        })),
+      }),
+    });
+    const pass1 = await pass1Res.json().catch(() => ({}));
+    if (!pass1Res.ok) throw new Error(pass1.error || "Falha na primeira passagem do classificador.");
+
+    const pass1ByIndex = new Map<number, any>(
+      (pass1.pages || []).map((p: any) => [Number(p.pageIndex), p])
+    );
+
+    const prelim = withText.map((page) => {
+      const p1 = pass1ByIndex.get(page.sourcePageIndex ?? page.index) || {};
+      return {
+        ...page,
+        processingStage: "identifying" as const,
+        processingProgress: 30,
+        v3Hint: {
+          documentClass: p1.documentClass,
+          confidence: Number(p1.confidence || 0),
+          source: p1.source || "no-local-text",
+          sequenceAdjusted: false,
+        },
+      };
+    });
+    setSplitPages(prelim);
+
+    // PASSAGEM 2: usa anterior/atual/próxima para páginas sem cabeçalho.
+    const seqRes = await fetch("/api/classification/sequence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pages: prelim.map((page, index) => ({
+          pageIndex: page.sourcePageIndex ?? page.index,
+          documentClass: page.v3Hint?.documentClass || "OUTRO",
+          confidence: page.v3Hint?.confidence || 0,
+          source: page.v3Hint?.source || "fallback",
+          text: page.localText || "",
+          needsReview: (page.v3Hint?.confidence || 0) < 0.80,
+        })),
+      }),
+    });
+    const sequence = await seqRes.json().catch(() => ({}));
+    if (!seqRes.ok) throw new Error(sequence.error || "Falha na validação de sequência.");
+
+    const sequencePages = sequence.pages || [];
+    const seqByIndex = new Map<number, any>(
+      sequencePages.map((p: any) => [Number(p.pageIndex), p])
+    );
+
+    const resolved = prelim.map((page, index) => {
+      const seq: any = seqByIndex.get(page.sourcePageIndex ?? page.index) || {};
+      const previous = sequencePages[index - 1];
+      const next = sequencePages[index + 1];
+      const confidence = Number(seq.confidence ?? page.v3Hint?.confidence ?? 0);
+      const autoTier =
+        confidence >= 0.90 && !seq.needsReview
+          ? "fast"
+          : "medium"; // auto nunca força Nemotron preciso; GLM continua padrão NVIDIA.
+      return {
+        ...page,
+        processingStage: "validating" as const,
+        processingProgress: 38,
+        v3Hint: {
+          documentClass: seq.documentClass || page.v3Hint?.documentClass,
+          confidence,
+          source: seq.source || page.v3Hint?.source,
+          previousClass: previous?.documentClass || null,
+          nextClass: next?.documentClass || null,
+          sequenceAdjusted: Boolean(seq.sequenceAdjusted),
+          sequenceReason: seq.sequenceReason || null,
+          modelTier: autoTier,
+        } as any,
+      };
+    });
+
+    setSplitPages(resolved);
+    return resolved;
+  };
+
+  // Classification V3: três passagens e visão com concorrência adaptativa.
   const processAllPages = async () => {
     if (splitPages.length === 0 || isProcessing) return;
+
+    // Laya é requisito explícito da V3.
+    try {
+      const healthRes = await fetch("/api/classification/health");
+      const health = await healthRes.json().catch(() => ({}));
+      if (!healthRes.ok || !health?.laya?.healthy) {
+        setShowSettings(true);
+        alert("O Classification V3 exige o Laya ativo. Inicie o Laya em Configurações antes de processar.");
+        return;
+      }
+    } catch {
+      setShowSettings(true);
+      alert("Não foi possível validar o Laya. Abra Configurações e confirme que ele está ativo.");
+      return;
+    }
+
     setIsProcessing(true);
     window.electronAPI?.startProcessing();
 
-    // Deep clone to reset state for processing
-    const updatedPages = splitPages.map(p => ({
-      ...p,
-      status: (p.status === "success" ? "success" : "pending") as "success" | "pending",
-      error: undefined,
-      retryAfter: undefined,
-    }));
-    setSplitPages(updatedPages);
+    try {
+      const initialPages = splitPages.map(p => ({
+        ...p,
+        status: (p.status === "success" ? "success" : "pending") as "success" | "pending",
+        error: undefined,
+        retryAfter: undefined,
+        processingStage: (p.status === "success" ? "done" : "waiting") as SplitPage["processingStage"],
+        processingProgress: p.status === "success" ? 100 : 0,
+      }));
+      setSplitPages(initialPages);
 
-    // Process queued items with a concurrency control limit
-    const queue = updatedPages.filter(p => p.status !== "success");
-    // Track retry count per page id
-    const retries: Record<string, number> = {};
-    
-    // Simple async pool loop
-    const activePromises: Promise<void>[] = [];
-    
-    while (queue.length > 0 || activePromises.length > 0) {
-      // Fill pool up to the limit
-      while (queue.length > 0 && activePromises.length < MAX_CONCURRENT_REQUESTS) {
-        const page = queue.shift()!;
-        
-        // Update item status in UI to 'processing'
-        setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
+      const workingPages = await runV3Prepasses(initialPages);
+      const queue = workingPages.filter(p => p.status !== "success");
+      const concurrencyLimit = providerConcurrency(currentProvider);
+      const activePromises: Promise<void>[] = [];
 
-        const process = async () => {
-          const result = await processSinglePage(page.id, page);
+      while (queue.length > 0 || activePromises.length > 0) {
+        while (queue.length > 0 && activePromises.length < concurrencyLimit) {
+          const page = queue.shift()!;
+          setSplitPages(prev => prev.map(p =>
+            p.id === page.id
+              ? { ...p, status: "processing", processingStage: "extracting", processingProgress: 45 }
+              : p
+          ));
 
-          // Auto-retry apenas quando a página física inteira falhou.
-          // Segmentos já materializados podem ser reprocessados individualmente pela UI.
-          if (!Array.isArray(result) && result.status === "failed") {
-            const attempt = (retries[page.id] || 0) + 1;
-            retries[page.id] = attempt;
-            
-            if (attempt < 3) {
-              let delayMs = 2000 * attempt; // 2s, 4s, 6s
-              if (result.retryAfter) {
-                const match = result.retryAfter.match(/(\d+)/);
-                if (match) delayMs = parseInt(match[1]) * 1000;
-              }
-              console.log(`[retry] ${page.id} tentativa ${attempt + 1} em ${delayMs}ms`);
-              await new Promise(r => setTimeout(r, delayMs));
-              // Re-process
-              const retryResult = await processSinglePage(page.id, page);
-              replaceProcessedResult(page.id, retryResult);
-            } else {
-              replaceProcessedResult(page.id, result);
-            }
-          } else {
+          let promise: Promise<void>;
+          const process = async () => {
+            const result = await processWithRetry(page);
             replaceProcessedResult(page.id, result);
-          }
+            const idx = activePromises.indexOf(promise);
+            if (idx !== -1) activePromises.splice(idx, 1);
+          };
 
-          // Remove self from active list
-          const idx = activePromises.indexOf(promise);
-          if (idx !== -1) activePromises.splice(idx, 1);
-        };
+          promise = process();
+          activePromises.push(promise);
+        }
 
-        const promise = process();
-        activePromises.push(promise);
+        if (activePromises.length > 0) {
+          await Promise.race(activePromises);
+        }
       }
-
-      if (activePromises.length > 0) {
-        await Promise.race(activePromises);
-      }
+    } catch (error: any) {
+      console.error("[Classification V3]", error);
+      if (error?.code === "LAYA_REQUIRED") setShowSettings(true);
+      alert(error?.message || "Falha no fluxo Classification V3.");
+    } finally {
+      setIsProcessing(false);
+      window.electronAPI?.endProcessing();
     }
-
-    setIsProcessing(false);
-    window.electronAPI?.endProcessing();
   };
 
   // Clear / Reset App
