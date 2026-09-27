@@ -12,6 +12,12 @@ export interface ExtractedMetadata {
   classificationSource?: string;
   classificationEvidence?: string[];
   needsReview?: boolean;
+  /** Classification V3 */
+  layaChecked?: boolean;
+  layaConfidence?: number;
+  sequenceAdjusted?: boolean;
+  sequenceReason?: string;
+  requiresVision?: boolean;
 }
 
 export interface FilenameOptions {
@@ -48,4 +54,17 @@ export interface SplitPage {
   sourcePageIndex?: number;
   segmentIndex?: number;
   segmentPosition?: 'top' | 'bottom';
+  /** Classification V3 orchestration */
+  localText?: string;
+  processingStage?: 'waiting' | 'preparing' | 'laya' | 'identifying' | 'extracting' | 'validating' | 'confirming' | 'done' | 'review' | 'retrying' | 'failed';
+  processingProgress?: number;
+  v3Hint?: {
+    documentClass?: string;
+    confidence?: number;
+    source?: string;
+    previousClass?: string | null;
+    nextClass?: string | null;
+    sequenceAdjusted?: boolean;
+    sequenceReason?: string | null;
+  };
 }
