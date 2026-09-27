@@ -4,6 +4,9 @@ import fs from "fs";
 import os from "os";
 import dotenv from "dotenv";
 import { applyDocumentRouting } from "./classification/documentRouter";
+import { applyDocumentRoutingV3, routeDocumentV3 } from "./classification/v3Router";
+import { resolveSequence } from "./classification/sequenceResolver";
+import { getLearningStats, rememberConfirmedClassification, findConfirmedPattern } from "./classification/learningStore";
 import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { getLayaHealth } from "./classification/layaClient";
 
@@ -286,7 +289,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
   app.post("/api/extract", async (req, res) => {
     try {
-      const { pdfBase64, originalName, pageIndex, correction } = req.body;
+      const { pdfBase64, originalName, pageIndex, correction, v3Hint } = req.body;
 
       if (!pdfBase64) {
         return res.status(400).json({ error: "Faltando dados do PDF (pdfBase64)." });
@@ -321,7 +324,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       // Mantemos estes termos no codigo como invariantes de regressao:
       // EXCLUSÃO DE CARIMBO | PREFEITURA | Termo de Colaboração | CARIMBO
       // MULTIPLICIDADE | 2 holerites | ARRAY | valor SEMPRE null | NÃO tente extrair Valor Líquido
-      const prompt = buildExtractionPrompt(correction);
+      const prompt = buildExtractionPrompt(correction, v3Hint);
 
       // Seleciona provedor de IA
        const provider = settings.provider || "GOOGLE";
@@ -342,7 +345,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
          const callOpenAICompatible = async (config: OpenAICompatConfig, image: string, promptText: string) => {
            const endpoint = new URL("/v1/chat/completions", OPENAI_COMPAT_BASE_URLS[config.provider]).toString();
            const controller = new AbortController();
-           const timeout = setTimeout(() => controller.abort(), 60_000);
+           const timeout = setTimeout(() => controller.abort(), config.provider === "NVIDIA" ? 120_000 : 75_000);
            const providerOptions = config.provider === "NVIDIA"
              ? config.model === "z-ai/glm-5.3-flash"
                ? { reasoning_effort: "low", chat_template_kwargs: { clear_thinking: true } }
@@ -616,13 +619,13 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
-        const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRouting(doc)));
-        await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V2)`, routedDocuments);
+        const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
+        await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V3)`, routedDocuments);
         return res.json({ _multiple: true, documents: routedDocuments });
       }
 
-      const routedData = await applyDocumentRouting(extractedData);
-      await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V2", routedData);
+      const routedData = await applyDocumentRoutingV3(extractedData, v3Hint);
+      await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", routedData);
       return res.json(routedData);
 
     } catch (error: any) {
@@ -635,14 +638,97 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
      }
   });
 
-// ─── Classification V2 health ─────────────────────
+// ─── Classification V3: pre-pass / sequence / learning ─────────────
 app.get("/api/classification/health", async (_req, res) => {
   const laya = await getLayaHealth();
   return res.json({
-    version: "classification-v2",
+    version: "classification-v3",
     laya,
-    strategy: "hard-signatures -> laya -> deterministic fallback/review"
+    layaRequired: true,
+    strategy: "local-text -> signatures+laya+learning -> sequence -> vision extraction -> final validation"
   });
+});
+
+app.post("/api/classification/pass1", async (req, res) => {
+  try {
+    const pages = Array.isArray(req.body?.pages) ? req.body.pages : [];
+    if (!pages.length) return res.status(400).json({ error: "pages obrigatório" });
+
+    const laya = await getLayaHealth(1500);
+    if (!laya.healthy) {
+      return res.status(503).json({
+        error: "Laya obrigatório para Classification V3. Inicie o Laya em Configurações.",
+        code: "LAYA_REQUIRED"
+      });
+    }
+
+    const results = [];
+    // Sequencial propositalmente: Laya é local e rápido; evita rajadas e deixa a ordem estável.
+    for (const page of pages) {
+      const text = String(page?.text || "").trim();
+      if (text.length < 20) {
+        results.push({
+          pageIndex: Number(page?.pageIndex || 0),
+          documentClass: "OUTRO",
+          documentType: "outros",
+          confidence: 0.05,
+          source: "no-local-text",
+          needsReview: true,
+          requiresVision: true,
+          layaChecked: false,
+          text
+        });
+        continue;
+      }
+
+      const routed = await routeDocumentV3(text);
+      const memory = findConfirmedPattern(text);
+      results.push({
+        pageIndex: Number(page?.pageIndex || 0),
+        ...routed,
+        text,
+        requiresVision: routed.needsReview || routed.confidence < 0.86,
+        learningMatch: memory
+      });
+    }
+
+    return res.json({ version: "classification-v3", pages: results });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Falha na passagem 1" });
+  }
+});
+
+app.post("/api/classification/sequence", async (req, res) => {
+  try {
+    const pages = Array.isArray(req.body?.pages) ? req.body.pages : [];
+    if (!pages.length) return res.status(400).json({ error: "pages obrigatório" });
+    const resolved = resolveSequence(pages);
+    return res.json({ version: "classification-v3", pages: resolved });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Falha no SequenceResolver" });
+  }
+});
+
+app.get("/api/learning/stats", (_req, res) => {
+  return res.json(getLearningStats());
+});
+
+app.post("/api/learning/confirm", (req, res) => {
+  try {
+    const { documentClass, text, previousClass, nextClass } = req.body || {};
+    if (!documentClass || !text || String(text).trim().length < 20) {
+      return res.status(400).json({ error: "documentClass e texto útil são obrigatórios" });
+    }
+    const saved = rememberConfirmedClassification({
+      documentClass,
+      text: String(text),
+      previousClass: previousClass || null,
+      nextClass: nextClass || null,
+    });
+    return res.json({ success: true, example: saved, stats: getLearningStats() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Falha ao salvar exemplo confirmado" });
+  }
 });
 
 // ─── Settings API ──────────────────────────────────
