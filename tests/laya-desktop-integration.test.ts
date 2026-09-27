@@ -43,9 +43,11 @@ describe("Laya desktop integration", () => {
     expect(client).toContain('model: "multilingual"');
   });
 
-  it("health não declara VLM como autoridade de classe", () => {
+  it("health declara Classification V3 e não torna VLM autoridade de classe", () => {
     const server = read("server/server.ts");
-    expect(server).toContain("hard-signatures -> laya -> deterministic fallback/review");
+    expect(server).toContain('version: "classification-v3"');
+    expect(server).toContain('layaRequired: true');
+    expect(server).toContain("local-text -> signatures+laya+learning -> sequence -> vision extraction -> final validation");
     expect(server).not.toContain('strategy: "hard-signatures -> laya -> VLM candidate');
   });
 });
