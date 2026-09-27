@@ -2135,8 +2135,11 @@ export default function App() {
                                     <button
                                       type="button"
                                       onClick={() => confirmClassification(idx)}
-                                      className="text-[9px] font-bold px-2 py-1 rounded bg-emerald-950/40 border border-emerald-800/30 text-emerald-300 hover:bg-emerald-900/50 cursor-pointer"
-                                      title="Confirma esta classe e salva o padrão no aprendizado local"
+                                      disabled={!page.metadata.documentClass}
+                                      className="text-[9px] font-bold px-2 py-1 rounded bg-emerald-950/40 border border-emerald-800/30 text-emerald-300 hover:bg-emerald-900/50 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                      title={page.metadata.documentClass
+                                        ? "Confirma esta classe e salva o padrão no aprendizado local"
+                                        : "Escolha primeiro uma Classe fina para ensinar o padrão"}
                                     >
                                       Confirmar e aprender
                                     </button>
