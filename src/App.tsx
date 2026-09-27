@@ -1141,7 +1141,7 @@ export default function App() {
       const previous = sequencePages[index - 1];
       const next = sequencePages[index + 1];
       const confidence = Number(seq.confidence ?? page.v3Hint?.confidence ?? 0);
-      const autoTier =
+      const autoTier: "fast" | "medium" =
         confidence >= 0.90 && !seq.needsReview
           ? "fast"
           : "medium"; // auto nunca força Nemotron preciso; GLM continua padrão NVIDIA.
@@ -1158,7 +1158,7 @@ export default function App() {
           sequenceAdjusted: Boolean(seq.sequenceAdjusted),
           sequenceReason: seq.sequenceReason || null,
           modelTier: autoTier,
-        } as any,
+        },
       };
     });
 
@@ -1365,6 +1365,7 @@ export default function App() {
     const usedZipNames = new Set<string>();
     
     for (const page of splitPages) {
+      if (page.status !== "success") continue;
       // Decode base64 to binary ArrayBuffer/Uint8Array
       const binaryString = window.atob(page.base64);
       const len = binaryString.length;
