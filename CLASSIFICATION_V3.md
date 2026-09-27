@@ -204,7 +204,7 @@ Arquivo local:
 ~/.ai-disec-pdf/learning-store.json
 ```
 
-O store NÃO salva o texto completo da página. Salva apenas fingerprint de tokens do exemplo confirmado + classe + contexto mínimo.
+O store NÃO salva o texto completo da página. Salva apenas fingerprint de tokens com hash do exemplo confirmado + classe + contexto mínimo.
 
 Nada é enviado para treinamento externo.
 
