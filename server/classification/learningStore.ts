@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
+import crypto from "crypto";
 import { DocumentClass } from "./documentTaxonomy";
 
 const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
@@ -28,11 +29,15 @@ function ensureDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+function hashToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex").slice(0, 16);
+}
+
 function tokenize(text: string): string[] {
   const stop = new Set([
     "DE","DA","DO","DAS","DOS","E","A","O","AS","OS","PARA","COM","EM","NO","NA","NOS","NAS"
   ]);
-  return Array.from(new Set(
+  const rawTokens = Array.from(new Set(
     (text || "")
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
@@ -41,6 +46,9 @@ function tokenize(text: string): string[] {
   ))
     .filter(token => !stop.has(token))
     .slice(0, 120);
+
+  // O store não persiste nomes, CPF/CNPJ ou palavras em claro.
+  return rawTokens.map(hashToken);
 }
 
 function load(): LearningExample[] {
