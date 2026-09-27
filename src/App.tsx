@@ -79,10 +79,31 @@ declare global {
 }
 import { sanitizeFilename, generatePageFilename, generateCombinedFilename, makeWindowsSafeFilename, resolveFilenameConflict } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
-import { imageLikelyHasTwoStackedDocuments, splitPdfPageIntoHorizontalHalves } from "./utils/pageSegmenter";
+import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalText";
+import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
 import { version as appVersion } from "../package.json";
 
-const MAX_CONCURRENT_REQUESTS = 4; // mais estável em tiers gratuitos e reduz 429
+const DEFAULT_CONCURRENT_REQUESTS = 2;
+function providerConcurrency(provider: string): number {
+  // GLM Vision mediu perto de 60s em smoke real; uma fila NVIDIA evita aborts/rate-limit em lote.
+  if (provider === "NVIDIA") return 1;
+  if (provider === "LOCAL_OLLAMA") return 1;
+  return DEFAULT_CONCURRENT_REQUESTS;
+}
+
+const PROCESSING_STAGE_LABELS: Record<string, string> = {
+  waiting: "Aguardando",
+  preparing: "Preparando página",
+  laya: "Classificando com Laya",
+  identifying: "Identificando documento",
+  extracting: "Extraindo campos",
+  validating: "Validando contexto",
+  confirming: "Confirmando",
+  retrying: "Tentando novamente",
+  done: "Pronto",
+  review: "Revisar",
+  failed: "Falhou",
+};
 
 let pageIdCounter = 0;
 function nextPageId(): string {
