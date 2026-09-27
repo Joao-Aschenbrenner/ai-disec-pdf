@@ -346,6 +346,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
          };
          const callOpenAICompatible = async (config: OpenAICompatConfig, image: string, promptText: string) => {
            const endpoint = new URL("/v1/chat/completions", OPENAI_COMPAT_BASE_URLS[config.provider]).toString();
+           const imageDetail = modelTier === "fast" ? "low" : "high";
+           const tokenBudget = modelTier === "fast" ? 640 : 1024;
            const controller = new AbortController();
            const timeout = setTimeout(() => controller.abort(), config.provider === "NVIDIA" ? 120_000 : 75_000);
            const providerOptions = config.provider === "NVIDIA"
@@ -362,9 +364,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.apiKey}` },
                body: JSON.stringify({
                  model: config.model,
-                 messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image}`, detail: "high" } }, { type: "text", text: promptText }] }],
+                 messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image}`, detail: imageDetail } }, { type: "text", text: promptText }] }],
                  temperature: 0.1,
-                 max_tokens: 1024,
+                 max_tokens: tokenBudget,
                  stream: false,
                  ...providerOptions,
                }),
@@ -396,9 +398,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
               body: JSON.stringify({
                 model: openaiModel,
-               messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] }],
+               messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: modelTier === "fast" ? "low" : "high" } }, { type: "text", text: prompt }] }],
                temperature: 0.1,
-               max_tokens: 1024,
+               max_tokens: modelTier === "fast" ? 640 : 1024,
                top_p: 0.9
              })
            });
