@@ -1809,6 +1809,15 @@ export default function App() {
                     <p className="text-xs text-slate-400 mt-1">Configure os nomes inteligentes ou edite as informações geradas por inteligência artificial.</p>
                   </div>
                   
+                  {processedCount > 0 && (
+                    <span
+                      className="text-[10px] font-bold bg-cyan-950/40 border border-cyan-800/30 text-cyan-300 px-2.5 py-1.5 rounded-lg"
+                      title="Índice heurístico baseado em confiança do classificador e penalidade para itens ainda não revisados."
+                    >
+                      Confiança geral {globalConfidence}%
+                    </span>
+                  )}
+
                   {reviewCount > 0 && (
                     <span className="text-[10px] font-bold bg-amber-950/40 border border-amber-800/30 text-amber-300 px-2.5 py-1.5 rounded-lg">
                       {reviewCount} para revisar
@@ -1868,16 +1877,22 @@ export default function App() {
 
                             <div className="flex items-center gap-2.5 ml-auto sm:ml-0">
                               {/* Page processing indicator */}
-                              {page.status === "pending" && (
-                                <span className="text-[10px] font-bold bg-slate-900 border border-slate-800 text-slate-400 px-2.5 py-1 rounded-md">
-                                  Aguardando
-                                </span>
-                              )}
-                              {page.status === "processing" && (
-                                <span className="text-[10px] font-bold bg-indigo-950/50 border border-indigo-900/30 text-indigo-400 px-2.5 py-1 rounded-md flex items-center gap-1.5 animate-pulse">
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
-                                  Lendo...
-                                </span>
+                              {(page.status === "pending" || page.status === "processing") && (
+                                <div className="min-w-[150px]">
+                                  <div className="flex items-center justify-between gap-2 mb-1">
+                                    <span className="text-[10px] font-bold bg-indigo-950/50 border border-indigo-900/30 text-indigo-300 px-2.5 py-1 rounded-md flex items-center gap-1.5">
+                                      {page.status === "processing" && <Loader2 className="w-3 h-3 animate-spin" />}
+                                      {PROCESSING_STAGE_LABELS[page.processingStage || "waiting"] || "Processando"}
+                                    </span>
+                                    <span className="text-[9px] font-mono text-slate-500">{Math.round(page.processingProgress || 0)}%</span>
+                                  </div>
+                                  <div className="h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                                    <div
+                                      className="h-full bg-indigo-500 transition-all duration-300"
+                                      style={{ width: `${Math.max(2, Math.min(100, page.processingProgress || 0))}%` }}
+                                    />
+                                  </div>
+                                </div>
                               )}
                               {page.status === "success" && page.metadata?.needsReview ? (
                                 <span
@@ -1900,6 +1915,8 @@ export default function App() {
                                     ? "Cota excedida"
                                     : page.error?.includes("Chave")
                                     ? "Sem chave"
+                                    : page.error?.includes("Tempo limite")
+                                    ? "Timeout"
                                     : page.error?.includes("Provedor não aceita")
                                     ? "Formato inválido"
                                     : "Falhou"}
@@ -1936,9 +1953,19 @@ export default function App() {
                                   </span>
                                 )}
                                 {page.metadata.needsReview && (
-                                  <span className="text-[9px] font-bold px-2 py-1 rounded bg-amber-950/40 border border-amber-800/30 text-amber-300">
-                                    confirme o tipo antes de usar
-                                  </span>
+                                  <>
+                                    <span className="text-[9px] font-bold px-2 py-1 rounded bg-amber-950/40 border border-amber-800/30 text-amber-300">
+                                      confirme o tipo antes de usar
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => confirmClassification(idx)}
+                                      className="text-[9px] font-bold px-2 py-1 rounded bg-emerald-950/40 border border-emerald-800/30 text-emerald-300 hover:bg-emerald-900/50 cursor-pointer"
+                                      title="Confirma esta classe e salva o padrão no aprendizado local"
+                                    >
+                                      Confirmar e aprender
+                                    </button>
+                                  </>
                                 )}
                               </div>
                               {page.metadataList && page.metadataList.length > 1 ? (
