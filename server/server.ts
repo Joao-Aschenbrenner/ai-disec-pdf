@@ -753,7 +753,7 @@ app.get("/api/settings", (req, res) => {
     }
     return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
   } catch {
-    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "medium" });
+    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
   }
 });
 
@@ -764,7 +764,7 @@ app.post("/api/settings", (req, res) => {
     if (!provider || apiKey === undefined) {
       return res.status(400).json({ error: "Provider e apiKey são obrigatórios." });
     }
-    const settings = { provider: provider.toUpperCase(), apiKey, model: typeof model === "string" ? model : "", modelTier: (modelTier || "medium").toLowerCase() };
+    const settings = { provider: provider.toUpperCase(), apiKey, model: typeof model === "string" ? model : "", modelTier: (modelTier || "auto").toLowerCase() };
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
     console.log(`[settings] Saved: provider=${settings.provider} modelTier=${settings.modelTier} model=${settings.model || "(default)"}`);
     return res.json({ success: true });
