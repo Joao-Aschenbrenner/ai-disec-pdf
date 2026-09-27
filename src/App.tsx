@@ -390,10 +390,10 @@ function LayaSetup() {
             {status?.version && <span className="text-[10px] text-slate-500">v{status.version}</span>}
           </div>
           <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-            Apoia a classificação depois das regras locais. O VLM lê o documento; o Laya ajuda a decidir a classe quando há ambiguidade.
+            É obrigatório no Classification V3. O Laya participa da classificação de todas as páginas com texto disponível e revalida as páginas lidas pelo VLM.
           </p>
           <p className="text-[10px] text-slate-500 mt-1">
-            Usa ambiente Python isolado e apenas o checkpoint multilingual. Se estiver desligado, o app continua com hard guards + revisão.
+            Usa ambiente Python isolado e checkpoint multilingual. Pode ser parado para manutenção, mas o processamento V3 só inicia quando o health do Laya estiver ativo.
           </p>
         </div>
       </div>
