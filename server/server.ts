@@ -4,7 +4,7 @@ import fs from "fs";
 import os from "os";
 import dotenv from "dotenv";
 import { applyDocumentRoutingV3, routeDocumentV3 } from "./classification/v3Router";
-import { resolveSequence } from "./classification/sequenceResolver";
+import { resolveSequence, toSequenceLegacyType } from "./classification/sequenceResolver";
 import { getLearningStats, rememberConfirmedClassification, findConfirmedPattern } from "./classification/learningStore";
 import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { getLayaHealth } from "./classification/layaClient";
@@ -708,7 +708,10 @@ app.post("/api/classification/sequence", async (req, res) => {
   try {
     const pages = Array.isArray(req.body?.pages) ? req.body.pages : [];
     if (!pages.length) return res.status(400).json({ error: "pages obrigatório" });
-    const resolved = resolveSequence(pages);
+    const resolved = resolveSequence(pages).map(page => ({
+      ...page,
+      documentType: toSequenceLegacyType(page.documentClass),
+    }));
     return res.json({ version: "classification-v3", pages: resolved });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || "Falha no SequenceResolver" });
