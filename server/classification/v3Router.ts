@@ -77,7 +77,7 @@ export async function routeDocumentV3(
         `learning:${Math.round(Number(memory.similarity) * 100)}%`,
         ...(layaClass ? [`laya:${layaClass}`] : []),
       ],
-      needsReview: !agreesWithLaya && confidence < 0.95,
+      needsReview: !agreesWithLaya,
       layaChecked,
       layaConfidence,
     };
