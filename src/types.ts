@@ -66,5 +66,6 @@ export interface SplitPage {
     nextClass?: string | null;
     sequenceAdjusted?: boolean;
     sequenceReason?: string | null;
+    modelTier?: 'fast' | 'medium';
   };
 }
