@@ -7,6 +7,14 @@ export interface PageSegment {
   blobUrl: string;
 }
 
+export interface StackedDocumentDetection {
+  likely: boolean;
+  separatorRatio: number | null;
+  topInk: number;
+  bottomInk: number;
+  separatorInk: number;
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunk = 0x8000;
@@ -24,16 +32,19 @@ function base64ToBytes(base64: string): Uint8Array {
 }
 
 /**
- * Crop a single-page PDF into top and bottom halves.
- * CropBox is preserved by PDF.js and normal PDF viewers, so each output is a
- * real PDF segment rather than a JPEG-only export.
+ * Corta uma página PDF em dois documentos usando o Y real da faixa separadora.
+ * O ratio é medido a partir da base do PDF (0..1).
  */
-export async function splitPdfPageIntoHorizontalHalves(pdfBase64: string): Promise<PageSegment[]> {
+export async function splitPdfPageAtRatio(
+  pdfBase64: string,
+  separatorRatioFromTop = 0.5
+): Promise<PageSegment[]> {
   const source = await PDFDocument.load(base64ToBytes(pdfBase64));
   if (source.getPageCount() !== 1) {
     throw new Error("PageSegmenter espera um PDF de exatamente uma pagina.");
   }
 
+  const ratio = Math.max(0.32, Math.min(0.68, separatorRatioFromTop));
   const outputs: PageSegment[] = [];
   const positions: Array<"top" | "bottom"> = ["top", "bottom"];
 
@@ -43,9 +54,15 @@ export async function splitPdfPageIntoHorizontalHalves(pdfBase64: string): Promi
     out.addPage(page);
 
     const { width, height } = page.getSize();
-    const half = height / 2;
-    const y = positions[segmentIndex] === "top" ? half : 0;
-    page.setCropBox(0, y, width, half);
+    const topHeight = height * ratio;
+    const bottomHeight = height - topHeight;
+
+    if (positions[segmentIndex] === "top") {
+      // Coordenadas PDF começam embaixo.
+      page.setCropBox(0, bottomHeight, width, topHeight);
+    } else {
+      page.setCropBox(0, 0, width, bottomHeight);
+    }
 
     const bytes = await out.save();
     const blob = new Blob([bytes], { type: "application/pdf" });
@@ -58,6 +75,11 @@ export async function splitPdfPageIntoHorizontalHalves(pdfBase64: string): Promi
   }
 
   return outputs;
+}
+
+/** Compatibilidade com V2/tests: corte 50/50. */
+export async function splitPdfPageIntoHorizontalHalves(pdfBase64: string): Promise<PageSegment[]> {
+  return splitPdfPageAtRatio(pdfBase64, 0.5);
 }
 
 function regionDensity(
@@ -84,37 +106,42 @@ function regionDensity(
 }
 
 /**
- * Conservative detector used ONLY after the page has already routed to a
- * holerite class. It looks for meaningful content in both halves and a
- * relatively blank separator near the center. False => keep the original page.
+ * Procura a faixa horizontal mais vazia na região central.
+ * Retorna a posição real do separador; NÃO decide sozinho que a página é holerite.
  */
-export async function imageLikelyHasTwoStackedDocuments(jpegBase64: string): Promise<boolean> {
+export async function detectStackedDocumentSeparator(jpegBase64: string): Promise<StackedDocumentDetection> {
   if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas === "undefined") {
-    return false;
+    return { likely: false, separatorRatio: null, topInk: 0, bottomInk: 0, separatorInk: 1 };
   }
 
   try {
     const blob = await (await fetch(`data:image/jpeg;base64,${jpegBase64}`)).blob();
     const bitmap = await createImageBitmap(blob);
 
-    const targetWidth = Math.min(600, bitmap.width);
+    const targetWidth = Math.min(700, bitmap.width);
     const scale = targetWidth / bitmap.width;
     const width = Math.max(1, Math.round(bitmap.width * scale));
     const height = Math.max(1, Math.round(bitmap.height * scale));
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return false;
+    if (!ctx) return { likely: false, separatorRatio: null, topInk: 0, bottomInk: 0, separatorInk: 1 };
 
     ctx.drawImage(bitmap, 0, 0, width, height);
     bitmap.close();
 
     const rgba = ctx.getImageData(0, 0, width, height).data;
-    const topInk = regionDensity(rgba, width, height, 0.08, 0.43);
-    const bottomInk = regionDensity(rgba, width, height, 0.57, 0.92);
+    const topInk = regionDensity(rgba, width, height, 0.07, 0.40);
+    const bottomInk = regionDensity(rgba, width, height, 0.60, 0.93);
 
     let bestGap = 1;
-    for (let start = 0.43; start <= 0.55; start += 0.02) {
-      bestGap = Math.min(bestGap, regionDensity(rgba, width, height, start, start + 0.025));
+    let bestCenter = 0.5;
+    for (let start = 0.38; start <= 0.60; start += 0.01) {
+      const end = start + 0.025;
+      const density = regionDensity(rgba, width, height, start, end);
+      if (density < bestGap) {
+        bestGap = density;
+        bestCenter = (start + end) / 2;
+      }
     }
 
     const hasTwoContentBlocks = topInk > 0.012 && bottomInk > 0.012;
@@ -122,8 +149,18 @@ export async function imageLikelyHasTwoStackedDocuments(jpegBase64: string): Pro
       bestGap < 0.03 &&
       bestGap < Math.min(topInk, bottomInk) * 0.65;
 
-    return hasTwoContentBlocks && separatorIsMeaningfullyBlank;
+    return {
+      likely: hasTwoContentBlocks && separatorIsMeaningfullyBlank,
+      separatorRatio: hasTwoContentBlocks && separatorIsMeaningfullyBlank ? bestCenter : null,
+      topInk,
+      bottomInk,
+      separatorInk: bestGap,
+    };
   } catch {
-    return false;
+    return { likely: false, separatorRatio: null, topInk: 0, bottomInk: 0, separatorInk: 1 };
   }
+}
+
+export async function imageLikelyHasTwoStackedDocuments(jpegBase64: string): Promise<boolean> {
+  return (await detectStackedDocumentSeparator(jpegBase64)).likely;
 }
