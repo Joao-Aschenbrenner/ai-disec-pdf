@@ -16,6 +16,38 @@ const DEFAULT_PORT = 3001;
 const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
+// Mapeia falhas do provedor de IA para status/mensagem amigáveis.
+// Erros de rede (fetch failed, ENOTFOUND etc.) não devem chegar crus ao usuário.
+export function classifyProviderFailure(error: any): { status: number; message: string; retryable: boolean } {
+  const name = String(error?.name || "");
+  const message = String(error?.message || "");
+  const code = String(error?.cause?.code || error?.code || "");
+  if (name === "AbortError" || /abort|time.?out/i.test(message)) {
+    return {
+      status: 504,
+      message: "Tempo limite do provedor excedido. Tente novamente; o Classification V3 aplicará backoff.",
+      retryable: true,
+    };
+  }
+  if (
+    /fetch failed|network error/i.test(message) ||
+    /ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|EPIPE/i.test(code)
+  ) {
+    return {
+      status: 503,
+      message: "Falha de rede ao contatar o provedor de IA. A página será tentada novamente automaticamente.",
+      retryable: true,
+    };
+  }
+  return { status: 500, message: message || "Erro desconhecido ao processar documento.", retryable: false };
+}
+
+// V3: o VLM é leitor. Resposta em texto corrido (sem nenhum JSON) ainda é
+// evidência de classificação útil — desde que tenha conteúdo mínimo.
+export function shouldTreatAsClassificationText(trimmed: string): boolean {
+  return Boolean(trimmed) && !trimmed.includes("{") && !trimmed.includes("[") && trimmed.length >= 40;
+}
+
 // Catálogo de modelos: lê server/models.json (atualizado mensalmente via CI).
 // Fallback hardcoded caso o arquivo não exista ou esteja corrompido.
 const FALLBACK_MODELS: Record<string, { baseUrl: string; model: string }> = {
@@ -570,6 +602,17 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const trimmed = cleaned;
       let jsonStr: string;
 
+      // V3: o VLM é leitor, não autoridade de classe. Se a resposta veio como
+      // texto corrido sem nenhum JSON, o próprio texto é a evidência — segue
+      // para o router local (com needsReview conservador) em vez de derrubar
+      // a página com erro cru.
+      if (shouldTreatAsClassificationText(trimmed)) {
+        await logUpload(originalName, pageIndex, "success", provider, "Resposta sem JSON; texto corrido usado como classificationText (fallback V3)");
+        const routedTextData = await applyDocumentRoutingV3({ classificationText: trimmed }, v3Hint);
+        await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", routedTextData);
+        return res.json(routedTextData);
+      }
+
       if (trimmed.includes("[")) {
         // Tenta array primeiro: do primeiro [ ao ultimo ]
         const arrStart = trimmed.indexOf("[");
@@ -633,16 +676,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", routedData);
       return res.json(routedData);
 
-    } catch (error: any) {
+     } catch (error: any) {
+       const failure = classifyProviderFailure(error);
        await logError("Unhandled exception in /api/extract", error);
-       await logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", error.message || "Erro desconhecido");
+       await logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", failure.message);
        console.error("[AI OCR Error]:", error);
-       const aborted = error?.name === "AbortError" || /aborted/i.test(String(error?.message || ""));
-       return res.status(aborted ? 504 : 500).json({
-         error: aborted
-           ? "Tempo limite do provedor excedido. Tente novamente; o Classification V3 aplicará backoff."
-           : (error.message || "Erro desconhecido ao processar documento."),
-         retryable: aborted
+       return res.status(failure.status).json({
+         error: failure.message,
+         retryable: failure.retryable,
        });
      }
   });
