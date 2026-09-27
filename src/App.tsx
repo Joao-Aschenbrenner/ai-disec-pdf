@@ -120,9 +120,10 @@ const OLLAMA_MODELS = [
 ];
 
 const MODEL_TIERS = [
-  { value: "fast", label: "Rápido", hint: "menos preciso" },
-  { value: "medium", label: "Equilibrado", hint: "recomendado" },
-  { value: "precise", label: "Preciso", hint: "mais lento" },
+  { value: "auto", label: "Automático", hint: "Laya/contexto escolhem o esforço" },
+  { value: "fast", label: "Rápido", hint: "modelo mais leve" },
+  { value: "medium", label: "Equilibrado", hint: "modelo padrão" },
+  { value: "precise", label: "Preciso", hint: "manual; pode ser mais lento/instável" },
 ];
 
 function OllamaLocalSetup({ model, onModelChange }: { model: string; onModelChange: (m: string) => void }) {
@@ -570,7 +571,7 @@ export default function App() {
   const [settingsProvider, setSettingsProvider] = useState("NVIDIA");
   const [settingsApiKey, setSettingsApiKey] = useState("");
   const [settingsLocalModel, setSettingsLocalModel] = useState("");
-  const [settingsModelTier, setSettingsModelTier] = useState("medium");
+  const [settingsModelTier, setSettingsModelTier] = useState("auto");
   const [modelCatalog, setModelCatalog] = useState<Record<string, { tiers?: Record<string, string> }>>({});
   const [currentProvider, setCurrentProvider] = useState("NVIDIA");
   const [savingSettings, setSavingSettings] = useState(false);
@@ -1366,6 +1367,57 @@ export default function App() {
     });
   };
 
+  const confirmClassification = async (index: number) => {
+    const page = splitPages[index];
+    const meta = page?.metadata;
+    if (!page || !meta?.documentClass) return;
+
+    const text = meta.classificationText || page.localText || "";
+    if (text.trim().length < 20) {
+      alert("Não há texto suficiente para salvar este exemplo no aprendizado local.");
+      return;
+    }
+
+    const previousClass = splitPages[index - 1]?.metadata?.documentClass || splitPages[index - 1]?.v3Hint?.documentClass || null;
+    const nextClass = splitPages[index + 1]?.metadata?.documentClass || splitPages[index + 1]?.v3Hint?.documentClass || null;
+
+    try {
+      const res = await fetch("/api/learning/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          documentClass: meta.documentClass,
+          text,
+          previousClass,
+          nextClass,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Falha ao salvar exemplo.");
+      }
+
+      setSplitPages(prev => prev.map((p, i) =>
+        i === index
+          ? {
+              ...p,
+              metadata: p.metadata ? {
+                ...p.metadata,
+                needsReview: false,
+                classificationSource: "manual-confirmation",
+                classificationConfidence: 1,
+                classificationEvidence: [...(p.metadata.classificationEvidence || []), "learning-confirmed"],
+              } : p.metadata,
+              processingStage: "done",
+              processingProgress: 100,
+            }
+          : p
+      ));
+    } catch (error: any) {
+      alert(error?.message || "Não foi possível registrar a confirmação.");
+    }
+  };
+
   // Save settings to server
   const saveSettings = async () => {
     setSavingSettings(true);
@@ -1395,6 +1447,15 @@ export default function App() {
   const failedCount = splitPages.filter(p => p.status === "failed").length;
   const reviewCount = splitPages.filter(p => p.status === "success" && p.metadata?.needsReview).length;
   const pendingCount = splitPages.filter(p => p.status === "pending" || p.status === "processing" || p.status === "failed").length;
+  const globalConfidence = totalPages === 0
+    ? 0
+    : Math.round(
+        splitPages.reduce((sum, page) => {
+          if (page.status !== "success" || !page.metadata) return sum;
+          const base = Math.max(0, Math.min(1, Number(page.metadata.classificationConfidence || 0)));
+          return sum + (page.metadata.needsReview ? base * 0.75 : base);
+        }, 0) / totalPages * 100
+      );
   
   const notaFiscalCount = splitPages.filter(p => p.metadata?.documentType === "nota_fiscal").length;
   const impostoCount = splitPages.filter(p => p.metadata?.documentType === "imposto").length;
