@@ -6,68 +6,58 @@
 
 </div>
 
-Aplicação desktop em Electron + React para dividir, identificar, revisar e renomear documentos escaneados. A Classification V2 foi desenhada para funcionar mesmo quando o modelo visual é simples: o VLM lê campos/evidências, regras locais identificam assinaturas fortes e o Laya atua como segunda opinião para os casos ambíguos.
+Aplicação desktop em Electron + React para dividir, identificar, revisar e renomear documentos escaneados. A Classification V3 usa três passagens: texto local + Laya, contexto entre páginas e validação pós-visão. O VLM lê a imagem e extrai campos; não é autoridade final de classe.
 
-## Classification V2
+## Classification V3
 
 ```text
-PDF / página escaneada
-        ↓
-VLM: somente leitura de texto + extração de campos
-        ↓
-DocumentSignatures / hard guards
-        ↓
-Laya local (quando necessário e disponível)
-        ↓
-DocumentRouter
-        ↓
-extratores / validação
-        ↓
+PDF
+ ↓
+texto local quando existir
+ ↓
+Signatures + Laya + memória confirmada
+ ↓
+SequenceResolver (anterior / atual / próxima)
+ ↓
+VLM apenas para leitura/extração visual
+ ↓
+router V3 + Laya novamente
+ ↓
+SequenceResolver pós-visão
+ ↓
 SafeFilenameBuilder
-        ↓
-revisão manual quando a confiança não é suficiente
 ```
 
-O modelo visual **não é mais autoridade final para documentType**. Isso evita que uma NFS-e ou DANFE seja transformada em folha de pagamento apenas porque o modelo interpretou palavras isoladas.
+O Laya é obrigatório para iniciar o processamento V3. Páginas com texto embutido passam por ele na primeira passagem; páginas scan-only passam após o VLM produzir `classificationText`.
 
-### Classes iniciais
+A UI mostra por página:
 
-- NFS / NFS-e
-- NF-e / DANFE
-- Holerite mensal
-- Holerite de 13º
-- Relatório de folha
-- Relatório de 13º
-- DARF
-- Guia ISS
-- Guia INSS
-- Extrato de conta corrente
-- Extrato de investimentos
-- TED / transferência
-- Conta de energia
-- Planilha / prestação consolidada
-- Outro / revisão
+- etapa atual e barra de progresso;
+- classe fina;
+- fonte;
+- confiança;
+- `Laya ✓` quando a página foi validada pelo Laya;
+- `Revisar` quando ainda exige confirmação.
+
+Páginas de continuação de extrato/folha são avaliadas usando anterior e próxima. Holerites empilhados usam detecção do separador real em vez de corte fixo 50/50.
+
+Correções confirmadas podem entrar no Learning Store local por **Confirmar e aprender**. Não existe fine-tuning automático silencioso.
+
+Detalhes: [CLASSIFICATION_V3.md](CLASSIFICATION_V3.md).
+
+A arquitetura anterior permanece documentada em [CLASSIFICATION_V2.md](CLASSIFICATION_V2.md).
 
 ## Laya
 
-Laya é opcional e roda localmente. No desktop, abra **Configurações > Laya local** para instalar/iniciar. O Electron cria uma venv isolada em `~/.ai-disec-pdf/laya/venv`, fixa a versão usada pela release e tenta fazer auto-start nas execuções seguintes.
-
-Para desenvolvimento também existem os helpers:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/setup-laya.ps1
-powershell -ExecutionPolicy Bypass -File scripts/start-laya.ps1
-```
+No Classification V3, o Laya é requisito do processamento e roda localmente. No desktop, abra **Configurações > Laya local** para instalar/iniciar. O Electron cria uma venv isolada em `~/.ai-disec-pdf/laya/venv` e tenta fazer auto-start nas execuções seguintes.
 
 Health: `http://127.0.0.1:8000/health`.
 
-O DocSplit consulta o Laya em `POST /v1/systemone`. O Laya recebe **texto/evidências**, não a imagem da página. Decisão feita somente pelo Laya continua marcada para revisão até calibrarmos o golden real.
-
-Detalhes: [CLASSIFICATION_V2.md](CLASSIFICATION_V2.md).
+O Laya recebe texto/evidências, não a imagem da página. A porcentagem dele é confiança bruta do classificador, não probabilidade calibrada.
 
 ## Nomes de arquivo seguros
 
-A Classification V2 usa rótulos curtos:
+A Classification V3 preserva os rótulos curtos e nomes Windows-safe:
 
 ```text
 NFS_7225_CLINICA_MONTEIRO_1700.00.pdf
@@ -126,6 +116,9 @@ server/
     documentTaxonomy.ts
     documentSignatures.ts
     documentRouter.ts
+    v3Router.ts
+    sequenceResolver.ts
+    learningStore.ts
     extractionPrompt.ts
     layaClient.ts
   server.ts
@@ -135,6 +128,8 @@ src/
   App.tsx
   types.ts
   utils/fileHelpers.ts
+  utils/pdfLocalText.ts
+  utils/pageSegmenter.ts
 
 scripts/
   setup-laya.ps1
@@ -142,6 +137,8 @@ scripts/
 
 tests/
   classification-v2.test.ts
+  classification-v3.test.ts
+  classification-v3-wiring.test.ts
 ```
 
 ## Regra de release
@@ -151,7 +148,7 @@ Uma versão nova só deve ser criada depois de:
 1. `npm run lint`
 2. `npm test`
 3. `npm run build`
-4. auditoria local no Windows/Electron
+4. auditoria local em LOCAL_AUDIT_CLASSIFICATION_V3.md
 5. teste com PDF real
 6. validação de nomes <= 80 caracteres
 7. validação do instalador NSIS

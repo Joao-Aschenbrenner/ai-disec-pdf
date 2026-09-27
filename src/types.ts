@@ -5,13 +5,19 @@ export interface ExtractedMetadata {
   valor: number | null;
   pessoaNome: string | null;
   documentType: 'nota_fiscal' | 'imposto' | 'darf' | 'extrato' | 'planilha' | 'folha_pagamento' | 'outros' | 'nao_identificado';
-  /** Classe fina definida pelo CLASSIFICATION-V2. Mantemos documentType para compatibilidade da UI. */
+  /** Classe fina definida pelo Classification V3. Mantemos documentType para compatibilidade da UI. */
   documentClass?: string;
   classificationText?: string;
   classificationConfidence?: number;
   classificationSource?: string;
   classificationEvidence?: string[];
   needsReview?: boolean;
+  /** Classification V3 */
+  layaChecked?: boolean;
+  layaConfidence?: number;
+  sequenceAdjusted?: boolean;
+  sequenceReason?: string;
+  requiresVision?: boolean;
 }
 
 export interface FilenameOptions {
@@ -48,4 +54,18 @@ export interface SplitPage {
   sourcePageIndex?: number;
   segmentIndex?: number;
   segmentPosition?: 'top' | 'bottom';
+  /** Classification V3 orchestration */
+  localText?: string;
+  processingStage?: 'waiting' | 'preparing' | 'laya' | 'identifying' | 'extracting' | 'validating' | 'confirming' | 'done' | 'review' | 'retrying' | 'failed';
+  processingProgress?: number;
+  v3Hint?: {
+    documentClass?: string;
+    confidence?: number;
+    source?: string;
+    previousClass?: string | null;
+    nextClass?: string | null;
+    sequenceAdjusted?: boolean;
+    sequenceReason?: string | null;
+    modelTier?: 'fast' | 'medium';
+  };
 }

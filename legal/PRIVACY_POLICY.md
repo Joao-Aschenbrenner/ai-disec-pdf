@@ -9,9 +9,11 @@ O aplicativo e o servidor interno rodam localmente na máquina do usuário. O au
 
 ## 2. Processamento Local
 
-- O split, a geração de ZIP, as regras de classificação, os nomes dos arquivos e o Laya local podem operar inteiramente na máquina do usuário.
+- O split, a geração de ZIP, as regras de classificação, o SequenceResolver, os nomes dos arquivos, o Learning Store e o Laya local podem operar inteiramente na máquina do usuário.
 - Os arquivos PDF processados e gerados permanecem no sistema de arquivos local, sob controle do usuário.
 - Ollama Local e Laya local não enviam dados a provedores cloud.
+- O Learning Store da Classification V3 é salvo localmente em `~/.ai-disec-pdf/learning-store.json` e armazena fingerprints de tokens com hash/classes confirmadas, não a imagem/base64 nem o texto integral do documento.
+- Nenhum fine-tuning automático é executado sem uma etapa futura explícita de treinamento/validação.
 - Nenhuma telemetria, analytics ou rastreamento está embutido no Software.
 
 ## 3. Dados Compartilhados com Provedores de IA
@@ -26,11 +28,13 @@ No modo cloud, as imagens das páginas dos PDFs e o prompt de extração são en
 | Mistral     | https://mistral.ai/terms/#privacy-policy                      |
 | NVIDIA      | https://www.nvidia.com/en-us/privacy-policy/                  |
 | OpenRouter  | https://openrouter.ai/privacy                                 |
+| Groq        | https://groq.com/privacy-policy/                              |
 | Ollama      | https://ollama.com/privacy                                    |
 
 ## 4. Segurança
 
 - As configurações e chaves fornecidas pelo usuário são armazenadas localmente em `~/.ai-disec-pdf/settings.json` e nunca são enviadas ao autor.
+- As confirmações de classe usadas pelo Learning Store permanecem locais; o usuário pode removê-las apagando `~/.ai-disec-pdf/learning-store.json`.
 - Uma chave só é enviada ao endpoint do provedor correspondente quando o usuário solicita uma operação cloud.
 - O arquivo `.env` é usado apenas para desenvolvimento/configuração local e deve permanecer fora do controle de versão.
 

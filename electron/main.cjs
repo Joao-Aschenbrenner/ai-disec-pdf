@@ -584,6 +584,8 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       nodeIntegration: false,
       contextIsolation: true,
+      // O processamento e os timers não podem desacelerar quando a janela fica em segundo plano.
+      backgroundThrottling: false,
     },
   });
 

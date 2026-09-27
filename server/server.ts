@@ -3,7 +3,10 @@ import path from "path";
 import fs from "fs";
 import os from "os";
 import dotenv from "dotenv";
-import { applyDocumentRouting } from "./classification/documentRouter";
+import { applyDocumentRoutingV3, routeDocumentV3 } from "./classification/v3Router";
+import { resolveSequence, toSequenceLegacyType } from "./classification/sequenceResolver";
+import { getLearningStats, rememberConfirmedClassification, findConfirmedPattern } from "./classification/learningStore";
+import { DOCUMENT_CLASSES } from "./classification/documentTaxonomy";
 import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { getLayaHealth } from "./classification/layaClient";
 
@@ -12,6 +15,38 @@ dotenv.config();
 const DEFAULT_PORT = 3001;
 const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
+
+// Mapeia falhas do provedor de IA para status/mensagem amigáveis.
+// Erros de rede (fetch failed, ENOTFOUND etc.) não devem chegar crus ao usuário.
+export function classifyProviderFailure(error: any): { status: number; message: string; retryable: boolean } {
+  const name = String(error?.name || "");
+  const message = String(error?.message || "");
+  const code = String(error?.cause?.code || error?.code || "");
+  if (name === "AbortError" || /abort|time.?out/i.test(message)) {
+    return {
+      status: 504,
+      message: "Tempo limite do provedor excedido. Tente novamente; o Classification V3 aplicará backoff.",
+      retryable: true,
+    };
+  }
+  if (
+    /fetch failed|network error/i.test(message) ||
+    /ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|EPIPE/i.test(code)
+  ) {
+    return {
+      status: 503,
+      message: "Falha de rede ao contatar o provedor de IA. A página será tentada novamente automaticamente.",
+      retryable: true,
+    };
+  }
+  return { status: 500, message: message || "Erro desconhecido ao processar documento.", retryable: false };
+}
+
+// V3: o VLM é leitor. Resposta em texto corrido (sem nenhum JSON) ainda é
+// evidência de classificação útil — desde que tenha conteúdo mínimo.
+export function shouldTreatAsClassificationText(trimmed: string): boolean {
+  return Boolean(trimmed) && !trimmed.includes("{") && !trimmed.includes("[") && trimmed.length >= 40;
+}
 
 // Catálogo de modelos: lê server/models.json (atualizado mensalmente via CI).
 // Fallback hardcoded caso o arquivo não exista ou esteja corrompido.
@@ -286,7 +321,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
   app.post("/api/extract", async (req, res) => {
     try {
-      const { pdfBase64, originalName, pageIndex, correction } = req.body;
+      const { pdfBase64, originalName, pageIndex, correction, v3Hint } = req.body;
 
       if (!pdfBase64) {
         return res.status(400).json({ error: "Faltando dados do PDF (pdfBase64)." });
@@ -321,11 +356,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       // Mantemos estes termos no codigo como invariantes de regressao:
       // EXCLUSÃO DE CARIMBO | PREFEITURA | Termo de Colaboração | CARIMBO
       // MULTIPLICIDADE | 2 holerites | ARRAY | valor SEMPRE null | NÃO tente extrair Valor Líquido
-      const prompt = buildExtractionPrompt(correction);
+      const prompt = buildExtractionPrompt(correction, v3Hint);
 
       // Seleciona provedor de IA
        const provider = settings.provider || "GOOGLE";
-       const modelTier = settings.modelTier || "medium";
+       const configuredTier = settings.modelTier || "auto";
+       const hintedTier = v3Hint?.modelTier === "fast" ? "fast" : "medium";
+       // Automático nunca promove sozinho para o tier precise/Nemotron.
+       const modelTier = configuredTier === "auto" ? hintedTier : configuredTier;
        let aiResponse;
        try {
          // Helper for OpenAI-compatible providers. The endpoint is selected from
@@ -341,8 +379,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
          };
          const callOpenAICompatible = async (config: OpenAICompatConfig, image: string, promptText: string) => {
            const endpoint = new URL("/v1/chat/completions", OPENAI_COMPAT_BASE_URLS[config.provider]).toString();
+           const imageDetail = modelTier === "fast" ? "low" : "high";
+           const tokenBudget = modelTier === "fast" ? 640 : 1024;
            const controller = new AbortController();
-           const timeout = setTimeout(() => controller.abort(), 60_000);
+           const timeout = setTimeout(() => controller.abort(), config.provider === "NVIDIA" ? 120_000 : 75_000);
            const providerOptions = config.provider === "NVIDIA"
              ? config.model === "z-ai/glm-5.3-flash"
                ? { reasoning_effort: "low", chat_template_kwargs: { clear_thinking: true } }
@@ -357,9 +397,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.apiKey}` },
                body: JSON.stringify({
                  model: config.model,
-                 messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image}`, detail: "high" } }, { type: "text", text: promptText }] }],
+                 messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${image}`, detail: imageDetail } }, { type: "text", text: promptText }] }],
                  temperature: 0.1,
-                 max_tokens: 1024,
+                 max_tokens: tokenBudget,
                  stream: false,
                  ...providerOptions,
                }),
@@ -391,9 +431,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
               body: JSON.stringify({
                 model: openaiModel,
-               messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: "high" } }, { type: "text", text: prompt }] }],
+               messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: modelTier === "fast" ? "low" : "high" } }, { type: "text", text: prompt }] }],
                temperature: 0.1,
-               max_tokens: 1024,
+               max_tokens: modelTier === "fast" ? 640 : 1024,
                top_p: 0.9
              })
            });
@@ -562,6 +602,17 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const trimmed = cleaned;
       let jsonStr: string;
 
+      // V3: o VLM é leitor, não autoridade de classe. Se a resposta veio como
+      // texto corrido sem nenhum JSON, o próprio texto é a evidência — segue
+      // para o router local (com needsReview conservador) em vez de derrubar
+      // a página com erro cru.
+      if (shouldTreatAsClassificationText(trimmed)) {
+        await logUpload(originalName, pageIndex, "success", provider, "Resposta sem JSON; texto corrido usado como classificationText (fallback V3)");
+        const routedTextData = await applyDocumentRoutingV3({ classificationText: trimmed }, v3Hint);
+        await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", routedTextData);
+        return res.json(routedTextData);
+      }
+
       if (trimmed.includes("[")) {
         // Tenta array primeiro: do primeiro [ ao ultimo ]
         const arrStart = trimmed.indexOf("[");
@@ -616,33 +667,121 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
-        const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRouting(doc)));
-        await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V2)`, routedDocuments);
+        const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
+        await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V3)`, routedDocuments);
         return res.json({ _multiple: true, documents: routedDocuments });
       }
 
-      const routedData = await applyDocumentRouting(extractedData);
-      await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V2", routedData);
+      const routedData = await applyDocumentRoutingV3(extractedData, v3Hint);
+      await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", routedData);
       return res.json(routedData);
 
-    } catch (error: any) {
+     } catch (error: any) {
+       const failure = classifyProviderFailure(error);
        await logError("Unhandled exception in /api/extract", error);
-       await logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", error.message || "Erro desconhecido");
+       await logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", failure.message);
        console.error("[AI OCR Error]:", error);
-       return res.status(500).json({
-         error: error.message || "Erro desconhecido ao processar documento."
+       return res.status(failure.status).json({
+         error: failure.message,
+         retryable: failure.retryable,
        });
      }
   });
 
-// ─── Classification V2 health ─────────────────────
+// ─── Classification V3: pre-pass / sequence / learning ─────────────
 app.get("/api/classification/health", async (_req, res) => {
   const laya = await getLayaHealth();
   return res.json({
-    version: "classification-v2",
+    version: "classification-v3",
     laya,
-    strategy: "hard-signatures -> laya -> deterministic fallback/review"
+    layaRequired: true,
+    strategy: "local-text -> signatures+laya+learning -> sequence -> vision extraction -> final validation"
   });
+});
+
+app.post("/api/classification/pass1", async (req, res) => {
+  try {
+    const pages = Array.isArray(req.body?.pages) ? req.body.pages : [];
+    if (!pages.length) return res.status(400).json({ error: "pages obrigatório" });
+
+    const laya = await getLayaHealth(1500);
+    if (!laya.healthy) {
+      return res.status(503).json({
+        error: "Laya obrigatório para Classification V3. Inicie o Laya em Configurações.",
+        code: "LAYA_REQUIRED"
+      });
+    }
+
+    const results = [];
+    // Sequencial propositalmente: Laya é local e rápido; evita rajadas e deixa a ordem estável.
+    for (const page of pages) {
+      const text = String(page?.text || "").trim();
+      if (text.length < 20) {
+        results.push({
+          pageIndex: Number(page?.pageIndex || 0),
+          documentClass: "OUTRO",
+          documentType: "outros",
+          confidence: 0.05,
+          source: "no-local-text",
+          needsReview: true,
+          requiresVision: true,
+          layaChecked: false,
+          text
+        });
+        continue;
+      }
+
+      const routed = await routeDocumentV3(text);
+      const memory = findConfirmedPattern(text);
+      results.push({
+        pageIndex: Number(page?.pageIndex || 0),
+        ...routed,
+        text,
+        requiresVision: routed.needsReview || routed.confidence < 0.86,
+        learningMatch: memory
+      });
+    }
+
+    return res.json({ version: "classification-v3", pages: results });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Falha na passagem 1" });
+  }
+});
+
+app.post("/api/classification/sequence", async (req, res) => {
+  try {
+    const pages = Array.isArray(req.body?.pages) ? req.body.pages : [];
+    if (!pages.length) return res.status(400).json({ error: "pages obrigatório" });
+    const resolved = resolveSequence(pages).map(page => ({
+      ...page,
+      documentType: toSequenceLegacyType(page.documentClass),
+    }));
+    return res.json({ version: "classification-v3", pages: resolved });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Falha no SequenceResolver" });
+  }
+});
+
+app.get("/api/learning/stats", (_req, res) => {
+  return res.json(getLearningStats());
+});
+
+app.post("/api/learning/confirm", (req, res) => {
+  try {
+    const { documentClass, text, previousClass, nextClass } = req.body || {};
+    if (!documentClass || !DOCUMENT_CLASSES.includes(documentClass) || !text || String(text).trim().length < 20) {
+      return res.status(400).json({ error: "documentClass válido e texto útil são obrigatórios" });
+    }
+    const saved = rememberConfirmedClassification({
+      documentClass,
+      text: String(text),
+      previousClass: previousClass || null,
+      nextClass: nextClass || null,
+    });
+    return res.json({ success: true, example: saved, stats: getLearningStats() });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || "Falha ao salvar exemplo confirmado" });
+  }
 });
 
 // ─── Settings API ──────────────────────────────────
@@ -653,9 +792,9 @@ app.get("/api/settings", (req, res) => {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
       return res.json(data);
     }
-    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "medium" });
+    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
   } catch {
-    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "medium" });
+    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
   }
 });
 
@@ -666,7 +805,7 @@ app.post("/api/settings", (req, res) => {
     if (!provider || apiKey === undefined) {
       return res.status(400).json({ error: "Provider e apiKey são obrigatórios." });
     }
-    const settings = { provider: provider.toUpperCase(), apiKey, model: typeof model === "string" ? model : "", modelTier: (modelTier || "medium").toLowerCase() };
+    const settings = { provider: provider.toUpperCase(), apiKey, model: typeof model === "string" ? model : "", modelTier: (modelTier || "auto").toLowerCase() };
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
     console.log(`[settings] Saved: provider=${settings.provider} modelTier=${settings.modelTier} model=${settings.model || "(default)"}`);
     return res.json({ success: true });
@@ -682,7 +821,7 @@ function getSettings() {
       return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
     }
   } catch {}
-  return { provider: "NVIDIA", apiKey: "", model: "", modelTier: "medium" };
+  return { provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" };
 }
 
 // ─── Models API ───────────────────────────────────────
@@ -747,7 +886,7 @@ app.get("/api/logs", (req, res) => {
   }
 
   return new Promise<void>((resolve) => {
-    serverInstance = app.listen(PORT, "0.0.0.0", () => {
+    serverInstance = app.listen(PORT, "127.0.0.1", () => {
       console.log(`Server running on http://localhost:${PORT}`);
       resolve();
     });
