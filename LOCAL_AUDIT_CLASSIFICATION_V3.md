@@ -234,7 +234,7 @@ Esperado:
 
 - store criado em `~/.ai-disec-pdf/learning-store.json`;
 - não contém imagem/base64/chave/API;
-- não contém texto integral;
+- não contém texto integral;\n- fingerprints não deixam nomes/CPF/CNPJ em texto legível;
 - exemplo confirmado aparece na contagem;
 - não ocorre fine-tuning automático;
 - similaridade baixa não domina a classificação.
