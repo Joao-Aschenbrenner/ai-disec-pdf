@@ -1070,10 +1070,11 @@ export default function App() {
         localText = "";
       }
       updatePageStage(page.id, "laya", 18);
+      const usefulText = hasUsefulEmbeddedText(localText);
       return {
         ...page,
-        localText: hasUsefulEmbeddedText(localText) ? localText : "",
-        processingStage: "laya" as const,
+        localText: usefulText ? localText : "",
+        processingStage: (usefulText ? "laya" : "identifying") as SplitPage["processingStage"],
         processingProgress: 18,
       };
     });
@@ -2114,6 +2115,16 @@ export default function App() {
                                 {typeof page.metadata.classificationConfidence === "number" && (
                                   <span className="text-[9px] px-2 py-1 rounded bg-slate-900 border border-slate-800 text-slate-500">
                                     confiança: {Math.round(page.metadata.classificationConfidence * 100)}%
+                                  </span>
+                                )}
+                                {page.metadata.layaChecked && (
+                                  <span
+                                    className="text-[9px] font-bold px-2 py-1 rounded bg-violet-950/40 border border-violet-800/30 text-violet-300"
+                                    title="Esta página passou pelo Laya. A porcentagem do Laya ainda não é uma probabilidade calibrada."
+                                  >
+                                    Laya ✓{typeof page.metadata.layaConfidence === "number"
+                                      ? ` ${Math.round(page.metadata.layaConfidence * 100)}%`
+                                      : ""}
                                   </span>
                                 )}
                                 {page.metadata.needsReview && (
