@@ -105,6 +105,34 @@ const PROCESSING_STAGE_LABELS: Record<string, string> = {
   failed: "Falhou",
 };
 
+const FINE_CLASS_OPTIONS = [
+  ["NFS", "NFS-e / Nota Fiscal de Serviço"],
+  ["NFE_DANFE", "NF-e / DANFE"],
+  ["HOLERITE", "Holerite mensal"],
+  ["HOLERITE_13", "Holerite 13º"],
+  ["FOPAG_RESUMO", "Relatório de folha"],
+  ["FOPAG_13_RESUMO", "Relatório de folha 13º"],
+  ["DARF", "DARF"],
+  ["GUIA_ISS", "Guia ISS"],
+  ["GUIA_INSS", "Guia INSS"],
+  ["EXTRATO_CC", "Extrato conta corrente"],
+  ["EXTRATO_INVESTIMENTO", "Extrato de investimentos"],
+  ["TED", "TED / transferência"],
+  ["FATURA_ENERGIA", "Fatura de energia"],
+  ["PLANILHA", "Planilha / prestação"],
+  ["OUTRO", "Outro"],
+] as const;
+
+function legacyTypeForFineClass(cls: string): ExtractedMetadata["documentType"] {
+  if (cls === "NFS" || cls === "NFE_DANFE") return "nota_fiscal";
+  if (["HOLERITE", "HOLERITE_13", "FOPAG_RESUMO", "FOPAG_13_RESUMO"].includes(cls)) return "folha_pagamento";
+  if (cls === "DARF") return "darf";
+  if (cls === "EXTRATO_CC" || cls === "EXTRATO_INVESTIMENTO") return "extrato";
+  if (cls === "PLANILHA") return "planilha";
+  if (["GUIA_ISS", "GUIA_INSS", "FATURA_ENERGIA"].includes(cls)) return "imposto";
+  return "outros";
+}
+
 let pageIdCounter = 0;
 function nextPageId(): string {
   return `p${pageIdCounter++}`;
@@ -1384,10 +1412,10 @@ export default function App() {
         ...(field === "documentType"
           ? {
               documentClass: undefined,
-              needsReview: false,
-              classificationSource: "manual",
-              classificationConfidence: 1,
-              classificationEvidence: ["manual-confirmation"],
+              needsReview: true,
+              classificationSource: "manual-coarse",
+              classificationConfidence: 0.90,
+              classificationEvidence: ["manual-coarse-change"],
             }
           : {}),
       };
@@ -1404,6 +1432,49 @@ export default function App() {
         customFilename,
       };
 
+      return next;
+    });
+  };
+
+  const handleManualClassEdit = (index: number, documentClass: string) => {
+    setSplitPages(prev => {
+      const next = [...prev];
+      const page = next[index];
+      if (!page.metadata) return prev;
+
+      const documentType = legacyTypeForFineClass(documentClass);
+      const updatedMetadata: ExtractedMetadata = {
+        ...page.metadata,
+        documentClass,
+        documentType,
+        isNotaFiscal: documentType === "nota_fiscal",
+        needsReview: true,
+        classificationSource: "manual-pending-confirmation",
+        classificationConfidence: 1,
+        classificationEvidence: [
+          ...(page.metadata.classificationEvidence || []),
+          `manual-class:${documentClass}`,
+        ],
+      };
+
+      let customFilename = generatePageFilename(
+        page.originalFileName,
+        page.sourcePageIndex ?? page.index,
+        updatedMetadata,
+        filenameOptions
+      );
+      if (removeOriginalName) {
+        const marker = customFilename.indexOf("_pag");
+        if (marker >= 0) customFilename = customFilename.substring(marker + 1);
+      }
+
+      next[index] = {
+        ...page,
+        metadata: updatedMetadata,
+        customFilename,
+        processingStage: "review",
+        processingProgress: 100,
+      };
       return next;
     });
   };
@@ -2100,6 +2171,22 @@ export default function App() {
                                 </>
                               ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                                  <div className="flex flex-col gap-1.5 md:col-span-4">
+                                    <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                                      <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                                      Classe fina (aprendizado)
+                                    </label>
+                                    <select
+                                      value={page.metadata.documentClass || "OUTRO"}
+                                      onChange={(e) => handleManualClassEdit(idx, e.target.value)}
+                                      className="text-xs bg-slate-900/85 border border-cyan-900/50 rounded-lg p-2.5 font-semibold text-slate-200 focus:outline-hidden focus:border-cyan-500 cursor-pointer"
+                                    >
+                                      {FINE_CLASS_OPTIONS.map(([value, label]) => (
+                                        <option key={value} value={value}>{label}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+
                                   <div className="flex flex-col gap-1.5 md:col-span-4">
                                     <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
                                       <FileCode className="w-3.5 h-3.5 text-indigo-400" />
