@@ -291,6 +291,78 @@ function OllamaLocalSetup({ model, onModelChange }: { model: string; onModelChan
   );
 }
 
+function OllamaAutoSetup() {
+  const api = window.electronAPI;
+  const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [message, setMessage] = useState("Verificando ambiente local...");
+
+  const refresh = async () => {
+    try {
+      const check = await api?.checkInstalled?.();
+      setReady(Boolean(check?.installed));
+      setMessage(check?.installed
+        ? "Ollama detectado. O modelo multimodal compatível é escolhido automaticamente."
+        : "Ollama ainda não está instalado.");
+    } catch {
+      setReady(false);
+      setMessage("Não foi possível verificar o Ollama.");
+    }
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  const prepare = async () => {
+    if (!api) return;
+    setBusy(true);
+    try {
+      const hw = await api.getHardware();
+      let check = await api.checkInstalled();
+      if (!check.installed) {
+        setMessage("Instalando Ollama...");
+        const installed = await api.install();
+        if (!installed.ok) throw new Error(installed.error || "Falha ao instalar Ollama.");
+        check = await api.checkInstalled();
+      }
+
+      setMessage("Preparando o modelo local automático...");
+      const pulled = await api.pullModel(hw.suggestedModel);
+      if (!pulled.ok) throw new Error(pulled.error || "Falha ao preparar modelo local.");
+      setReady(true);
+      setMessage("Ollama Local pronto. O app selecionará e rotacionará o modelo automaticamente.");
+      fetch("/api/models/runtime/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "LOCAL_OLLAMA" }),
+      }).catch(() => {});
+    } catch (error: any) {
+      setReady(false);
+      setMessage(error?.message || "Falha ao preparar Ollama Local.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Cpu className="w-4 h-4 text-emerald-400" />
+        <span className="text-xs font-bold text-slate-200">Ollama Local automático</span>
+        {ready && <span className="text-[9px] font-bold text-emerald-300 bg-emerald-950/40 px-1.5 py-0.5 rounded">pronto</span>}
+      </div>
+      <p className="text-[11px] text-slate-500 mb-3">{message}</p>
+      <button
+        type="button"
+        onClick={prepare}
+        disabled={busy}
+        className="w-full px-3 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+      >
+        {busy ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Preparando...</> : <><RefreshCw className="w-3.5 h-3.5" /> Preparar / atualizar automaticamente</>}
+      </button>
+    </div>
+  );
+}
+
 // ════════════════════════════════════════════════════════════
 // Laya local — classificador System-1 auxiliar
 // ════════════════════════════════════════════════════════════
@@ -611,8 +683,11 @@ export default function App() {
       if (!s.apiKey && s.provider !== "LOCAL_OLLAMA" && s.provider !== "CODEX") {
         setTimeout(() => setShowFirstTimeWarning(true), 800);
       }
+      // Todo início de sessão atualiza os catálogos dos providers configurados.
+      fetch("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
     }).catch(() => {
       setTimeout(() => setShowFirstTimeWarning(true), 800);
+      fetch("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
     });
   }, []);
 
@@ -1585,6 +1660,23 @@ export default function App() {
     }
   };
 
+  const handleProviderChange = async (provider: string) => {
+    setSettingsProvider(provider);
+    setSettingsApiKey("");
+    try {
+      const res = await fetch(`/api/settings?provider=${encodeURIComponent(provider)}`);
+      const data = await res.json();
+      setSettingsApiKey(typeof data.apiKey === "string" ? data.apiKey : "");
+      fetch("/api/models/runtime/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      }).catch(() => {});
+    } catch {
+      setSettingsApiKey("");
+    }
+  };
+
   // Save settings to server
   const saveSettings = async () => {
     setSavingSettings(true);
@@ -2496,7 +2588,7 @@ export default function App() {
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">Provedor de IA</label>
                 <select
                   value={settingsProvider}
-                  onChange={e => setSettingsProvider(e.target.value)}
+                  onChange={e => handleProviderChange(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
                 >
                   <optgroup label="Modelos na Nuvem">
