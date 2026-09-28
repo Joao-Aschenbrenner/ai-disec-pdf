@@ -825,8 +825,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         console.log("[AI OCR] Resposta recebida:", responseText?.substring(0, 200));
 
       if (!responseText) {
-        rotateRuntimeModel(provider, "empty-response");
-        throw new Error("O modelo automático retornou uma resposta vazia. O próximo retry usará outro candidato compatível.");
+        if (rotateRuntimeModel(provider, "empty-response")) {
+          return res.status(503).json({
+            error: "O modelo automático retornou uma resposta vazia. Rotacionei para outro candidato compatível e a página será tentada novamente.",
+            retryAfter: "1s",
+            modelRotated: true,
+          });
+        }
+        throw new Error("O modelo automático retornou uma resposta vazia. Tente novamente.");
       }
 
       const cleaned = responseText
@@ -873,8 +879,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         const jsonEnd = trimmed.lastIndexOf("}");
         if (jsonStart === -1 || jsonEnd === -1) {
           await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
-          rotateRuntimeModel(provider, "no-usable-json");
-          throw new Error("O modelo automático respondeu em formato incompatível. O próximo retry usará outro candidato compatível.");
+          if (rotateRuntimeModel(provider, "no-usable-json")) {
+            return res.status(503).json({
+              error: "O modelo automático respondeu em formato incompatível. Rotacionei para outro candidato compatível e a página será tentada novamente.",
+              retryAfter: "1s",
+              modelRotated: true,
+            });
+          }
+          throw new Error("O modelo automático respondeu em formato incompatível. Tente novamente.");
         }
         jsonStr = trimmed.substring(jsonStart, jsonEnd + 1);
       }
@@ -904,8 +916,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       }
       if (!parseSucceeded) {
         await logUpload(originalName, pageIndex, "error", provider, `JSON inválido: ${jsonStr.substring(0, 500)}`);
-        rotateRuntimeModel(provider, "invalid-json-output");
-        throw new Error("O modelo automático retornou uma resposta incompatível. O próximo retry usará outro candidato compatível.");
+        if (rotateRuntimeModel(provider, "invalid-json-output")) {
+          return res.status(503).json({
+            error: "O modelo automático retornou uma resposta incompatível. Rotacionei para outro candidato compatível e a página será tentada novamente.",
+            retryAfter: "1s",
+            modelRotated: true,
+          });
+        }
+        throw new Error("O modelo automático retornou uma resposta incompatível. Tente novamente.");
       }
 
       // If the response is an array (multiple documents per page), handle each

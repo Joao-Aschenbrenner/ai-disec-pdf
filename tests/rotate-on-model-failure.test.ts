@@ -24,6 +24,7 @@ interface Scenario {
 describe("Erros de modelo DEVEM rotacionar", () => {
   let originalFetch: typeof globalThis.fetch;
   let testImageBase64 = "";
+  const usedModels: string[] = [];
 
   const scenarios: Array<{
     scenario: string;
@@ -70,14 +71,15 @@ describe("Erros de modelo DEVEM rotacionar", () => {
         if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
           return Promise.resolve(new Response(JSON.stringify({
             data: [
-              { id: "fixture-rot-new", created: 200, modalities: ["text", "image"] },
-              { id: "fixture-rot-old", created: 100, modalities: ["text", "image"] },
+              { id: "fixture-vision-rot-novo", created: 200, modalities: ["text", "image"] },
+              { id: "fixture-vision-rot-antigo", created: 100, modalities: ["text", "image"] },
             ],
           }), { status: 200, headers: { "Content-Type": "application/json" } }));
         }
         if (urlStr.includes("integrate.api.nvidia.com/v1/chat/completions")) {
           const body = init?.body ? JSON.parse(init.body) : {};
-          if (body.model === "fixture-rot-new") return activeScenario.newModelBehavior();
+          usedModels.push(body.model);
+          if (body.model === "fixture-vision-rot-novo") return activeScenario.newModelBehavior();
           // candidato antigo responde com sucesso válido
           return Promise.resolve(new Response(JSON.stringify({
             choices: [{
@@ -112,6 +114,7 @@ describe("Erros de modelo DEVEM rotacionar", () => {
   for (const sc of scenarios) {
     it(`rotaciona após: ${sc.scenario}`, async () => {
       activeScenario = sc;
+      usedModels.length = 0;
       // Refresh por cenário para voltar ao candidato mais recente antes de cada caso.
       const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
         method: "POST",
@@ -131,6 +134,7 @@ describe("Erros de modelo DEVEM rotacionar", () => {
       // Um 504/200 silencioso aqui não é sucesso: isso esconderia regressão do runtime.
       expect(res.status).toBe(sc.expectedStatus);
       expect(body.modelRotated).toBe(true);
+      expect(usedModels[0]).toBe("fixture-vision-rot-novo");
 
       // O request seguinte precisa usar o candidato rotacionado e concluir.
       const retry = await fetch(`${BASE_URL}/api/extract`, {
@@ -141,6 +145,7 @@ describe("Erros de modelo DEVEM rotacionar", () => {
       expect(retry.status).toBe(200);
       const retryBody = await retry.json();
       expect(retryBody.companyName).toBe("Mock");
+      expect(usedModels[1]).toBe("fixture-vision-rot-antigo");
     });
   }
 });
