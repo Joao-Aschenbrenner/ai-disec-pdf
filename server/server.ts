@@ -925,6 +925,42 @@ app.get("/api/models/runtime/status", (req, res) => {
   });
 });
 
+app.post("/api/models/runtime/refresh-all", async (_req, res) => {
+  try {
+    let data: any = {};
+    try {
+      if (fs.existsSync(SETTINGS_FILE)) data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+    } catch {}
+
+    const apiKeys = data.apiKeys && typeof data.apiKeys === "object" ? data.apiKeys : {};
+    if (data.provider && data.apiKey && !apiKeys[String(data.provider).toUpperCase()]) {
+      apiKeys[String(data.provider).toUpperCase()] = data.apiKey;
+    }
+
+    const providers = Object.keys(loadModelsCatalog().providers);
+    const results: Record<string, { status: string; candidateCount: number }> = {};
+
+    await Promise.all(providers.map(async provider => {
+      const key = typeof apiKeys[provider] === "string" ? apiKeys[provider] : "";
+      const shouldRefresh = Boolean(key) || provider === "LOCAL_OLLAMA" || provider === "CODEX";
+      if (!shouldRefresh) {
+        results[provider] = { status: "catalog", candidateCount: catalogCandidates(provider).length };
+        return;
+      }
+      try {
+        const state = await refreshRuntimeModels(provider, key);
+        results[provider] = { status: "ready", candidateCount: state.candidates.length };
+      } catch {
+        results[provider] = { status: "fallback", candidateCount: catalogCandidates(provider).length };
+      }
+    }));
+
+    return res.json({ success: true, providers: results });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Falha ao atualizar providers." });
+  }
+});
+
 // ─── Classification V3: pre-pass / sequence / learning ─────────────
 app.get("/api/classification/health", async (_req, res) => {
   const laya = await getLayaHealth();
