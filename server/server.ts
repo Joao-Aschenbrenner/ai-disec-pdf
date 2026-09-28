@@ -157,6 +157,7 @@ type RuntimeModelState = {
 };
 
 const MODEL_RUNTIME_FILE = path.join(DATA_DIR, "model-runtime.json");
+const RUNTIME_SESSION_STARTED_AT = Date.now();
 let runtimeModels: Record<string, RuntimeModelState> = {};
 
 try {
@@ -197,8 +198,8 @@ function modelLooksCompatible(provider: string, model: string): boolean {
     CODEX: /(gpt-4o|gpt-4\.1|gpt-5|vision)/i,
     ANTHROPIC: /(claude|sonnet|opus)/i,
     OPENROUTER: /(vision|\bvl\b|multimodal|omni|gemini|gemma|pixtral|llama-4)/i,
-    GROQ: /(vision|\bvl\b|multimodal|qwen)/i,
-    OLLAMA_CLOUD: /(vision|\bvl\b|multimodal|llava|qwen|gemma)/i,
+    GROQ: /(vision|\bvl\b|multimodal|qwen.*(vl|vision)|qwen3\.8-27b)/i,
+    OLLAMA_CLOUD: /(vision|\bvl\b|multimodal|llava|qwen.*(vl|vision)|gemma.*(vision|vl))/i,
   };
   if (providerHeuristics[provider]?.test(lower)) return true;
 
@@ -263,7 +264,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
     if (!res.ok) throw new Error(`${provider} model-list HTTP ${res.status}`);
     const data = await res.json() as any;
 
-    let rows: Array<{ id: string; created: number; explicitVision: boolean }> = [];
+    let rows: Array<{ id: string; created: number; explicitVision: boolean; hasModalityMetadata: boolean }> = [];
     if (provider === "GOOGLE") {
       rows = (data.models || [])
         .filter((m: any) => !Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes("generateContent"))
@@ -271,6 +272,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
           id: String(m.name || "").replace(/^models\//, ""),
           created: 0,
           explicitVision: true,
+          hasModalityMetadata: true,
         }));
     } else {
       const raw = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
@@ -284,11 +286,15 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
           id: typeof m === "string" ? m : String(m?.id || m?.name || ""),
           created: Number(m?.created || Date.parse(m?.created_at || "") || 0),
           explicitVision: modalities.includes("image") || modalities.includes("vision"),
+          hasModalityMetadata: modalities.length > 0,
         };
       });
     }
 
-    rows = rows.filter(row => row.id && (row.explicitVision || modelLooksCompatible(provider, row.id)));
+    rows = rows.filter(row =>
+      row.id &&
+      (row.hasModalityMetadata ? row.explicitVision : modelLooksCompatible(provider, row.id))
+    );
     rows.sort((a, b) => b.created - a.created);
     return Array.from(new Set(rows.map(row => row.id)));
   } finally {
@@ -328,7 +334,8 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
 
 async function getRuntimeModel(provider: string, apiKey: string): Promise<string> {
   let state = runtimeModels[provider];
-  if (!state || !state.candidates?.length) {
+  const refreshedAt = state?.refreshedAt ? Date.parse(state.refreshedAt) : 0;
+  if (!state || !state.candidates?.length || !refreshedAt || refreshedAt < RUNTIME_SESSION_STARTED_AT) {
     state = await refreshRuntimeModels(provider, apiKey);
   }
   return state.candidates[state.activeIndex] || getProviderConfig(provider).model;
@@ -803,7 +810,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         console.log("[AI OCR] Resposta recebida:", responseText?.substring(0, 200));
 
       if (!responseText) {
-        throw new Error("O modelo de IA retornou uma resposta vazia.");
+        rotateRuntimeModel(provider, "empty-response");
+        throw new Error("O modelo automático retornou uma resposta vazia. O próximo retry usará outro candidato compatível.");
       }
 
       const cleaned = responseText
@@ -880,7 +888,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       }
       if (!parseSucceeded) {
         await logUpload(originalName, pageIndex, "error", provider, `JSON inválido: ${jsonStr.substring(0, 500)}`);
-        throw new Error(`Erro ao interpretar resposta da IA. JSON bruto: ${responseText.substring(0, 300)}`);
+        rotateRuntimeModel(provider, "invalid-json-output");
+        throw new Error("O modelo automático retornou uma resposta incompatível. O próximo retry usará outro candidato compatível.");
       }
 
       // If the response is an array (multiple documents per page), handle each
