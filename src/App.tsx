@@ -1011,7 +1011,8 @@ export default function App() {
       if (result.status !== "failed") return result;
       if (attempt === 3) return result;
 
-      let delayMs = delays[attempt - 1];
+      // Pequeno stagger evita que as 3 páginas falhadas retomem no mesmo milissegundo.
+      let delayMs = delays[attempt - 1] + ((page.index % AUTO_PIPELINE_CONCURRENCY) * 400);
       if (result.retryAfter) {
         const match = result.retryAfter.match(/(\d+)/);
         if (match) delayMs = Math.max(delayMs, parseInt(match[1], 10) * 1000);
@@ -1056,7 +1057,7 @@ export default function App() {
 
     // PASSAGEM 1A: extrai camada de texto local. Em scan puro isso retorna vazio,
     // e a página será classificada pelo Laya depois que o VLM produzir classificationText.
-    const withText = await mapPool(pages, 4, async (page) => {
+    const withText = await mapPool(pages, AUTO_PIPELINE_CONCURRENCY, async (page) => {
       updatePageStage(page.id, "preparing", 8);
       let localText = "";
       try {
