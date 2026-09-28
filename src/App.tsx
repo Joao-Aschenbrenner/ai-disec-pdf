@@ -773,6 +773,10 @@ export default function App() {
       const err = new Error(errJson.error || "Erro de requisição.") as any;
       err.retryAfter = errJson.retryAfter;
       err.status = response.status;
+      err.retryable =
+        typeof errJson.retryable === "boolean"
+          ? errJson.retryable
+          : [408, 429, 500, 502, 503, 504, 529].includes(response.status);
       throw err;
     }
     return response.json();
@@ -943,6 +947,7 @@ export default function App() {
         processingProgress: 100,
         error: message,
         retryAfter: err?.retryAfter,
+        retryable: err?.retryable !== false,
       };
     }
   };
@@ -960,6 +965,7 @@ export default function App() {
 
       if (Array.isArray(result)) return result;
       if (result.status !== "failed") return result;
+      if (result.retryable === false) return result;
       if (attempt === 3) return result;
 
       // Pequeno stagger evita que as 3 páginas falhadas retomem no mesmo milissegundo.
@@ -1141,6 +1147,7 @@ export default function App() {
         status: (p.status === "success" ? "success" : "pending") as "success" | "pending",
         error: undefined,
         retryAfter: undefined,
+        retryable: undefined,
         processingStage: (p.status === "success" ? "done" : "waiting") as SplitPage["processingStage"],
         processingProgress: p.status === "success" ? 100 : 0,
       }));
