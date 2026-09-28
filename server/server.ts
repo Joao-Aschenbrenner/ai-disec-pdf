@@ -188,9 +188,22 @@ function modelLooksCompatible(provider: string, model: string): boolean {
   const entry = loadModelsCatalog().providers[provider];
   if (!entry) return true;
   if (entry.ocrOnly || entry.local) return true;
+
+  const lower = model.toLowerCase();
+  const providerHeuristics: Record<string, RegExp> = {
+    NVIDIA: /(vision|\bvl\b|multimodal|omni|glm)/i,
+    GOOGLE: /gemini/i,
+    OPENAI: /(gpt-4o|gpt-4\.1|gpt-5|vision)/i,
+    CODEX: /(gpt-4o|gpt-4\.1|gpt-5|vision)/i,
+    ANTHROPIC: /(claude|sonnet|opus)/i,
+    OPENROUTER: /(vision|\bvl\b|multimodal|omni|gemini|gemma|pixtral|llama-4)/i,
+    GROQ: /(vision|\bvl\b|multimodal|qwen)/i,
+    OLLAMA_CLOUD: /(vision|\bvl\b|multimodal|llava|qwen|gemma)/i,
+  };
+  if (providerHeuristics[provider]?.test(lower)) return true;
+
   const keywords = entry.visionKeywords || [];
   if (!keywords.length) return true;
-  const lower = model.toLowerCase();
   return keywords.some(keyword => lower.includes(String(keyword).toLowerCase()));
 }
 
@@ -250,20 +263,32 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
     if (!res.ok) throw new Error(`${provider} model-list HTTP ${res.status}`);
     const data = await res.json() as any;
 
-    let rows: Array<{ id: string; created: number }> = [];
+    let rows: Array<{ id: string; created: number; explicitVision: boolean }> = [];
     if (provider === "GOOGLE") {
       rows = (data.models || [])
         .filter((m: any) => !Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes("generateContent"))
-        .map((m: any) => ({ id: String(m.name || "").replace(/^models\//, ""), created: 0 }));
+        .map((m: any) => ({
+          id: String(m.name || "").replace(/^models\//, ""),
+          created: 0,
+          explicitVision: true,
+        }));
     } else {
       const raw = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
-      rows = raw.map((m: any) => ({
-        id: typeof m === "string" ? m : String(m?.id || m?.name || ""),
-        created: Number(m?.created || Date.parse(m?.created_at || "") || 0),
-      }));
+      rows = raw.map((m: any) => {
+        const modalities = [
+          ...(Array.isArray(m?.modalities) ? m.modalities : []),
+          ...(Array.isArray(m?.input_modalities) ? m.input_modalities : []),
+          ...(Array.isArray(m?.architecture?.input_modalities) ? m.architecture.input_modalities : []),
+        ].map((x: any) => String(x).toLowerCase());
+        return {
+          id: typeof m === "string" ? m : String(m?.id || m?.name || ""),
+          created: Number(m?.created || Date.parse(m?.created_at || "") || 0),
+          explicitVision: modalities.includes("image") || modalities.includes("vision"),
+        };
+      });
     }
 
-    rows = rows.filter(row => row.id && modelLooksCompatible(provider, row.id));
+    rows = rows.filter(row => row.id && (row.explicitVision || modelLooksCompatible(provider, row.id)));
     rows.sort((a, b) => b.created - a.created);
     return Array.from(new Set(rows.map(row => row.id)));
   } finally {
@@ -287,14 +312,11 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
     .filter(model => modelLooksCompatible(provider, model));
 
   const previous = runtimeModels[provider];
-  const previousModel = previous?.candidates?.[previous.activeIndex];
-  const activeIndex = previousModel && candidates.includes(previousModel)
-    ? candidates.indexOf(previousModel)
-    : 0;
-
   const next: RuntimeModelState = {
     candidates: candidates.length ? candidates : fallback,
-    activeIndex,
+    // Cada nova atualização volta a testar o candidato mais recente.
+    // Se falhar durante a sessão, rotateRuntimeModel avança para o próximo.
+    activeIndex: 0,
     refreshedAt: new Date().toISOString(),
     failures: previous?.failures || {},
   };
