@@ -898,7 +898,19 @@ export default function App() {
   ): Promise<ProcessedPageResult> => {
     try {
       updatePageStage(id, "extracting", 50);
-      const imageBase64 = await pdfBase64ToJpeg(page.base64);
+      const detailedVisualClasses = new Set([
+        "HOLERITE",
+        "HOLERITE_13",
+        "FOPAG_RESUMO",
+        "FOPAG_13_RESUMO",
+      ]);
+      const visualMode =
+        page.v3Hint?.modelTier === "fast" &&
+        !detailedVisualClasses.has(page.v3Hint?.documentClass || "") &&
+        page.segmentIndex === undefined
+          ? "fast"
+          : "detail";
+      const imageBase64 = await pdfBase64ToJpeg(page.base64, { mode: visualMode });
 
       // V3: se a primeira/segunda passagem já indicou holerite, detecta layout ANTES
       // de mandar a página física inteira ao VLM.
