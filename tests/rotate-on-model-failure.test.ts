@@ -127,13 +127,20 @@ describe("Erros de modelo DEVEM rotacionar", () => {
       });
 
       const body = await res.json();
-      if (sc.expectedStatus === 503 && body.modelRotated) {
-        expect(res.status).toBe(503);
-        expect(body.modelRotated).toBe(true);
-      } else {
-        // Se o candidato antigo concluiu (a rotação pode ocorrer inline), resultado válido.
-        expect([200, 503]).toContain(res.status);
-      }
+      // O primeiro request precisa provar que o candidato falho foi rotacionado.
+      // Um 504/200 silencioso aqui não é sucesso: isso esconderia regressão do runtime.
+      expect(res.status).toBe(sc.expectedStatus);
+      expect(body.modelRotated).toBe(true);
+
+      // O request seguinte precisa usar o candidato rotacionado e concluir.
+      const retry = await fetch(`${BASE_URL}/api/extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
+      });
+      expect(retry.status).toBe(200);
+      const retryBody = await retry.json();
+      expect(retryBody.companyName).toBe("Mock");
     });
   }
 });
