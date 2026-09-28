@@ -149,6 +149,192 @@ function getModelByTier(provider: string, tier: string): string {
 
 export { loadModelsCatalog, getProviderConfig, FALLBACK_MODELS };
 
+type RuntimeModelState = {
+  candidates: string[];
+  activeIndex: number;
+  refreshedAt: string;
+  failures: Record<string, string>;
+};
+
+const MODEL_RUNTIME_FILE = path.join(DATA_DIR, "model-runtime.json");
+let runtimeModels: Record<string, RuntimeModelState> = {};
+
+try {
+  if (fs.existsSync(MODEL_RUNTIME_FILE)) {
+    const parsed = JSON.parse(fs.readFileSync(MODEL_RUNTIME_FILE, "utf8"));
+    if (parsed && typeof parsed === "object") runtimeModels = parsed;
+  }
+} catch {
+  runtimeModels = {};
+}
+
+function saveRuntimeModels() {
+  try {
+    ensureDataDir();
+    fs.writeFileSync(MODEL_RUNTIME_FILE, JSON.stringify(runtimeModels, null, 2), "utf8");
+  } catch (error) {
+    console.warn("[models-runtime] Falha ao persistir estado:", error instanceof Error ? error.message : error);
+  }
+}
+
+function catalogCandidates(provider: string): string[] {
+  const entry = loadModelsCatalog().providers[provider];
+  if (!entry) return [getProviderConfig(provider).model];
+  const ordered = [...(entry.preferred || []), ...(entry.models || [])];
+  return Array.from(new Set(ordered.filter(Boolean)));
+}
+
+function modelLooksCompatible(provider: string, model: string): boolean {
+  const entry = loadModelsCatalog().providers[provider];
+  if (!entry) return true;
+  if (entry.ocrOnly || entry.local) return true;
+  const keywords = entry.visionKeywords || [];
+  if (!keywords.length) return true;
+  const lower = model.toLowerCase();
+  return keywords.some(keyword => lower.includes(String(keyword).toLowerCase()));
+}
+
+function providerCredential(provider: string, apiKey: string): string {
+  if (apiKey) return apiKey;
+  if (provider === "CODEX") {
+    try {
+      const codexAuthPath = path.join(os.homedir(), ".codex", "auth.json");
+      if (fs.existsSync(codexAuthPath)) {
+        const auth = JSON.parse(fs.readFileSync(codexAuthPath, "utf8"));
+        return auth.tokens?.access_token || auth.access_token || "";
+      }
+    } catch {}
+  }
+  return "";
+}
+
+async function fetchLiveModelCandidates(provider: string, apiKey: string): Promise<string[]> {
+  const catalog = loadModelsCatalog();
+  const entry = catalog.providers[provider];
+  if (!entry) return catalogCandidates(provider);
+
+  if (provider === "LOCAL_OLLAMA") {
+    const res = await fetch(`${entry.baseUrl.replace(/\/$/, "")}/api/tags`);
+    if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
+    const data = await res.json() as any;
+    return Array.from(new Set(
+      (data.models || [])
+        .map((m: any) => m?.name || m?.model || "")
+        .filter((m: string) => m && modelLooksCompatible(provider, m))
+    ));
+  }
+
+  const credential = providerCredential(provider, apiKey);
+  if (!credential) return catalogCandidates(provider);
+
+  let url = "";
+  const headers: Record<string, string> = {};
+
+  if (provider === "GOOGLE") {
+    url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(credential)}`;
+  } else {
+    const endpoint = entry.modelsEndpoint || "/v1/models";
+    url = entry.baseUrl.replace(/\/$/, "") + (endpoint.startsWith("/") ? endpoint : `/${endpoint}`);
+    if (provider === "ANTHROPIC") {
+      headers["x-api-key"] = credential;
+      headers["anthropic-version"] = "2023-06-01";
+    } else {
+      headers.Authorization = `Bearer ${credential}`;
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(url, { headers, signal: controller.signal });
+    if (!res.ok) throw new Error(`${provider} model-list HTTP ${res.status}`);
+    const data = await res.json() as any;
+
+    let rows: Array<{ id: string; created: number }> = [];
+    if (provider === "GOOGLE") {
+      rows = (data.models || [])
+        .filter((m: any) => !Array.isArray(m.supportedGenerationMethods) || m.supportedGenerationMethods.includes("generateContent"))
+        .map((m: any) => ({ id: String(m.name || "").replace(/^models\//, ""), created: 0 }));
+    } else {
+      const raw = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
+      rows = raw.map((m: any) => ({
+        id: typeof m === "string" ? m : String(m?.id || m?.name || ""),
+        created: Number(m?.created || Date.parse(m?.created_at || "") || 0),
+      }));
+    }
+
+    rows = rows.filter(row => row.id && modelLooksCompatible(provider, row.id));
+    rows.sort((a, b) => b.created - a.created);
+    return Array.from(new Set(rows.map(row => row.id)));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function refreshRuntimeModels(provider: string, apiKey: string): Promise<RuntimeModelState> {
+  const fallback = catalogCandidates(provider);
+  let live: string[] = [];
+
+  try {
+    live = await fetchLiveModelCandidates(provider, apiKey);
+  } catch (error) {
+    console.warn(`[models-runtime] ${provider}: refresh falhou; preservando catálogo:`, error instanceof Error ? error.message : error);
+  }
+
+  // O provider ao vivo vem primeiro (mais recente quando a API fornece created_at);
+  // catálogo curado completa os fallbacks conhecidos.
+  const candidates = Array.from(new Set([...(live || []), ...fallback]))
+    .filter(model => modelLooksCompatible(provider, model));
+
+  const previous = runtimeModels[provider];
+  const previousModel = previous?.candidates?.[previous.activeIndex];
+  const activeIndex = previousModel && candidates.includes(previousModel)
+    ? candidates.indexOf(previousModel)
+    : 0;
+
+  const next: RuntimeModelState = {
+    candidates: candidates.length ? candidates : fallback,
+    activeIndex,
+    refreshedAt: new Date().toISOString(),
+    failures: previous?.failures || {},
+  };
+  runtimeModels[provider] = next;
+  saveRuntimeModels();
+  console.log(`[models-runtime] ${provider}: ${next.candidates.length} candidatos atualizados; ativo #${next.activeIndex + 1}`);
+  return next;
+}
+
+async function getRuntimeModel(provider: string, apiKey: string): Promise<string> {
+  let state = runtimeModels[provider];
+  if (!state || !state.candidates?.length) {
+    state = await refreshRuntimeModels(provider, apiKey);
+  }
+  return state.candidates[state.activeIndex] || getProviderConfig(provider).model;
+}
+
+function rotateRuntimeModel(provider: string, reason: string): boolean {
+  const state = runtimeModels[provider];
+  if (!state || state.candidates.length < 2) return false;
+  const current = state.candidates[state.activeIndex];
+  state.failures[current] = reason.slice(0, 200);
+  state.activeIndex = (state.activeIndex + 1) % state.candidates.length;
+  runtimeModels[provider] = state;
+  saveRuntimeModels();
+  console.warn(`[models-runtime] ${provider}: modelo rotacionado após falha; novo candidato #${state.activeIndex + 1}`);
+  return true;
+}
+
+function shouldRotateModel(status: number, body: string): boolean {
+  if ([404, 410, 422, 503, 529].includes(status)) return true;
+  return /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|capacity|worker|overloaded/i.test(body);
+}
+
+function shouldRotateThrown(error: any): boolean {
+  const name = String(error?.name || "");
+  const message = String(error?.message || "");
+  return name === "AbortError" || /time.?out|model.{0,30}(unavailable|not found)|capacity|worker|overloaded/i.test(message);
+}
+
 let serverInstance: any = null;
 
 function ensureDataDir() {
@@ -359,10 +545,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const prompt = buildExtractionPrompt(correction, v3Hint);
 
       // Seleciona provedor de IA
-       const provider = "NVIDIA";
+       const provider = String(settings.provider || "NVIDIA").toUpperCase();
        const hintedTier = v3Hint?.modelTier === "fast" ? "fast" : "medium";
-       // Produto simplificado: sempre automático. O contexto escolhe apenas o esforço,
-       // nunca expõe ou seleciona manualmente um modelo/tier ao usuário.
+       // O usuário não escolhe modelo/tier. O contexto ajusta só o custo visual;
+       // o modelo real é descoberto e rotacionado automaticamente.
        const modelTier = hintedTier;
        let aiResponse;
        try {
@@ -412,7 +598,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
           if (provider === "GOOGLE") {
             if (!apiKey) throw new Error("Chave de API Google não configurada.");
-            const googleModel = getModelByTier("GOOGLE", modelTier);
+            const googleModel = await getRuntimeModel("GOOGLE", apiKey);
             const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${apiKey}`;
             console.log(`[AI] Enviando para Google Gemini (${googleModel})...`);
             aiResponse = await fetch(googleUrl, {
@@ -424,7 +610,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            });
           } else if (provider === "OPENAI") {
             if (!apiKey) throw new Error("Chave de API OpenAI não configurada.");
-            const openaiModel = getModelByTier("OPENAI", modelTier);
+            const openaiModel = await getRuntimeModel("OPENAI", apiKey);
             console.log(`[AI] Enviando para OpenAI (${openaiModel})...`);
             aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
               method: "POST",
@@ -439,7 +625,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            });
           } else if (provider === "ANTHROPIC") {
             if (!apiKey) throw new Error("Chave de API Anthropic não configurada.");
-            const anthropicModel = getModelByTier("ANTHROPIC", modelTier);
+            const anthropicModel = await getRuntimeModel("ANTHROPIC", apiKey);
             console.log(`[AI] Enviando para Anthropic Claude (${anthropicModel})...`);
             aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
               method: "POST",
@@ -452,7 +638,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            });
           } else if (provider === "MISTRAL") {
             if (!apiKey) throw new Error("Chave de API Mistral não configurada.");
-            const mistralModel = getModelByTier("MISTRAL", modelTier);
+            const mistralModel = await getRuntimeModel("MISTRAL", apiKey);
             console.log(`[AI] Enviando para Mistral OCR (${mistralModel})...`);
             // Mistral não tem visão direta — usa OCR (v1/ocr) para extrair texto da imagem,
             // depois classifica o texto com um modelo de texto (mistral-small-latest).
@@ -486,18 +672,18 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             aiResponse = classifyRes;
            } else if (provider === "OPENROUTER") {
              if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
-             const openrouterModel = getModelByTier("OPENROUTER", modelTier);
+             const openrouterModel = await getRuntimeModel("OPENROUTER", apiKey);
              console.log(`[AI] Enviando para OpenRouter (${openrouterModel})...`);
              aiResponse = await callOpenAICompatible({ provider: "OPENROUTER", model: openrouterModel, apiKey }, imageBase64, prompt);
            } else if (provider === "GROQ") {
              if (!apiKey) throw new Error("Chave de API Groq não configurada.");
-             const groqModel = getModelByTier("GROQ", modelTier);
+             const groqModel = await getRuntimeModel("GROQ", apiKey);
              console.log(`[AI] Enviando para Groq (${groqModel})...`);
              aiResponse = await callOpenAICompatible({ provider: "GROQ", model: groqModel, apiKey }, imageBase64, prompt);
            } else if (provider === "LOCAL_OLLAMA") {
               // Ollama local — sem chave de API. Endpoint /api/chat (não /v1/chat/completions).
               // O modelo escolhido nas Configurações (settings.model) tem prioridade sobre o tier selecionado.
-              const ollamaLocalModel = settings.model || getModelByTier("LOCAL_OLLAMA", modelTier);
+              const ollamaLocalModel = await getRuntimeModel("LOCAL_OLLAMA", "");
               const ollamaConfig = getProviderConfig("LOCAL_OLLAMA");
               console.log(`[AI] Enviando para Ollama local (${ollamaLocalModel})...`);
 
@@ -531,7 +717,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               });
             } else if (provider === "OLLAMA_CLOUD") {
               if (!apiKey) throw new Error("Token Ollama Cloud não configurado. Obtenha em https://ollama.com/signup.");
-              const ollamaCloudModel = getModelByTier("OLLAMA_CLOUD", modelTier);
+              const ollamaCloudModel = await getRuntimeModel("OLLAMA_CLOUD", apiKey);
               console.log(`[AI] Enviando para Ollama Cloud (${ollamaCloudModel})...`);
               aiResponse = await callOpenAICompatible({ provider: "OLLAMA_CLOUD", model: ollamaCloudModel, apiKey }, imageBase64, prompt);
             } else if (provider === "CODEX") {
@@ -547,23 +733,33 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 } catch (e) { /* ignora */ }
               }
               if (!codexKey) throw new Error("Login Codex necessário. Clique em 'Sign in with ChatGPT' nas Configurações, ou cole uma API key da OpenAI.");
-              const codexModel = getModelByTier("CODEX", modelTier);
+              const codexModel = await getRuntimeModel("CODEX", codexKey);
               console.log(`[AI] Enviando para OpenAI/Codex (${codexModel})...`);
               aiResponse = await callOpenAICompatible({ provider: "CODEX", model: codexModel, apiKey: codexKey }, imageBase64, prompt);
             } else {
               // NVIDIA (padrão)
-              const nvidiaModel = getModelByTier("NVIDIA", modelTier);
+              const nvidiaModel = await getRuntimeModel("NVIDIA", apiKey);
               console.log(`[AI] Enviando para NVIDIA (${nvidiaModel})...`);
               aiResponse = await callOpenAICompatible({ provider: "NVIDIA", model: nvidiaModel, apiKey }, imageBase64, prompt);
             }
 } catch (aiErr) {
           await logError("Falha ao chamar o provedor de IA", aiErr);
+          if (shouldRotateThrown(aiErr)) {
+            rotateRuntimeModel(provider, aiErr instanceof Error ? aiErr.message : String(aiErr));
+          }
           throw aiErr;
         }
 
        if (!aiResponse.ok) {
          const errBody = await aiResponse.text();
          console.error("[AI API Error]:", aiResponse.status, errBody);
+         if (shouldRotateModel(aiResponse.status, errBody) && rotateRuntimeModel(provider, `HTTP ${aiResponse.status}`)) {
+           return res.status(503).json({
+             error: "O modelo automático deste provedor não respondeu corretamente. Rotacionei para outro modelo compatível e a página será tentada novamente.",
+             retryAfter: "1s",
+             modelRotated: true,
+           });
+         }
          const { userMessage, retryAfter } = extractAIError(aiResponse.status, errBody);
          return res.status(aiResponse.status).json({ error: userMessage, retryAfter });
        }
@@ -688,6 +884,47 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
      }
   });
 
+// ─── Runtime model discovery / rotation ─────────────────────────────
+app.post("/api/models/runtime/refresh", async (req, res) => {
+  try {
+    const settings = getSettings();
+    const provider = String(req.body?.provider || settings.provider || "NVIDIA").toUpperCase();
+    const apiKey = provider === settings.provider
+      ? settings.apiKey
+      : (fs.existsSync(SETTINGS_FILE)
+          ? (() => {
+              try {
+                const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+                return data.apiKeys?.[provider] || "";
+              } catch { return ""; }
+            })()
+          : "");
+
+    const state = await refreshRuntimeModels(provider, apiKey);
+    return res.json({
+      provider,
+      status: "ready",
+      candidateCount: state.candidates.length,
+      activeCandidate: state.activeIndex + 1,
+      refreshedAt: state.refreshedAt,
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message || "Falha ao atualizar modelos." });
+  }
+});
+
+app.get("/api/models/runtime/status", (req, res) => {
+  const provider = String(req.query.provider || getSettings().provider || "NVIDIA").toUpperCase();
+  const state = runtimeModels[provider];
+  return res.json({
+    provider,
+    ready: Boolean(state?.candidates?.length),
+    candidateCount: state?.candidates?.length || 0,
+    activeCandidate: state ? state.activeIndex + 1 : 0,
+    refreshedAt: state?.refreshedAt || null,
+  });
+});
+
 // ─── Classification V3: pre-pass / sequence / learning ─────────────
 app.get("/api/classification/health", async (_req, res) => {
   const laya = await getLayaHealth();
@@ -795,16 +1032,20 @@ app.post("/api/learning/confirm", (req, res) => {
 app.get("/api/settings", (req, res) => {
   try {
     ensureDataDir();
+    const requestedProvider = String(req.query.provider || "").toUpperCase();
     if (fs.existsSync(SETTINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+      const provider = requestedProvider || String(data.provider || "NVIDIA").toUpperCase();
+      const apiKeys = data.apiKeys && typeof data.apiKeys === "object" ? data.apiKeys : {};
+      const legacyKey = typeof data.apiKey === "string" && String(data.provider || "").toUpperCase() === provider ? data.apiKey : "";
       return res.json({
-        provider: "NVIDIA",
-        apiKey: typeof data.apiKey === "string" ? data.apiKey : "",
+        provider,
+        apiKey: typeof apiKeys[provider] === "string" ? apiKeys[provider] : legacyKey,
         model: "",
         modelTier: "auto",
       });
     }
-    return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
+    return res.json({ provider: requestedProvider || "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
   } catch {
     return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
   }
@@ -813,18 +1054,23 @@ app.get("/api/settings", (req, res) => {
 app.post("/api/settings", (req, res) => {
   try {
     ensureDataDir();
-    const { apiKey } = req.body;
-    if (apiKey === undefined) {
-      return res.status(400).json({ error: "apiKey é obrigatória." });
+    const provider = String(req.body?.provider || "NVIDIA").toUpperCase();
+    const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey : "";
+
+    let previous: any = {};
+    try {
+      if (fs.existsSync(SETTINGS_FILE)) previous = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+    } catch {}
+
+    const apiKeys = previous.apiKeys && typeof previous.apiKeys === "object" ? { ...previous.apiKeys } : {};
+    if (previous.provider && typeof previous.apiKey === "string" && previous.apiKey && !apiKeys[String(previous.provider).toUpperCase()]) {
+      apiKeys[String(previous.provider).toUpperCase()] = previous.apiKey;
     }
-    const settings = {
-      provider: "NVIDIA",
-      apiKey: typeof apiKey === "string" ? apiKey : "",
-      model: "",
-      modelTier: "auto",
-    };
+    if (apiKey || provider === "LOCAL_OLLAMA" || provider === "CODEX") apiKeys[provider] = apiKey;
+
+    const settings = { provider, apiKeys, modelTier: "auto" };
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
-    console.log("[settings] Saved single-provider automatic configuration");
+    console.log(`[settings] Saved provider=${provider} automatic-model-selection=true`);
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -836,12 +1082,12 @@ function getSettings() {
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
-      return {
-        provider: "NVIDIA",
-        apiKey: typeof data.apiKey === "string" ? data.apiKey : "",
-        model: "",
-        modelTier: "auto",
-      };
+      const provider = String(data.provider || "NVIDIA").toUpperCase();
+      const apiKeys = data.apiKeys && typeof data.apiKeys === "object" ? data.apiKeys : {};
+      const apiKey = typeof apiKeys[provider] === "string"
+        ? apiKeys[provider]
+        : (typeof data.apiKey === "string" ? data.apiKey : "");
+      return { provider, apiKey, model: "", modelTier: "auto" };
     }
   } catch {}
   return { provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" };
