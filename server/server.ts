@@ -321,7 +321,10 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
   try {
     live = await fetchLiveModelCandidates(provider, apiKey);
   } catch (error) {
-    console.warn(`[models-runtime] ${provider}: refresh falhou; preservando catálogo:`, error instanceof Error ? error.message : error);
+    // Mensagem separada da interpolação: exceções externas podem conter "%"
+    // e o console trataria como specifiers de formatação.
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`[models-runtime] ${provider}: refresh falhou; preservando catálogo. Motivo: ${reason}`);
   }
 
   // O provider ao vivo vem primeiro (mais recente quando a API fornece created_at);
