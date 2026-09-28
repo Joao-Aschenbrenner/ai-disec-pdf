@@ -588,8 +588,9 @@ export default function App() {
   // Modal states
   const [showSettings, setShowSettings] = useState(false);
   const [showDocModal, setShowDocModal] = useState(false);
+  const [settingsProvider, setSettingsProvider] = useState("NVIDIA");
   const [settingsApiKey, setSettingsApiKey] = useState("");
-  const currentProvider = "NVIDIA";
+  const [currentProvider, setCurrentProvider] = useState("NVIDIA");
   const [savingSettings, setSavingSettings] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showFirstTimeWarning, setShowFirstTimeWarning] = useState(false);
@@ -602,8 +603,12 @@ export default function App() {
   // Carrega settings ao montar
   useEffect(() => {
     fetch("/api/settings").then(r => r.json()).then(s => {
+      if (s.provider) {
+        setCurrentProvider(s.provider);
+        setSettingsProvider(s.provider);
+      }
       if (s.apiKey) setSettingsApiKey(s.apiKey);
-      if (!s.apiKey) {
+      if (!s.apiKey && s.provider !== "LOCAL_OLLAMA" && s.provider !== "CODEX") {
         setTimeout(() => setShowFirstTimeWarning(true), 800);
       }
     }).catch(() => {
@@ -1587,9 +1592,10 @@ export default function App() {
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: "NVIDIA", apiKey: settingsApiKey, model: "", modelTier: "auto" }),
+        body: JSON.stringify({ provider: settingsProvider, apiKey: settingsApiKey, model: "", modelTier: "auto" }),
       });
       if (res.ok) {
+        setCurrentProvider(settingsProvider);
         setShowSettings(false);
       } else {
         const err = await res.json();
@@ -1649,7 +1655,7 @@ export default function App() {
             <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Motor Inteligente</span>
               {settingsApiKey ? (
                 <span className="text-xs font-semibold flex items-center gap-1.5 mt-0.5 text-emerald-400">
-                  <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-emerald-500"></span> NVIDIA ativo
+                  <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-emerald-500"></span> {currentProvider.replace("_", " ")} ativo
                 </span>
               ) : (
                 <span className="text-xs font-semibold flex items-center gap-1.5 mt-0.5 text-rose-400">
@@ -1667,7 +1673,7 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => setShowSettings(true)}
+            onClick={() => { setSettingsProvider(currentProvider); setShowSettings(true); }}
             className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-indigo-950/30 rounded-lg transition-all border border-transparent hover:border-indigo-900/30 cursor-pointer"
             title="Configurações de API"
           >
@@ -1688,7 +1694,7 @@ export default function App() {
       </header>
       </div>
 
-      {showFirstTimeWarning && !settingsApiKey && (
+      {showFirstTimeWarning && !settingsApiKey && currentProvider !== "LOCAL_OLLAMA" && currentProvider !== "CODEX" && (
         <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 pt-2">
           <div className="bg-rose-950/30 border border-rose-800/40 rounded-xl px-5 py-3 flex items-start gap-3 animate-fadeIn">
             <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
@@ -2486,58 +2492,83 @@ export default function App() {
             </div>
 
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-                  <span className="block text-[10px] uppercase tracking-wider text-slate-500 font-bold mb-1">Provedor</span>
-                  <span className="text-sm font-bold text-slate-100">NVIDIA</span>
-                </div>
-                <div className="rounded-xl border border-indigo-900/40 bg-indigo-950/20 p-3">
-                  <span className="block text-[10px] uppercase tracking-wider text-indigo-400 font-bold mb-1">Modo</span>
-                  <span className="text-sm font-bold text-slate-100">Automático</span>
-                  <p className="text-[10px] text-slate-500 mt-1">Laya e contexto ajustam o esforço.</p>
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Provedor de IA</label>
+                <select
+                  value={settingsProvider}
+                  onChange={e => setSettingsProvider(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
+                >
+                  <optgroup label="Modelos na Nuvem">
+                    <option value="NVIDIA">NVIDIA</option>
+                    <option value="GOOGLE">Google</option>
+                    <option value="OPENAI">OpenAI</option>
+                    <option value="ANTHROPIC">Anthropic</option>
+                    <option value="OPENROUTER">OpenRouter</option>
+                    <option value="GROQ">Groq</option>
+                    <option value="OLLAMA_CLOUD">Ollama Cloud</option>
+                    <option value="CODEX">Codex</option>
+                  </optgroup>
+                  <optgroup label="Local">
+                    <option value="LOCAL_OLLAMA">Ollama Local</option>
+                  </optgroup>
+                </select>
+                <div className="mt-2 rounded-xl border border-indigo-900/40 bg-indigo-950/20 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[10px] uppercase tracking-wider text-indigo-400 font-bold">Modo</span>
+                    <span className="text-xs font-bold text-slate-100">Automático</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    O app atualiza, testa e rotaciona modelos compatíveis automaticamente. IDs de modelo não precisam ser escolhidos manualmente.
+                  </p>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Chave de API</label>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <input
-                      type={showApiKey ? "text" : "password"}
-                      value={settingsApiKey}
-                      onChange={e => setSettingsApiKey(e.target.value)}
-                      placeholder={settingsApiKey ? "Chave salva. Digite para trocar." : "Cole sua chave aqui"}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowApiKey(!showApiKey)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-slate-300 cursor-pointer"
-                      tabIndex={-1}
-                    >
-                      {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
+              {settingsProvider === "CODEX" ? (
+                <CodexLogin apiKey={settingsApiKey} setApiKey={setSettingsApiKey} />
+              ) : settingsProvider === "LOCAL_OLLAMA" ? (
+                <OllamaAutoSetup />
+              ) : (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                    {settingsProvider === "OLLAMA_CLOUD" ? "Token" : "Chave de API"}
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type={showApiKey ? "text" : "password"}
+                        value={settingsApiKey}
+                        onChange={e => setSettingsApiKey(e.target.value)}
+                        placeholder={settingsApiKey ? "Chave salva. Digite para trocar." : "Cole sua chave aqui"}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 pr-10"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-slate-300 cursor-pointer"
+                        tabIndex={-1}
+                      >
+                        {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    {settingsApiKey && (
+                      <button
+                        onClick={() => setSettingsApiKey("")}
+                        className="px-3 py-2.5 text-xs font-bold text-rose-400 bg-rose-950/30 border border-rose-900/30 hover:bg-rose-950/50 rounded-xl transition-all cursor-pointer shrink-0"
+                      >
+                        Remover
+                      </button>
+                    )}
                   </div>
-                  {settingsApiKey && (
-                    <button
-                      onClick={() => setSettingsApiKey("")}
-                      className="px-3 py-2.5 text-xs font-bold text-rose-400 bg-rose-950/30 border border-rose-900/30 hover:bg-rose-950/50 rounded-xl transition-all cursor-pointer shrink-0"
-                      title="Remover chave"
-                    >
-                      Remover
-                    </button>
-                  )}
+                  <p className="text-[11px] text-slate-500 mt-1.5">
+                    O modelo é selecionado automaticamente e pode ser rotacionado se falhar.
+                  </p>
                 </div>
-                <p className="text-[11px] text-slate-500 mt-1.5">
-                  {settingsApiKey
-                    ? "Chave salva em ~/.ai-disec-pdf/settings.json"
-                    : "Sua chave fica salva localmente no disco."}
-                </p>
-              </div>
+              )}
 
               <div className="rounded-xl border border-cyan-900/30 bg-cyan-950/10 px-3 py-2.5">
                 <p className="text-[11px] text-cyan-300 font-semibold">Pipeline rápido: até 3 páginas simultâneas</p>
-                <p className="text-[10px] text-slate-500 mt-1">Retry e backoff continuam ativos se o serviço limitar temporariamente as chamadas.</p>
+                <p className="text-[10px] text-slate-500 mt-1">Retry, backoff e rotação automática de modelo continuam ativos.</p>
               </div>
 
               <div className="border-t border-slate-800 pt-4">
