@@ -74,25 +74,70 @@ describe("Erros de conta NÃO rotacionam modelo", () => {
     }
   });
 
-  it("401 mantém o candidato e devolve erro de chave sem modelRotated", async () => {
-    const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider: "NVIDIA" }),
-    });
-    expect(refresh.status).toBe(200);
+  const accountScenarios = [
+    { status: 401, message: "Credencial inválida", expected: /Chave de API|configurações/i },
+    { status: 403, message: "Forbidden", expected: /Chave de API|configurações/i },
+    { status: 429, message: "rate limit exceeded", expected: /Cota|Muitas requisições|rate/i },
+  ];
 
-    const res = await fetch(`${BASE_URL}/api/extract`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
-    });
+  for (const scenario of accountScenarios) {
+    it(`${scenario.status} mantém o candidato e não retorna modelRotated`, async () => {
+      chatCalls = 0;
+      modelsUsed.length = 0;
 
-    expect(res.status).toBe(401);
-    const body = await res.json();
-    expect(body.modelRotated).toBeUndefined();
-    expect(body.error).toMatch(/Chave de API|configurações/i);
-    expect(modelsUsed.every(m => m === "fixture-vision-a")).toBe(true);
-    expect(chatCalls).toBe(1);
-  });
+      const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "NVIDIA" }),
+      });
+      expect(refresh.status).toBe(200);
+
+      // Troca somente a resposta do chat para este cenário.
+      vi.mocked(globalThis.fetch as any).mockImplementation(
+        (url: string | URL, init?: any) => {
+          const urlStr = url.toString();
+
+          if (urlStr.includes(`127.0.0.1:${PORT}`) || urlStr.includes(`localhost:${PORT}`)) {
+            return originalFetch(url, init);
+          }
+
+          if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
+            return Promise.resolve(new Response(JSON.stringify({
+              data: [
+                { id: "fixture-vision-a", created: 200, modalities: ["text", "image"] },
+                { id: "fixture-vision-b", created: 100, modalities: ["text", "image"] },
+              ],
+            }), { status: 200, headers: { "Content-Type": "application/json" } }));
+          }
+
+          if (urlStr.includes("integrate.api.nvidia.com/v1/chat/completions")) {
+            chatCalls++;
+            const body = init?.body ? JSON.parse(init.body) : {};
+            modelsUsed.push(body.model);
+            return Promise.resolve(new Response(JSON.stringify({
+              error: { message: scenario.message },
+            }), { status: scenario.status, headers: { "Content-Type": "application/json" } }));
+          }
+
+          return Promise.resolve(new Response(JSON.stringify({}), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          }));
+        }
+      );
+
+      const res = await fetch(`${BASE_URL}/api/extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
+      });
+
+      expect(res.status).toBe(scenario.status);
+      const body = await res.json();
+      expect(body.modelRotated).toBeUndefined();
+      expect(body.error).toMatch(scenario.expected);
+      expect(modelsUsed.every(m => m === "fixture-vision-a")).toBe(true);
+      expect(chatCalls).toBe(1);
+    });
+  }
 });
