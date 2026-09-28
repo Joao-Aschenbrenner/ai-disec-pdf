@@ -138,159 +138,8 @@ function nextPageId(): string {
 }
 
 // ════════════════════════════════════════════════════════════
-// Ollama Local Setup — detecta hardware, 3 opções de modelo, detecta instalados
+// Ollama Local automático — sem exposição de ID/modelo
 // ════════════════════════════════════════════════════════════
-const OLLAMA_MODELS = [
-  { id: "moondream:1.8b", label: "Moondream 1.8B", size: "1.3 GB", minRam: 4, desc: "Leve — PCs fracos (4GB+ RAM)" },
-  { id: "llama3.2-vision:11b", label: "Llama 3.2 Vision 11B", size: "7.8 GB", minRam: 8, desc: "Balanceado — PCs moderados (8GB+ RAM)" },
-  { id: "llama3.2-vision:90b", label: "Llama 3.2 Vision 90B", size: "55 GB", minRam: 32, desc: "Preciso — PCs robustos (32GB+ RAM)" },
-];
-
-function OllamaLocalSetup({ model, onModelChange }: { model: string; onModelChange: (m: string) => void }) {
-  const [hw, setHw] = useState<{ totalMemGB: number; cpuCores: number; gpu: string; hasGpu: boolean; suggestedModel: string; reason: string } | null>(null);
-  const [installState, setInstallState] = useState<"idle" | "checking" | "downloading" | "installing" | "pulling" | "done" | "error">("idle");
-  const [progress, setProgress] = useState<string>("");
-  const [errorMsg, setErrorMsg] = useState("");
-  const [installedModels, setInstalledModels] = useState<string[]>([]);
-  const api = window.electronAPI;
-  // Refs para uso no efeito de montagem sem recriar o efeito a cada render
-  const modelRef = useRef(model);
-  modelRef.current = model;
-  const onModelChangeRef = useRef(onModelChange);
-  onModelChangeRef.current = onModelChange;
-
-  useEffect(() => {
-    if (api?.getHardware) {
-      api.getHardware().then(h => {
-        setHw(h);
-        // Só sugere modelo se o usuário ainda não salvou uma escolha
-        if (!modelRef.current) onModelChangeRef.current(h.suggestedModel);
-      }).catch(() => {});
-    }
-    if (api?.onPullProgress) {
-      const clean = api.onPullProgress((p: { line: string; model: string }) => {
-        setProgress(p.line);
-      });
-      return clean;
-    }
-  }, []);
-
-  // Detectar modelos já baixados via /api/tags do Ollama
-  useEffect(() => {
-    fetch("http://localhost:11434/api/tags")
-      .then(r => r.json())
-      .then(d => setInstalledModels((d.models || []).map((m: any) => m.name || m.model)))
-      .catch(() => setInstalledModels([]));
-  }, [installState]);
-
-  const handleSetup = async () => {
-    if (!api) { setErrorMsg("Electron API não disponível."); return; }
-    if (!model) { setErrorMsg("Selecione um modelo primeiro."); return; }
-    setErrorMsg("");
-    try {
-      setInstallState("checking");
-      const check = await api.checkInstalled();
-      if (!check.installed) {
-        setInstallState("downloading");
-        setProgress("Baixando instalador do Ollama...");
-        const inst = await api.install();
-        if (!inst.ok) { setErrorMsg(inst.error || "Falha ao instalar"); setInstallState("error"); return; }
-      }
-      setInstallState("pulling");
-      setProgress(`Baixando modelo ${model}...`);
-      const pull = await api.pullModel(model);
-      if (!pull.ok) { setErrorMsg(pull.error || "Falha ao baixar modelo"); setInstallState("error"); return; }
-      setInstallState("done");
-      setProgress(`Modelo ${model} pronto! Salve as configurações.`);
-    } catch (e: any) {
-      setErrorMsg(e.message || "Erro inesperado");
-      setInstallState("error");
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      {hw && (
-        <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
-          <div className="flex items-center gap-2 mb-2">
-            <Cpu className="w-4 h-4 text-cyan-400" />
-            <span className="text-xs font-bold text-slate-200">Hardware detectado</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400">
-            <div className="flex items-center gap-1.5"><HardDrive className="w-3 h-3" /> RAM: <strong className="text-slate-200">{hw.totalMemGB} GB</strong></div>
-            <div className="flex items-center gap-1.5"><Cpu className="w-3 h-3" /> Cores: <strong className="text-slate-200">{hw.cpuCores}</strong></div>
-            <div className="flex items-center gap-1.5 col-span-2"><Zap className="w-3 h-3" /> GPU: <strong className="text-slate-200">{hw.gpu}</strong></div>
-          </div>
-          <p className="text-[11px] text-cyan-300 mt-2">{hw.reason}</p>
-        </div>
-      )}
-
-      <div>
-        <label className="block text-xs font-semibold text-slate-300 mb-1.5">Escolha o modelo local</label>
-        <div className="space-y-2">
-          {OLLAMA_MODELS.map(m => {
-            const isInstalled = installedModels.includes(m.id);
-            const isSuggested = hw?.suggestedModel === m.id;
-            const ramOk = hw ? hw.totalMemGB >= m.minRam : true;
-            return (
-              <label key={m.id} className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all ${model === m.id ? "border-emerald-600 bg-emerald-950/30" : "border-slate-800 bg-slate-950/40 hover:border-slate-700"}`}>
-                <input
-                  type="radio"
-                  name="ollama-model"
-                  value={m.id}
-                  checked={model === m.id}
-                  onChange={e => onModelChange(e.target.value)}
-                  className="mt-0.5 accent-emerald-500"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-slate-200">{m.label}</span>
-                    {isSuggested && <span className="text-[10px] text-cyan-300 bg-cyan-950/40 px-1.5 py-0.5 rounded">sugerido</span>}
-                    {isInstalled && <span className="text-[10px] text-emerald-300 bg-emerald-950/40 px-1.5 py-0.5 rounded flex items-center gap-0.5"><CheckCircle className="w-2.5 h-2.5" /> instalado</span>}
-                    {!ramOk && <span className="text-[10px] text-amber-300 bg-amber-950/40 px-1.5 py-0.5 rounded">RAM insuficiente</span>}
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">{m.desc} • {m.size}</p>
-                </div>
-              </label>
-            );
-          })}
-        </div>
-      </div>
-
-      {installedModels.length > 0 && (
-        <p className="text-[11px] text-emerald-400 flex items-center gap-1.5">
-          <CheckCircle className="w-3.5 h-3.5" />
-          {installedModels.length} modelo(s) já baixado(s): {installedModels.join(", ")}
-        </p>
-      )}
-
-      {installState !== "idle" && installState !== "done" && progress && (
-        <div className="p-2 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-400 font-mono break-all max-h-24 overflow-y-auto">
-          {progress}
-        </div>
-      )}
-      {errorMsg && <p className="text-[11px] text-rose-400">{errorMsg}</p>}
-      {installState === "done" && (
-        <p className="text-[11px] text-emerald-400 flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5" /> Pronto! Clique em Salvar.</p>
-      )}
-
-      <button
-        onClick={handleSetup}
-        disabled={installState === "downloading" || installState === "installing" || installState === "pulling"}
-        className="w-full px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
-      >
-        {(installState === "downloading" || installState === "installing" || installState === "pulling") ? (
-          <><Loader2 className="w-4 h-4 animate-spin" /> {installState === "downloading" ? "Baixando Ollama..." : installState === "pulling" ? "Baixando modelo..." : "Instalando..."}</>
-        ) : installedModels.includes(model) ? (
-          <><Check className="w-4 h-4" /> Modelo pronto — salvar e usar</>
-        ) : (
-          <><Download className="w-4 h-4" /> Baixar {model}</>
-        )}
-      </button>
-    </div>
-  );
-}
-
 function OllamaAutoSetup() {
   const api = window.electronAPI;
   const [busy, setBusy] = useState(false);
@@ -1844,7 +1693,7 @@ export default function App() {
                 Arraste seu PDF unificado aqui
               </h2>
               <p className="text-sm text-slate-400 max-w-sm mb-6 leading-relaxed">
-                Nós iremos fatiar o PDF automaticamente em páginas individuais e usar o Gemini para renomear cada uma de forma inteligente.
+                Nós iremos fatiar o PDF automaticamente em páginas individuais e usar o motor de IA configurado para organizar e renomear cada uma.
               </p>
               <button 
                 type="button" 
@@ -2399,7 +2248,7 @@ export default function App() {
                                 )}
                                 {page.error?.includes("Provedor não aceita") && (
                                   <span className="text-[11px] text-rose-400/60 mt-1 block">
-                                    Troque para Google Gemini ou outro provedor com suporte a imagens ⚙️
+                                    O app tentará rotacionar automaticamente para outro modelo compatível deste provedor.
                                   </span>
                                 )}
                               </div>
@@ -2450,8 +2299,8 @@ export default function App() {
                     2
                   </div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-200">Extração com Gemini API</h4>
-                    <p className="text-[12px] text-slate-400 leading-normal mt-0.5">Nossa API lê meticulosamente página por página do PDF sem expor chaves públicas aos navegadores dos clientes.</p>
+                    <h4 className="text-xs font-bold text-slate-200">Extração com IA</h4>
+                    <p className="text-[12px] text-slate-400 leading-normal mt-0.5">O motor configurado lê página por página; o app seleciona e rotaciona modelos compatíveis automaticamente.</p>
                   </div>
                 </div>
 
@@ -2520,18 +2369,18 @@ export default function App() {
               </section>
               <section>
                 <h4 className="font-bold text-white text-base mb-2">Provedores de IA</h4>
-                <p>São 9 provedores disponíveis. Escolha em Configurações (ícone de engrenagem):</p>
+                <p>Escolha o provedor em Configurações. O modelo exato não é exposto: o app atualiza o catálogo, escolhe o candidato compatível mais recente e rotaciona automaticamente quando necessário:</p>
                 <ul className="list-disc list-inside space-y-1 text-slate-400 mt-1">
-                  <li><strong className="text-slate-200">NVIDIA Llama 3.2 Vision</strong> — Modelo 11B rápido</li>
-                  <li><strong className="text-slate-200">Google Gemini 2.5 Flash</strong> — Rápido, suporta imagens</li>
-                  <li><strong className="text-slate-200">OpenAI GPT-4o</strong> — Modelo multimodal da OpenAI</li>
-                  <li><strong className="text-slate-200">Anthropic Claude Sonnet 4</strong> — Multimodal</li>
-                  <li><strong className="text-slate-200">OpenRouter</strong> — Modelos compatíveis</li>
-                  <li><strong className="text-slate-200">Groq</strong> — Qwen 3.8 multimodal</li>
-                  <li><strong className="text-slate-200">Laya local</strong> — apoio à classificação; não recebe a imagem</li>
-                  <li><strong className="text-slate-200">Ollama Cloud</strong> — Llama Vision via Ollama</li>
-                  <li><strong className="text-slate-200">Codex Pro</strong> — Limite elevado via login OAuth</li>
-                  <li><strong className="text-slate-200">Ollama Local</strong> — 100% offline, download automático</li>
+                  <li><strong className="text-slate-200">NVIDIA</strong></li>
+                  <li><strong className="text-slate-200">Google</strong></li>
+                  <li><strong className="text-slate-200">OpenAI</strong></li>
+                  <li><strong className="text-slate-200">Anthropic</strong></li>
+                  <li><strong className="text-slate-200">OpenRouter</strong></li>
+                  <li><strong className="text-slate-200">Groq</strong></li>
+                  <li><strong className="text-slate-200">Ollama Cloud</strong></li>
+                  <li><strong className="text-slate-200">Codex</strong></li>
+                  <li><strong className="text-slate-200">Ollama Local</strong></li>
+                  <li><strong className="text-slate-200">Laya local</strong> — apoio à classificação</li>
                 </ul>
               </section>
               <section>
