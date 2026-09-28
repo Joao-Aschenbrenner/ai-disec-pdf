@@ -2,7 +2,14 @@
  * Converte o base64 de uma página PDF em JPEG base64 usando OffscreenCanvas.
  * Funciona no navegador.
  */
-export async function pdfBase64ToJpeg(pageBase64: string): Promise<string> {
+export interface PdfJpegOptions {
+  mode?: "fast" | "detail";
+}
+
+export async function pdfBase64ToJpeg(
+  pageBase64: string,
+  options: PdfJpegOptions = {}
+): Promise<string> {
   // Decodifica o base64 para Uint8Array
   const binaryStr = atob(pageBase64);
   const len = binaryStr.length;
@@ -22,9 +29,12 @@ export async function pdfBase64ToJpeg(pageBase64: string): Promise<string> {
   const pdf = await loadingTask.promise;
   const page = await pdf.getPage(1);
 
-  // Escala 3.0: documentos escaneados densos (600dpi) precisam de resolução maior
-  // para que o modelo de visão consiga ler letras pequenas sem alucinar.
-  const viewport = page.getViewport({ scale: 3.0 });
+  // Modo automático: documentos claros usam render mais leve; holerites/casos
+  // ambíguos continuam em alta resolução.
+  const mode = options.mode || "detail";
+  const renderScale = mode === "fast" ? 2.2 : 3.0;
+  const jpegQuality = mode === "fast" ? 0.88 : 0.95;
+  const viewport = page.getViewport({ scale: renderScale });
   const canvas = new OffscreenCanvas(viewport.width, viewport.height);
   const ctx = canvas.getContext("2d");
   if (!ctx) {
@@ -40,7 +50,7 @@ export async function pdfBase64ToJpeg(pageBase64: string): Promise<string> {
   // o que prejudica muito o OCR por visão. Ajusta o histograma para melhorar a legibilidade.
   autoContrast(ctx, viewport.width, viewport.height);
 
-  const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.95 });
+  const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: jpegQuality });
   const dataUrl = await new Promise<string>((resolve) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
@@ -82,7 +92,9 @@ function autoContrast(
     const imgData = ctx.getImageData(0, 0, w, h);
     const d = imgData.data;
     let min = 255, max = 0;
-    for (let i = 0; i < d.length; i += 4) {
+    // Amostra 1 a cada 4 pixels para decidir se o autostretch é necessário.
+    // Se necessário, a correção continua sendo aplicada em todos os pixels.
+    for (let i = 0; i < d.length; i += 16) {
       const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
       if (v < min) min = v;
       if (v > max) max = v;
