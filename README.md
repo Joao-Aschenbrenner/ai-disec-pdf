@@ -70,22 +70,48 @@ EXTINV_2025-12.pdf
 
 O nome final é limitado a **80 caracteres**. Entidades longas são encurtadas e, quando necessário, o final recebe um hash curto determinístico.
 
-## Provedores
+## Provedores e seleção automática de modelo
 
-| Provedor | Papel atual |
-|---|---|
-| NVIDIA | GLM-5.3-Flash padrão; Nemotron Omni no tier preciso |
-| Google | Gemini 2.5 Flash |
-| OpenAI | GPT-4o |
-| Anthropic | Claude Sonnet |
-| OpenRouter | modelos compatíveis configurados no catálogo |
-| Groq | Qwen 3.8 27B multimodal |
-| Ollama Local | opção offline |
-| Ollama Cloud | opção cloud |
-| Codex | integração existente |
-| Mistral | backend legado/opcional; removido do caminho principal da UI |
+A interface mostra apenas o provedor. O usuário não escolhe ID de modelo nem tier manual.
 
-Os IDs ficam em `server/models.json` e podem ser revisados pelo atualizador do catálogo.
+| Provedor |
+|---|
+| NVIDIA |
+| Google |
+| OpenAI |
+| Anthropic |
+| OpenRouter |
+| Groq |
+| Ollama Cloud |
+| Codex |
+| Ollama Local |
+
+O Mistral permanece apenas como integração legada/opcional no backend.
+
+Ao iniciar o aplicativo:
+
+1. o catálogo dos providers configurados é atualizado em background;
+2. o app prioriza o candidato multimodal mais recente retornado pelo provider;
+3. o primeiro processamento da sessão valida o candidato em uso real;
+4. se houver modelo removido, sem suporte a imagem, indisponibilidade/capacidade, timeout, resposta vazia ou saída incompatível, o app rotaciona internamente para outro candidato compatível;
+5. o retry seguinte usa o novo candidato automaticamente.
+
+As chaves são armazenadas separadamente por provider em `~/.ai-disec-pdf/settings.json`.
+
+O catálogo versionado em `server/models.json` continua existindo apenas como fallback seguro quando a descoberta ao vivo não estiver disponível.
+
+## Pipeline de desempenho
+
+O modo é sempre **Automático**.
+
+- até **3 páginas simultâneas**;
+- extração de texto local em pool de 3;
+- Laya Passagem 1 em pool de 3;
+- visão em pool de 3;
+- retry real até 3 tentativas com backoff e stagger;
+- páginas fáceis usam render JPEG mais leve;
+- holerites/folhas/casos difíceis preservam render detalhado;
+- `backgroundThrottling:false` mantém processamento com a janela em segundo plano.
 
 ## Privacidade
 
