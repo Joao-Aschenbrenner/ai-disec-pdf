@@ -225,16 +225,15 @@ describe("Mock dos 8 provedores de IA", () => {
     }
   });
 
-  it("Ollama Local usa o modelo salvo nas settings (moondream selecionado)", async () => {
-    // Usuário escolheu o modelo mais básico que já está instalado
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider: "LOCAL_OLLAMA", apiKey: "", model: "moondream:1.8b" }));
+  it("Ollama Local escolhe automaticamente um modelo instalado compatível", async () => {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider: "LOCAL_OLLAMA", apiKey: "" }));
 
     let capturedModel = "";
     vi.spyOn(globalThis as any, "fetch").mockImplementation(
       (url: string | URL, init?: any) => {
         const urlStr = url.toString();
         if (urlStr.includes("localhost:11434/api/tags")) {
-          return Promise.resolve(new Response(JSON.stringify({ models: [{ name: "moondream:1.8b" }] }), {
+          return Promise.resolve(new Response(JSON.stringify({ models: [{ name: "fixture-vision-local" }] }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }));
@@ -254,6 +253,12 @@ describe("Mock dos 8 provedores de IA", () => {
       }
     );
 
+    await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "LOCAL_OLLAMA" }),
+    });
+
     const response = await fetch(`${BASE_URL}/api/extract`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -261,17 +266,30 @@ describe("Mock dos 8 provedores de IA", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(capturedModel).toBe("moondream:1.8b");
+    expect(capturedModel).toBe("fixture-vision-local");
   });
 
-  it("Ollama Local bloqueia modelo não baixado com erro claro", async () => {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({ provider: "LOCAL_OLLAMA", apiKey: "", model: "llama3.2-vision:11b" }));
+  it("Ollama Local ignora seleção antiga e usa o candidato realmente instalado", async () => {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify({
+      provider: "LOCAL_OLLAMA",
+      apiKey: "",
+      model: "modelo-antigo-nao-instalado",
+    }));
 
+    let capturedModel = "";
     vi.spyOn(globalThis as any, "fetch").mockImplementation(
       (url: string | URL, init?: any) => {
         const urlStr = url.toString();
         if (urlStr.includes("localhost:11434/api/tags")) {
-          return Promise.resolve(new Response(JSON.stringify({ models: [{ name: "moondream:1.8b" }] }), {
+          return Promise.resolve(new Response(JSON.stringify({ models: [{ name: "fixture-vision-current" }] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }));
+        }
+        if (urlStr.includes("localhost:11434/api/chat")) {
+          capturedModel = init?.body ? JSON.parse(init.body).model : "";
+          const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros"}';
+          return Promise.resolve(new Response(JSON.stringify({ message: { content: json } }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
           }));
@@ -283,29 +301,49 @@ describe("Mock dos 8 provedores de IA", () => {
       }
     );
 
+    await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "LOCAL_OLLAMA" }),
+    });
+
     const response = await fetch(`${BASE_URL}/api/extract`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pdfBase64: testPdfBase64, originalName: "test.pdf", pageIndex: 0 }),
     });
 
-    expect(response.status).toBe(400);
-    const data = await response.json();
-    expect(data.error).toContain("llama3.2-vision:11b");
-    expect(data.error).toContain("moondream:1.8b");
+    expect(response.status).toBe(200);
+    expect(capturedModel).toBe("fixture-vision-current");
   });
 
-  it("POST /api/settings persiste o modelo local escolhido", async () => {
-    const post = await fetch(`${BASE_URL}/api/settings`, {
+  it("POST /api/settings mantém uma chave independente por provider e modo auto", async () => {
+    const first = await fetch(`${BASE_URL}/api/settings`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider: "LOCAL_OLLAMA", apiKey: "", model: "moondream:1.8b" }),
+      body: JSON.stringify({ provider: "NVIDIA", apiKey: "fixture-nvidia" }),
     });
-    expect(post.status).toBe(200);
+    expect(first.status).toBe(200);
 
-    const get = await fetch(`${BASE_URL}/api/settings`);
-    const s = await get.json();
-    expect(s.provider).toBe("LOCAL_OLLAMA");
-    expect(s.model).toBe("moondream:1.8b");
+    const second = await fetch(`${BASE_URL}/api/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "GOOGLE", apiKey: "fixture-google" }),
+    });
+    expect(second.status).toBe(200);
+
+    const nvidia = await (await fetch(`${BASE_URL}/api/settings?provider=NVIDIA`)).json();
+    const google = await (await fetch(`${BASE_URL}/api/settings?provider=GOOGLE`)).json();
+
+    expect(nvidia.provider).toBe("NVIDIA");
+    expect(nvidia.apiKey).toBe("fixture-nvidia");
+    expect(nvidia.model).toBe("");
+    expect(nvidia.modelTier).toBe("auto");
+
+    expect(google.provider).toBe("GOOGLE");
+    expect(google.apiKey).toBe("fixture-google");
+    expect(google.model).toBe("");
+    expect(google.modelTier).toBe("auto");
   });
+
 });
