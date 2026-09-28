@@ -188,7 +188,7 @@ function catalogCandidates(provider: string): string[] {
 function modelLooksCompatible(provider: string, model: string): boolean {
   const entry = loadModelsCatalog().providers[provider];
   if (!entry) return true;
-  if (entry.ocrOnly || entry.local) return true;
+  if (entry.ocrOnly) return true;
 
   const lower = model.toLowerCase();
   const providerHeuristics: Record<string, RegExp> = {
@@ -200,6 +200,7 @@ function modelLooksCompatible(provider: string, model: string): boolean {
     OPENROUTER: /(vision|\bvl\b|multimodal|omni|gemini|gemma|pixtral|llama-4)/i,
     GROQ: /(vision|\bvl\b|multimodal|qwen.*(vl|vision)|qwen3\.8-27b)/i,
     OLLAMA_CLOUD: /(vision|\bvl\b|multimodal|llava|qwen.*(vl|vision)|gemma.*(vision|vl))/i,
+    LOCAL_OLLAMA: /(vision|\bvl\b|multimodal|llava|moondream|qwen.*(vl|vision))/i,
   };
   if (providerHeuristics[provider]?.test(lower)) return true;
 
@@ -858,7 +859,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         const jsonEnd = trimmed.lastIndexOf("}");
         if (jsonStart === -1 || jsonEnd === -1) {
           await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
-          throw new Error(`Resposta da IA não contém JSON válido: ${responseText.substring(0, 200)}`);
+          rotateRuntimeModel(provider, "no-usable-json");
+          throw new Error("O modelo automático respondeu em formato incompatível. O próximo retry usará outro candidato compatível.");
         }
         jsonStr = trimmed.substring(jsonStart, jsonEnd + 1);
       }
