@@ -359,11 +359,11 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const prompt = buildExtractionPrompt(correction, v3Hint);
 
       // Seleciona provedor de IA
-       const provider = settings.provider || "GOOGLE";
-       const configuredTier = settings.modelTier || "auto";
+       const provider = "NVIDIA";
        const hintedTier = v3Hint?.modelTier === "fast" ? "fast" : "medium";
-       // Automático nunca promove sozinho para o tier precise/Nemotron.
-       const modelTier = configuredTier === "auto" ? hintedTier : configuredTier;
+       // Produto simplificado: sempre automático. O contexto escolhe apenas o esforço,
+       // nunca expõe ou seleciona manualmente um modelo/tier ao usuário.
+       const modelTier = hintedTier;
        let aiResponse;
        try {
          // Helper for OpenAI-compatible providers. The endpoint is selected from
@@ -712,37 +712,44 @@ app.post("/api/classification/pass1", async (req, res) => {
       });
     }
 
-    const results = [];
-    // Sequencial propositalmente: Laya é local e rápido; evita rajadas e deixa a ordem estável.
-    for (const page of pages) {
-      const text = String(page?.text || "").trim();
-      if (text.length < 20) {
-        results.push({
+    const results = new Array(pages.length);
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(3, pages.length) }, async () => {
+      while (true) {
+        const index = cursor++;
+        if (index >= pages.length) return;
+
+        const page = pages[index];
+        const text = String(page?.text || "").trim();
+        if (text.length < 20) {
+          results[index] = {
+            pageIndex: Number(page?.pageIndex || 0),
+            documentClass: "OUTRO",
+            documentType: "outros",
+            confidence: 0.05,
+            source: "no-local-text",
+            needsReview: true,
+            requiresVision: true,
+            layaChecked: false,
+            text
+          };
+          continue;
+        }
+
+        const routed = await routeDocumentV3(text);
+        const memory = findConfirmedPattern(text);
+        results[index] = {
           pageIndex: Number(page?.pageIndex || 0),
-          documentClass: "OUTRO",
-          documentType: "outros",
-          confidence: 0.05,
-          source: "no-local-text",
-          needsReview: true,
-          requiresVision: true,
-          layaChecked: false,
-          text
-        });
-        continue;
+          ...routed,
+          text,
+          requiresVision: routed.needsReview || routed.confidence < 0.86,
+          learningMatch: memory
+        };
       }
+    });
+    await Promise.all(workers);
 
-      const routed = await routeDocumentV3(text);
-      const memory = findConfirmedPattern(text);
-      results.push({
-        pageIndex: Number(page?.pageIndex || 0),
-        ...routed,
-        text,
-        requiresVision: routed.needsReview || routed.confidence < 0.86,
-        learningMatch: memory
-      });
-    }
-
-    return res.json({ version: "classification-v3", pages: results });
+    return res.json({ version: "classification-v3", pages: results, concurrency: Math.min(3, pages.length) });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || "Falha na passagem 1" });
   }
@@ -790,7 +797,12 @@ app.get("/api/settings", (req, res) => {
     ensureDataDir();
     if (fs.existsSync(SETTINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
-      return res.json(data);
+      return res.json({
+        provider: "NVIDIA",
+        apiKey: typeof data.apiKey === "string" ? data.apiKey : "",
+        model: "",
+        modelTier: "auto",
+      });
     }
     return res.json({ provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" });
   } catch {
@@ -801,13 +813,18 @@ app.get("/api/settings", (req, res) => {
 app.post("/api/settings", (req, res) => {
   try {
     ensureDataDir();
-    const { provider, apiKey, model, modelTier } = req.body;
-    if (!provider || apiKey === undefined) {
-      return res.status(400).json({ error: "Provider e apiKey são obrigatórios." });
+    const { apiKey } = req.body;
+    if (apiKey === undefined) {
+      return res.status(400).json({ error: "apiKey é obrigatória." });
     }
-    const settings = { provider: provider.toUpperCase(), apiKey, model: typeof model === "string" ? model : "", modelTier: (modelTier || "auto").toLowerCase() };
+    const settings = {
+      provider: "NVIDIA",
+      apiKey: typeof apiKey === "string" ? apiKey : "",
+      model: "",
+      modelTier: "auto",
+    };
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
-    console.log(`[settings] Saved: provider=${settings.provider} modelTier=${settings.modelTier} model=${settings.model || "(default)"}`);
+    console.log("[settings] Saved single-provider automatic configuration");
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: err.message });
@@ -818,7 +835,13 @@ app.post("/api/settings", (req, res) => {
 function getSettings() {
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
-      return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+      const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
+      return {
+        provider: "NVIDIA",
+        apiKey: typeof data.apiKey === "string" ? data.apiKey : "",
+        model: "",
+        modelTier: "auto",
+      };
     }
   } catch {}
   return { provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" };
