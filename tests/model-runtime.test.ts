@@ -51,4 +51,16 @@ describe("Runtime model automation", () => {
     expect(app).not.toContain("Escolha o modelo local");
     expect(app).not.toContain("MODEL_TIERS");
   });
+
+  it("roteia retryable no frontend: 401/403 falham imediatamente; 429/5xx retentam", () => {
+    const app = read("src/App.tsx");
+
+    // requestExtraction marca retryable a partir do status quando o server não
+    // envia o flag: credenciais (401/403) ficam fora da lista → sem retry.
+    expect(app).toContain("[408, 429, 500, 502, 503, 504, 529].includes(response.status)");
+    // processWithRetry retorna imediatamente em erro definitivo.
+    expect(app).toContain("if (result.retryable === false) return result;");
+    // A fila reseta o campo entre rodadas.
+    expect(app).toContain("retryable: undefined,");
+  });
 });
