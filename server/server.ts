@@ -369,8 +369,8 @@ function rotateRuntimeModel(provider: string, reason: string): boolean {
 }
 
 function shouldRotateModel(status: number, body: string): boolean {
-  if ([404, 410, 422, 503, 529].includes(status)) return true;
-  return /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|capacity|worker|overloaded/i.test(body);
+  if ([404, 410, 422, 503, 504, 529].includes(status)) return true;
+  return /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|capacity|worker|overloaded|time.?out|timed out|gateway timeout/i.test(body);
 }
 
 function shouldRotateThrown(error: any): boolean {
