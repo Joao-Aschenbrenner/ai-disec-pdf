@@ -48,6 +48,8 @@ export interface SplitPage {
   status: 'pending' | 'processing' | 'success' | 'failed';
   error?: string;
   retryAfter?: string;
+  /** Se false, o erro é definitivo para a requisição atual (ex.: 401/403). */
+  retryable?: boolean;
   metadata?: ExtractedMetadata;
   metadataList?: ExtractedMetadata[];
   /** Segmento gerado quando uma página física contém mais de um documento. */
