@@ -83,12 +83,11 @@ import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalT
 import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
 import { version as appVersion } from "../package.json";
 
-const DEFAULT_CONCURRENT_REQUESTS = 2;
-function providerConcurrency(provider: string): number {
-  // GLM Vision mediu perto de 60s em smoke real; uma fila NVIDIA evita aborts/rate-limit em lote.
-  if (provider === "NVIDIA") return 1;
-  if (provider === "LOCAL_OLLAMA") return 1;
-  return DEFAULT_CONCURRENT_REQUESTS;
+const AUTO_PIPELINE_CONCURRENCY = 3;
+function providerConcurrency(_provider: string): number {
+  // Produto simplificado: um único motor visível em modo Automático.
+  // Três páginas simultâneas equilibram throughput e retry/backoff.
+  return AUTO_PIPELINE_CONCURRENCY;
 }
 
 const PROCESSING_STAGE_LABELS: Record<string, string> = {
@@ -145,13 +144,6 @@ const OLLAMA_MODELS = [
   { id: "moondream:1.8b", label: "Moondream 1.8B", size: "1.3 GB", minRam: 4, desc: "Leve — PCs fracos (4GB+ RAM)" },
   { id: "llama3.2-vision:11b", label: "Llama 3.2 Vision 11B", size: "7.8 GB", minRam: 8, desc: "Balanceado — PCs moderados (8GB+ RAM)" },
   { id: "llama3.2-vision:90b", label: "Llama 3.2 Vision 90B", size: "55 GB", minRam: 32, desc: "Preciso — PCs robustos (32GB+ RAM)" },
-];
-
-const MODEL_TIERS = [
-  { value: "auto", label: "Automático", hint: "Laya/contexto escolhem o esforço" },
-  { value: "fast", label: "Rápido", hint: "modelo mais leve" },
-  { value: "medium", label: "Equilibrado", hint: "modelo padrão" },
-  { value: "precise", label: "Preciso", hint: "manual; pode ser mais lento/instável" },
 ];
 
 function OllamaLocalSetup({ model, onModelChange }: { model: string; onModelChange: (m: string) => void }) {
@@ -596,12 +588,8 @@ export default function App() {
   // Modal states
   const [showSettings, setShowSettings] = useState(false);
   const [showDocModal, setShowDocModal] = useState(false);
-  const [settingsProvider, setSettingsProvider] = useState("NVIDIA");
   const [settingsApiKey, setSettingsApiKey] = useState("");
-  const [settingsLocalModel, setSettingsLocalModel] = useState("");
-  const [settingsModelTier, setSettingsModelTier] = useState("auto");
-  const [modelCatalog, setModelCatalog] = useState<Record<string, { tiers?: Record<string, string> }>>({});
-  const [currentProvider, setCurrentProvider] = useState("NVIDIA");
+  const currentProvider = "NVIDIA";
   const [savingSettings, setSavingSettings] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showFirstTimeWarning, setShowFirstTimeWarning] = useState(false);
@@ -614,18 +602,13 @@ export default function App() {
   // Carrega settings ao montar
   useEffect(() => {
     fetch("/api/settings").then(r => r.json()).then(s => {
-      if (s.provider) setCurrentProvider(s.provider);
-      if (s.provider) setSettingsProvider(s.provider);
       if (s.apiKey) setSettingsApiKey(s.apiKey);
-      if (s.model) setSettingsLocalModel(s.model);
-      if (s.modelTier) setSettingsModelTier(s.modelTier);
       if (!s.apiKey) {
         setTimeout(() => setShowFirstTimeWarning(true), 800);
       }
     }).catch(() => {
       setTimeout(() => setShowFirstTimeWarning(true), 800);
     });
-    fetch("/api/models").then(r => r.json()).then(c => setModelCatalog(c)).catch(() => {});
   }, []);
 
   // Update overlay
@@ -1591,10 +1574,9 @@ export default function App() {
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: settingsProvider, apiKey: settingsApiKey, model: settingsLocalModel, modelTier: settingsModelTier }),
+        body: JSON.stringify({ provider: "NVIDIA", apiKey: settingsApiKey, model: "", modelTier: "auto" }),
       });
       if (res.ok) {
-        setCurrentProvider(settingsProvider);
         setShowSettings(false);
       } else {
         const err = await res.json();
@@ -1652,23 +1634,13 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-end hidden md:flex">
             <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Motor Inteligente</span>
-              {currentProvider === "LOCAL_OLLAMA" ? (
+              {settingsApiKey ? (
                 <span className="text-xs font-semibold flex items-center gap-1.5 mt-0.5 text-emerald-400">
-                  <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-emerald-500"></span> Ollama Local ativo
-                </span>
-              ) : settingsApiKey ? (
-                <span className="text-xs font-semibold flex items-center gap-1.5 mt-0.5 text-emerald-400">
-                  <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-emerald-500"></span> {currentProvider} ativo
+                  <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-emerald-500"></span> NVIDIA ativo
                 </span>
               ) : (
                 <span className="text-xs font-semibold flex items-center gap-1.5 mt-0.5 text-rose-400">
                   <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-rose-500"></span> Configure a chave de API
-                  <span className="group relative">
-                    <Info className="w-3.5 h-3.5 text-rose-400 cursor-help" />
-                    <span className="absolute right-0 top-6 w-56 bg-slate-800 text-slate-300 text-[10px] leading-relaxed p-2 rounded-lg border border-slate-700 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                      Va em Configuracoes (engrenagem) para adicionar uma chave de API. Ollama Local funciona sem chave.
-                    </span>
-                  </span>
                 </span>
               )}
           </div>
@@ -1682,7 +1654,7 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => { setSettingsProvider(currentProvider); setShowSettings(true); }}
+            onClick={() => setShowSettings(true)}
             className="p-2 text-slate-400 hover:text-indigo-400 hover:bg-indigo-950/30 rounded-lg transition-all border border-transparent hover:border-indigo-900/30 cursor-pointer"
             title="Configurações de API"
           >
@@ -1703,7 +1675,7 @@ export default function App() {
       </header>
       </div>
 
-      {showFirstTimeWarning && !settingsApiKey && currentProvider !== "LOCAL_OLLAMA" && (
+      {showFirstTimeWarning && !settingsApiKey && (
         <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 pt-2">
           <div className="bg-rose-950/30 border border-rose-800/40 rounded-xl px-5 py-3 flex items-start gap-3 animate-fadeIn">
             <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
