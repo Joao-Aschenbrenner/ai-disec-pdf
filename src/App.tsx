@@ -84,6 +84,11 @@ import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pag
 import { version as appVersion } from "../package.json";
 
 const AUTO_PIPELINE_CONCURRENCY = 3;
+const VISIBLE_PROVIDERS = new Set([
+  "NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC",
+  "OPENROUTER", "GROQ", "OLLAMA_CLOUD", "CODEX", "LOCAL_OLLAMA",
+]);
+
 function providerConcurrency(_provider: string): number {
   // Produto simplificado: um único motor visível em modo Automático.
   // Três páginas simultâneas equilibram throughput e retry/backoff.
@@ -523,15 +528,32 @@ export default function App() {
 
   // Carrega settings ao montar
   useEffect(() => {
-    fetch("/api/settings").then(r => r.json()).then(s => {
-      if (s.provider) {
-        setCurrentProvider(s.provider);
-        setSettingsProvider(s.provider);
+    fetch("/api/settings").then(async sRes => {
+      const s = await sRes.json();
+      const provider = VISIBLE_PROVIDERS.has(String(s.provider || "").toUpperCase())
+        ? String(s.provider).toUpperCase()
+        : "NVIDIA";
+
+      setCurrentProvider(provider);
+      setSettingsProvider(provider);
+
+      if (provider === String(s.provider || "").toUpperCase()) {
+        setSettingsApiKey(typeof s.apiKey === "string" ? s.apiKey : "");
+        if (!s.apiKey && provider !== "LOCAL_OLLAMA" && provider !== "CODEX") {
+          setTimeout(() => setShowFirstTimeWarning(true), 800);
+        }
+      } else {
+        // Provider legado/oculto: busca a chave correta do fallback visível,
+        // sem reutilizar a credencial do provider anterior.
+        try {
+          const keyRes = await fetch(`/api/settings?provider=${provider}`);
+          const keyData = await keyRes.json();
+          setSettingsApiKey(typeof keyData.apiKey === "string" ? keyData.apiKey : "");
+        } catch {
+          setSettingsApiKey("");
+        }
       }
-      if (s.apiKey) setSettingsApiKey(s.apiKey);
-      if (!s.apiKey && s.provider !== "LOCAL_OLLAMA" && s.provider !== "CODEX") {
-        setTimeout(() => setShowFirstTimeWarning(true), 800);
-      }
+
       // Todo início de sessão atualiza os catálogos dos providers configurados.
       fetch("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
     }).catch(() => {
@@ -1537,6 +1559,11 @@ export default function App() {
       });
       if (res.ok) {
         setCurrentProvider(settingsProvider);
+        fetch("/api/models/runtime/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: settingsProvider }),
+        }).catch(() => {});
         setShowSettings(false);
       } else {
         const err = await res.json();
