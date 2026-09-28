@@ -296,7 +296,18 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
       row.id &&
       (row.hasModalityMetadata ? row.explicitVision : modelLooksCompatible(provider, row.id))
     );
-    rows.sort((a, b) => b.created - a.created);
+    // Mais recente primeiro; empate de created (alguns providers devolvem o
+    // mesmo timestamp) segue a preferência curada do catálogo.
+    const preferredRank = new Map(
+      (entry.preferred || []).map((id, i) => [id, i] as const)
+    );
+    rows.sort((a, b) => {
+      if (a.created !== b.created) return b.created - a.created;
+      const prefA = preferredRank.has(a.id) ? preferredRank.get(a.id)! : Number.MAX_SAFE_INTEGER;
+      const prefB = preferredRank.has(b.id) ? preferredRank.get(b.id)! : Number.MAX_SAFE_INTEGER;
+      if (prefA !== prefB) return prefA - prefB;
+      return 0;
+    });
     return Array.from(new Set(rows.map(row => row.id)));
   } finally {
     clearTimeout(timeout);
