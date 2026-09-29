@@ -27,9 +27,13 @@ describe("Classification V3 wiring", () => {
 
   it("renderer usa pipeline de 3 páginas e três tentativas reais", () => {
     const app = read("src/App.tsx");
+    const pipeline = read("src/utils/adaptivePipeline.ts");
     expect(app).toContain("const AUTO_PIPELINE_CONCURRENCY = 3");
-    expect(app).toContain("currentConcurrencyRef"); // concorrência adaptativa
-    expect(app).toContain('for (let attempt = 1; attempt <= 3; attempt++)');
+    expect(app).toContain("AdaptivePipeline"); // mecanismo compartilhado app/benchmark
+    // Três tentativas reais vivem no módulo compartilhado
+    expect(pipeline).toContain("AUTO_PIPELINE_MAX_ATTEMPTS = 3");
+    expect(pipeline).toContain("AUTO_PIPELINE_MAX_CONCURRENCY = 3");
+    expect(pipeline).toContain("runPageWithRetry");
     expect(app).toContain("runV3Prepasses");
     expect(app).toContain("PASSAGEM 3");
   });

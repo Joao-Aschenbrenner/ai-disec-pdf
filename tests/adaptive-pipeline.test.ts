@@ -300,20 +300,36 @@ describe("Adaptive Pipeline - Retry & Concurrency (Tests A–G)", () => {
 
   // ===== TEST G =====
   it("G: Recuperação concurrency=1 → sucessos → 2 → mais sucessos → 3", async () => {
-    // Este teste verifica a lógica de recuperação no frontend (App.tsx)
-    // Como é lógica de UI/estado, validamos via import do módulo
-    const appCode = fs.readFileSync(path.join(__dirname, "..", "src", "App.tsx"), "utf8");
-    
-    // Verifica que a recuperação gradual está implementada
-    expect(appCode).toContain("consecutiveSuccesses");
-    expect(appCode).toContain("currentConcurrency");
-    expect(appCode).toContain("setCurrentConcurrency");
-    expect(appCode).toContain("Math.min(3, c + 1)");
-    // Verifica a lógica de threshold (~6 sucessos)
-    expect(
-      appCode.includes("next >= 6") || 
-      appCode.includes(">= 6") || 
-      appCode.includes("> 5")
-    ).toBe(true);
+    // Lógica compartilhada entre app e benchmark vive em src/utils/adaptivePipeline.ts
+    const pipelineCode = fs.readFileSync(path.join(__dirname, "..", "src", "utils", "adaptivePipeline.ts"), "utf8");
+
+    // Verifica que a máquina de estado de recuperação está no módulo compartilhado
+    expect(pipelineCode).toContain("class AdaptivePipeline");
+    expect(pipelineCode).toContain("consecutiveSuccesses");
+    expect(pipelineCode).toContain("currentConcurrency");
+    expect(pipelineCode).toContain("Math.min(AUTO_PIPELINE_MAX_CONCURRENCY");
+    expect(pipelineCode).toContain("AUTO_PIPELINE_SUCCESS_STREAK = 6");
+    expect(pipelineCode).toContain('reason: "recovery"');
+
+    // Validação comportamental: 1 → (6 sucessos) → 2 → (6 sucessos) → 3, nunca > 3
+    const { AdaptivePipeline } = await import("../src/utils/adaptivePipeline");
+    const pipeline = new AdaptivePipeline(1);
+    expect(pipeline.currentConcurrency).toBe(1);
+    for (let i = 0; i < 6; i++) pipeline.recordSuccess();
+    expect(pipeline.currentConcurrency).toBe(2);
+    for (let i = 0; i < 6; i++) pipeline.recordSuccess();
+    expect(pipeline.currentConcurrency).toBe(3);
+    for (let i = 0; i < 12; i++) pipeline.recordSuccess();
+    expect(pipeline.currentConcurrency).toBe(3); // nunca ultrapassa 3
+
+    // Redução sob pressão: 3 → 2 → 1
+    const p2 = new AdaptivePipeline(3);
+    p2.recordFailure({ status: "failed", retryable: true, statusCode: 504 });
+    expect(p2.currentConcurrency).toBe(2);
+    p2.recordFailure({ status: "failed", retryable: true, statusCode: 429 });
+    expect(p2.currentConcurrency).toBe(1);
+    // 401/403 não mexe na concorrência
+    p2.recordFailure({ status: "failed", retryable: false });
+    expect(p2.currentConcurrency).toBe(1);
   });
 });

@@ -81,6 +81,7 @@ import { sanitizeFilename, generatePageFilename, generateCombinedFilename, makeW
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalText";
 import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
+import { AdaptivePipeline } from "./utils/adaptivePipeline";
 import { version as appVersion } from "../package.json";
 
 const AUTO_PIPELINE_CONCURRENCY = 3;
@@ -624,6 +625,8 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blobUrlsRef = useRef<string[]>([]);
+  // Pipeline adaptativo compartilhado (mesmo mecanismo do benchmark)
+  const pipelineRef = useRef<AdaptivePipeline>(new AdaptivePipeline());
 
   const revokeAllBlobUrls = () => {
     blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
@@ -983,72 +986,30 @@ export default function App() {
     }
   };
 
+  const syncPipelineState = () => {
+    const p = pipelineRef.current;
+    setCurrentConcurrency(p.currentConcurrency);
+    setConsecutiveSuccesses(p.consecutiveSuccesses);
+    setIsStabilizing(p.stabilizing);
+    setAttemptCount(p.attemptCount);
+    setRetryCount(p.retryCount);
+    setRotationCount(p.rotationCount);
+  };
+
   const processWithRetry = async (
     page: SplitPage,
     correction?: string
   ): Promise<ProcessedPageResult> => {
-    const delays = [2000, 5000, 10000];
-    let last: ProcessedPageResult | null = null;
-
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const result = await processSinglePage(page.id, page, correction);
-      last = result;
-
-      if (Array.isArray(result)) return result;
-      if (result.status !== "failed") {
-        // Sucesso: reseta contadores de pressão
-        setConsecutiveSuccesses(prev => prev + 1);
-        // Recupera concorrência gradualmente após ~6 sucessos consecutivos
-        setConsecutiveSuccesses(prev => {
-          const next = prev + 1;
-          if (next >= 6 && currentConcurrency < 3) {
-            setCurrentConcurrency(c => Math.min(3, c + 1));
-            return 0; // reseta contador após subir
-          }
-          return next;
-        });
-        return result;
+    // Delega ao módulo compartilhado — o MESMO mecanismo usado pelo benchmark.
+    return pipelineRef.current.runPageWithRetry(
+      page,
+      async (p) => processSinglePage(p.id ?? page.id, page, correction),
+      async (pageId, _attempt, delayMs) => {
+        if (pageId) updatePageStage(pageId, "retrying", 48);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        syncPipelineState();
       }
-      
-      // Falha definitiva (401/403)
-      if (result.retryable === false) return result;
-      if (attempt === 3) return result;
-
-      // Contadores de retry e rotação
-      if (attempt > 1) setRetryCount(prev => prev + 1);
-      if (result.modelRotated) setRotationCount(prev => prev + 1);
-
-      // Concorrência adaptativa: primeiro 504/timeout genérico → reduz para 2
-      // Se já estava em 2 e novo timeout/504 → reduz para 1
-      const isTimeoutOr504 = result.statusCode === 504 || result.statusCode === 503;
-      if (isTimeoutOr504 && !result.modelRotated) {
-        setIsStabilizing(true);
-        setCurrentConcurrency(prev => {
-          if (prev === 3) return 2;
-          if (prev === 2) return 1;
-          return prev;
-        });
-        setConsecutiveSuccesses(0); // reseta recuperação
-      }
-
-      // Pequeno stagger evita que as 3 páginas falhadas retomem no mesmo milissegundo.
-      let delayMs = delays[attempt - 1] + ((page.index % currentConcurrency) * 400);
-      if (result.retryAfter) {
-        const match = result.retryAfter.match(/(\d+)/);
-        if (match) delayMs = Math.max(delayMs, parseInt(match[1], 10) * 1000);
-      }
-
-      updatePageStage(page.id, "retrying", 48);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-    }
-
-    return last || {
-      ...page,
-      status: "failed",
-      processingStage: "failed",
-      processingProgress: 100,
-      error: "Falha após 3 tentativas",
-    };
+    );
   };
 
   const replaceProcessedResult = (targetId: string, result: ProcessedPageResult) => {
@@ -1201,15 +1162,11 @@ export default function App() {
       return;
     }
 
-    // Inicializa métricas da execução
-    setAttemptCount(0);
-    setRetryCount(0);
-    setRotationCount(0);
+    // Inicializa métricas da execução (pipeline compartilhado + espelho React)
+    pipelineRef.current.reset(3);
     setFinalSuccessCount(0);
     setFinalErrorCount(0);
-    setCurrentConcurrency(3);
-    setConsecutiveSuccesses(0);
-    setIsStabilizing(false);
+    syncPipelineState();
 
     setIsProcessing(true);
     window.electronAPI?.startProcessing();
@@ -1228,13 +1185,12 @@ export default function App() {
 
       const workingPages = await runV3Prepasses(initialPages);
       const queue = workingPages.filter(p => p.status !== "success");
-      const concurrencyLimit = providerConcurrency(currentProvider);
       const activePromises: Promise<void>[] = [];
       const finalPhysical = new Map<string, SplitPage>();
 
       while (queue.length > 0 || activePromises.length > 0) {
-        // Atualiza limite de concorrência dinamicamente
-        const currentLimit = providerConcurrency(currentProvider);
+        // Concorrência adaptativa: lê o estado atual do pipeline compartilhado
+        const currentLimit = pipelineRef.current.currentConcurrency;
         while (queue.length > 0 && activePromises.length < currentLimit) {
           const page = queue.shift()!;
           setSplitPages(prev => prev.map(p =>
