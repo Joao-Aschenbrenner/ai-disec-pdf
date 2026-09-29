@@ -82,6 +82,7 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.0.9",
     "@types/express": "^4.17.21",
     "@types/jszip": "^3.4.0",
     "@types/node": "^22.19.21",

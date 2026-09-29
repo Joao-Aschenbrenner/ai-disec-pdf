@@ -1,4 +1,6 @@
-import { Canvas, createCanvas, DOMMatrix, Image, ImageData } from "canvas";
+import path from "path";
+import { createRequire } from "module";
+import { createCanvas, Canvas, DOMMatrix, Image, ImageData, Path2D } from "@napi-rs/canvas";
 
 class NodeCanvasFactory {
   create(width: number, height: number) {
@@ -18,9 +20,29 @@ class NodeCanvasFactory {
 }
 
 /**
- * Renderiza cada página do PDF para um PNG real no Node.js.
- * O caminho server-side é usado pelos testes e por integrações que não têm
- * acesso ao OffscreenCanvas do navegador.
+ * Localiza standard_fonts/ do pdfjs-dist. Sem isso, páginas que usam fontes
+ * padrão (Helvetica etc.) não têm dados de glifo no Node.
+ */
+function resolveStandardFontsDir(): string | undefined {
+  try {
+    const importMeta: any = typeof import.meta !== "undefined" ? import.meta : undefined;
+    const require = createRequire(importMeta?.url ?? path.join(process.cwd(), "index.js"));
+    const pkg = require.resolve("pdfjs-dist/package.json");
+    return path.join(path.dirname(pkg), "standard_fonts") + path.sep;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Renderiza cada página do PDF para um PNG real no Node.
+ *
+ * Usa @napi-rs/canvas (o mesmo runtime que o pdfjs-dist v4 usa nativamente em
+ * Node). O pacote `canvas` (node-canvas) NÃO desenha o texto de fontes padrão:
+ * o @font-face interno do pdfjs não resolve e os glifos via Path2D somem,
+ * produzindo páginas EM BRANCO que o VLM lê como documento vazio.
+ *
+ * Caminho server-side usado pelos testes e pelo benchmark de integração.
  */
 export async function pdfBufferToPngBuffers(pdfBuffer: Buffer): Promise<Buffer[]> {
   const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -32,9 +54,11 @@ export async function pdfBufferToPngBuffers(pdfBuffer: Buffer): Promise<Buffer[]
   globals.HTMLCanvasElement = Canvas;
   globals.ImageData = ImageData;
   globals.DOMMatrix = DOMMatrix;
+  globals.Path2D = Path2D;
 
   const data = new Uint8Array(pdfBuffer);
-  const document = await getDocument({ data, useSystemFonts: true, CanvasFactory: NodeCanvasFactory }).promise;
+  const standardFontDataUrl = resolveStandardFontsDir();
+  const document = await getDocument({ data, useSystemFonts: false, standardFontDataUrl }).promise;
   const pages: Buffer[] = [];
 
   try {
@@ -47,7 +71,7 @@ export async function pdfBufferToPngBuffers(pdfBuffer: Buffer): Promise<Buffer[]
       context.fillStyle = "#ffffff";
       context.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: context as any, viewport }).promise;
-      pages.push(canvas.toBuffer("image/png"));
+      pages.push(await canvas.encode("png"));
     }
   } finally {
     await document.destroy();
