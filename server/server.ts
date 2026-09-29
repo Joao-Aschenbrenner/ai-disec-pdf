@@ -447,7 +447,8 @@ function shouldRotateModel(status: number, body: string, provider?: string): boo
   
   // 503/504/529 genéricos NÃO rotacionam no primeiro ocorrência — o frontend fará retry no mesmo candidato
   // e reduzirá concorrência. Rotação só se o MESMO candidato repetir a falha.
-  return /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers? for this model|capacity exhausted|explicitly unavailable/i.test(body);
+  // Exceção: esgotamento real de capacidade ("no workers"-class) → rotação imediata.
+  return /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers? for this model|worker.{0,50}limit.{0,20}reached|request limit reached|resourceexhausted|capacity exhausted|explicitly unavailable/i.test(body);
 }
 
 function shouldRotateThrown(error: any): boolean {

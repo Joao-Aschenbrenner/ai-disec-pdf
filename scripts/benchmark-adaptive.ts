@@ -147,6 +147,7 @@ async function main() {
           const providerTimeMs = Date.now() - requestStart;
           if (!res.ok) {
             const errJson = await res.json().catch(() => ({} as any));
+            console.log(`  [pg${p.index + 1} tentativa] HTTP ${res.status} body=${JSON.stringify(errJson).substring(0, 200)}`);
             return {
               status: "failed" as const,
               retryAfter: errJson.retryAfter as string | undefined,
