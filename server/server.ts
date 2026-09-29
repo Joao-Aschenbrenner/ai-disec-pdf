@@ -149,11 +149,22 @@ function getModelByTier(provider: string, tier: string): string {
 
 export { loadModelsCatalog, getProviderConfig, FALLBACK_MODELS };
 
+type CandidateTelemetry = {
+  successCount: number;
+  failureCount: number;
+  timeoutCount: number;
+  rotationCount: number;
+  avgLatencyMs: number;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+};
+
 type RuntimeModelState = {
   candidates: string[];
   activeIndex: number;
   refreshedAt: string;
   failures: Record<string, string>;
+  telemetry: Record<string, CandidateTelemetry>;
 };
 
 const MODEL_RUNTIME_FILE = path.join(DATA_DIR, "model-runtime.json");
@@ -314,6 +325,18 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
   }
 }
 
+function initCandidateTelemetry(): CandidateTelemetry {
+  return {
+    successCount: 0,
+    failureCount: 0,
+    timeoutCount: 0,
+    rotationCount: 0,
+    avgLatencyMs: 0,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+  };
+}
+
 async function refreshRuntimeModels(provider: string, apiKey: string): Promise<RuntimeModelState> {
   const fallback = catalogCandidates(provider);
   let live: string[] = [];
@@ -340,7 +363,14 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
     activeIndex: 0,
     refreshedAt: new Date().toISOString(),
     failures: previous?.failures || {},
+    telemetry: previous?.telemetry || {},
   };
+  // Inicializa telemetria para candidatos novos
+  for (const c of next.candidates) {
+    if (!next.telemetry[c]) {
+      next.telemetry[c] = initCandidateTelemetry();
+    }
+  }
   runtimeModels[provider] = next;
   saveRuntimeModels();
   console.log(`[models-runtime] ${provider}: ${next.candidates.length} candidatos atualizados; ativo #${next.activeIndex + 1}`);
@@ -361,6 +391,10 @@ function rotateRuntimeModel(provider: string, reason: string): boolean {
   if (!state || state.candidates.length < 2) return false;
   const current = state.candidates[state.activeIndex];
   state.failures[current] = reason.slice(0, 200);
+  // Incrementa contador de rotação do modelo atual
+  if (state.telemetry[current]) {
+    state.telemetry[current].rotationCount += 1;
+  }
   state.activeIndex = (state.activeIndex + 1) % state.candidates.length;
   runtimeModels[provider] = state;
   saveRuntimeModels();
@@ -368,15 +402,60 @@ function rotateRuntimeModel(provider: string, reason: string): boolean {
   return true;
 }
 
-function shouldRotateModel(status: number, body: string): boolean {
-  if ([404, 410, 422, 503, 504, 529].includes(status)) return true;
-  return /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|capacity|worker|overloaded|time.?out|timed out|gateway timeout/i.test(body);
+function recordTelemetry(provider: string, model: string, outcome: "success" | "failure" | "timeout", latencyMs: number): void {
+  const state = runtimeModels[provider];
+  if (!state || !state.telemetry[model]) return;
+  const tel = state.telemetry[model];
+  const now = new Date().toISOString();
+  if (outcome === "success") {
+    tel.successCount += 1;
+    // Média móvel simples
+    tel.avgLatencyMs = tel.successCount === 1 ? latencyMs : Math.round((tel.avgLatencyMs * (tel.successCount - 1) + latencyMs) / tel.successCount);
+    tel.lastSuccessAt = now;
+  } else if (outcome === "failure") {
+    tel.failureCount += 1;
+    tel.lastFailureAt = now;
+  } else if (outcome === "timeout") {
+    tel.timeoutCount += 1;
+    tel.lastFailureAt = now;
+  }
+  runtimeModels[provider] = state;
+  saveRuntimeModels();
+}
+
+function shouldRotateModel(status: number, body: string, provider?: string): boolean {
+  // Rotação IMEDIATA apenas para sinais explícitos de indisponibilidade/incompatibilidade do MODELO
+  if ([404, 410, 422].includes(status)) return true;
+  
+  // Se provider foi passado, verifica se o candidato atual já falhou recentemente com timeout/504
+  if (provider) {
+    const state = runtimeModels[provider];
+    if (state) {
+      const current = state.candidates[state.activeIndex];
+      const tel = state.telemetry?.[current];
+      // Se o candidato atual já teve timeout/504 recente (telemetry timeoutCount > 0), rotaciona
+      if (tel && tel.timeoutCount > 0) {
+        return true;
+      }
+      // Also check failures object for HTTP 504/timeout (backward compat)
+      const recentFailure = state.failures[current];
+      if (recentFailure && /time.?out|504|gateway timeout/i.test(recentFailure)) {
+        return true;
+      }
+    }
+  }
+  
+  // 503/504/529 genéricos NÃO rotacionam no primeiro ocorrência — o frontend fará retry no mesmo candidato
+  // e reduzirá concorrência. Rotação só se o MESMO candidato repetir a falha.
+  return /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers? for this model|capacity exhausted|explicitly unavailable/i.test(body);
 }
 
 function shouldRotateThrown(error: any): boolean {
   const name = String(error?.name || "");
   const message = String(error?.message || "");
-  return name === "AbortError" || /time.?out|model.{0,30}(unavailable|not found)|capacity|worker|overloaded/i.test(message);
+  // Rotação em erro lançado apenas para indisponibilidade explícita do modelo
+  // AbortError/timeout genérico NÃO rotaciona aqui — o frontend retenta no mesmo candidato
+  return /model.{0,30}(unavailable|not found)|no workers? for this model|capacity exhausted|explicitly unavailable/i.test(message);
 }
 
 let serverInstance: any = null;
@@ -424,7 +503,7 @@ async function logUpload(originalName: string, pageIndex: number, status: string
   }
 }
 
-function extractAIError(status: number, body: string): { userMessage: string; retryAfter?: string } {
+function extractAIError(status: number, body: string): { userMessage: string; retryAfter?: string; retryable?: boolean; modelRotated?: boolean } {
   try {
     const parsed = JSON.parse(body);
     // Normaliza mensagem de erro de qualquer provider
@@ -433,8 +512,14 @@ function extractAIError(status: number, body: string): { userMessage: string; re
       return { userMessage: JSON.stringify(msg).substring(0, 200) };
     }
     const msgStr = String(msg);
+    // Check for retryable/retryAfter in parsed object (when error is a string but body has extra fields)
+    const explicitRetryable = parsed.retryable === true;
+    const explicitRetryAfter = typeof parsed.retryAfter === "string" ? parsed.retryAfter : undefined;
+    
     if (status === 429 || msgStr.includes("quota") || msgStr.includes("rate limit")) {
-      return { userMessage: "Cota da API excedida. Aguarde alguns minutos ou faça upgrade no plano.", retryAfter: msgStr.match(/([\d.]+)\s*s(?:ec)?/)?.at(1) + "s" || "60s" };
+      // 429: retryable, com retryAfter, SEM modelRotated (omitido)
+      const retryAfter = explicitRetryAfter || msgStr.match(/([\d.]+)\s*s(?:ec)?/)?.at(1) ? msgStr.match(/([\d.]+)\s*s(?:ec)?/)!.at(1)! + "s" : "60s";
+      return { userMessage: "Cota da API excedida. Aguarde alguns minutos ou faça upgrade no plano.", retryAfter, retryable: true };
     }
     if (msgStr.includes("does not support image") || msgStr.includes("not support image input")) {
       return { userMessage: "Este modelo de IA não suporta análise de imagens. Vá em Configurações e escolha outro provedor compatível." };
@@ -443,18 +528,20 @@ function extractAIError(status: number, body: string): { userMessage: string; re
       return { userMessage: "O provedor de IA não conseguiu processar esta página (formato de imagem inválido). Tente reprocessar ou trocar de provedor nas Configurações." };
     }
     if (msgStr.includes("API key") || msgStr.includes("invalid") || msgStr.includes("unauthorized") || status === 401 || status === 403) {
-      return { userMessage: "Chave de API inválida ou sem acesso ao modelo. Verifique suas configurações." };
+      // 401/403: NÃO retryable, SEM retryAfter, SEM modelRotated
+      return { userMessage: "Chave de API inválida ou sem acesso ao modelo. Verifique suas configurações.", retryable: false };
     }
-    return { userMessage: msgStr.length > 200 ? msgStr.slice(0, 200) + "…" : msgStr };
+    // Pass through explicit retryable/retryAfter if present
+    return { userMessage: msgStr.length > 200 ? msgStr.slice(0, 200) + "…" : msgStr, retryable: explicitRetryable, retryAfter: explicitRetryAfter };
   } catch {}
   if (status === 429) {
-    return { userMessage: "Muitas requisições. Aguarde um momento e tente novamente.", retryAfter: "60s" };
+    return { userMessage: "Muitas requisições. Aguarde um momento e tente novamente.", retryAfter: "60s", retryable: true };
   }
   if (status === 401 || status === 403) {
-    return { userMessage: "Chave de API inválida ou sem acesso ao modelo. Verifique suas configurações." };
+    return { userMessage: "Chave de API inválida ou sem acesso ao modelo. Verifique suas configurações.", retryable: false };
   }
   if (status >= 500) {
-    return { userMessage: "Serviço temporariamente indisponível. Tente novamente mais tarde." };
+    return { userMessage: "Serviço temporariamente indisponível. Tente novamente mais tarde.", retryable: true };
   }
   return { userMessage: body.length > 200 ? body.slice(0, 200) + "…" : body };
 }
@@ -645,6 +732,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             const googleModel = await getRuntimeModel("GOOGLE", apiKey);
             const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${apiKey}`;
             console.log(`[AI] Enviando para Google Gemini (${googleModel})...`);
+            const startTime = Date.now();
             aiResponse = await fetch(googleUrl, {
              method: "POST",
              headers: { "Content-Type": "application/json" },
@@ -652,10 +740,12 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: imageBase64 } }, { text: prompt }] }]
              })
            });
+           recordTelemetry(provider, googleModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "OPENAI") {
             if (!apiKey) throw new Error("Chave de API OpenAI não configurada.");
             const openaiModel = await getRuntimeModel("OPENAI", apiKey);
             console.log(`[AI] Enviando para OpenAI (${openaiModel})...`);
+            const startTime = Date.now();
             aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -667,10 +757,12 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                top_p: 0.9
              })
            });
+           recordTelemetry(provider, openaiModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "ANTHROPIC") {
             if (!apiKey) throw new Error("Chave de API Anthropic não configurada.");
             const anthropicModel = await getRuntimeModel("ANTHROPIC", apiKey);
             console.log(`[AI] Enviando para Anthropic Claude (${anthropicModel})...`);
+            const startTime = Date.now();
             aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
               method: "POST",
               headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
@@ -680,12 +772,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } }, { type: "text", text: prompt }] }]
              })
            });
+           recordTelemetry(provider, anthropicModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "MISTRAL") {
             if (!apiKey) throw new Error("Chave de API Mistral não configurada.");
             const mistralModel = await getRuntimeModel("MISTRAL", apiKey);
             console.log(`[AI] Enviando para Mistral OCR (${mistralModel})...`);
             // Mistral não tem visão direta — usa OCR (v1/ocr) para extrair texto da imagem,
             // depois classifica o texto com um modelo de texto (mistral-small-latest).
+            const startTime = Date.now();
             const ocrRes = await fetch("https://api.mistral.ai/v1/ocr", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -694,6 +788,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 document: { type: "image_url", image_url: `data:image/jpeg;base64,${imageBase64}` }
               })
             });
+            recordTelemetry(provider, mistralModel, ocrRes.ok ? "success" : "failure", Date.now() - startTime);
             if (!ocrRes.ok) {
               const errBody = await ocrRes.text();
               const { userMessage } = extractAIError(ocrRes.status, errBody);
@@ -718,12 +813,16 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
              const openrouterModel = await getRuntimeModel("OPENROUTER", apiKey);
              console.log(`[AI] Enviando para OpenRouter (${openrouterModel})...`);
+             const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "OPENROUTER", model: openrouterModel, apiKey }, imageBase64, prompt);
+             recordTelemetry(provider, openrouterModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
            } else if (provider === "GROQ") {
              if (!apiKey) throw new Error("Chave de API Groq não configurada.");
              const groqModel = await getRuntimeModel("GROQ", apiKey);
              console.log(`[AI] Enviando para Groq (${groqModel})...`);
+             const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "GROQ", model: groqModel, apiKey }, imageBase64, prompt);
+             recordTelemetry(provider, groqModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
            } else if (provider === "LOCAL_OLLAMA") {
               // Ollama local — sem chave de API. Endpoint /api/chat (não /v1/chat/completions).
               // O modelo escolhido nas Configurações (settings.model) tem prioridade sobre o tier selecionado.
@@ -748,6 +847,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 console.warn("[AI] Não foi possível verificar /api/tags, tentando /api/chat direto:", tagErr instanceof Error ? tagErr.message : tagErr);
               }
 
+              const startTime = Date.now();
               aiResponse = await fetch(`${ollamaConfig.baseUrl}/api/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -759,11 +859,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                   options: { temperature: 0.1 }
                 }),
               });
-            } else if (provider === "OLLAMA_CLOUD") {
+              recordTelemetry(provider, ollamaLocalModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
+} else if (provider === "OLLAMA_CLOUD") {
               if (!apiKey) throw new Error("Token Ollama Cloud não configurado. Obtenha em https://ollama.com/signup.");
               const ollamaCloudModel = await getRuntimeModel("OLLAMA_CLOUD", apiKey);
               console.log(`[AI] Enviando para Ollama Cloud (${ollamaCloudModel})...`);
+              const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "OLLAMA_CLOUD", model: ollamaCloudModel, apiKey }, imageBase64, prompt);
+              recordTelemetry(provider, ollamaCloudModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
             } else if (provider === "CODEX") {
               // Codex Pro: tenta ler token do OAuth login (~/.codex/auth.json), senão usa apiKey
               let codexKey = apiKey;
@@ -779,15 +882,22 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               if (!codexKey) throw new Error("Login Codex necessário. Clique em 'Sign in with ChatGPT' nas Configurações, ou cole uma API key da OpenAI.");
               const codexModel = await getRuntimeModel("CODEX", codexKey);
               console.log(`[AI] Enviando para OpenAI/Codex (${codexModel})...`);
+              const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "CODEX", model: codexModel, apiKey: codexKey }, imageBase64, prompt);
+              recordTelemetry(provider, codexModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
             } else {
               // NVIDIA (padrão)
               const nvidiaModel = await getRuntimeModel("NVIDIA", apiKey);
               console.log(`[AI] Enviando para NVIDIA (${nvidiaModel})...`);
+              const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "NVIDIA", model: nvidiaModel, apiKey }, imageBase64, prompt);
+              recordTelemetry(provider, nvidiaModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
             }
 } catch (aiErr) {
           await logError("Falha ao chamar o provedor de IA", aiErr);
+          // Detecta timeout/abort para telemetria
+          const isTimeout = aiErr?.name === "AbortError" || /abort|time.?out/i.test(String(aiErr?.message || ""));
+          // O modelo usado não está disponível aqui facilmente; telemetria de timeout será registrada pelo frontend
           if (shouldRotateThrown(aiErr)) {
             rotateRuntimeModel(provider, aiErr instanceof Error ? aiErr.message : String(aiErr));
           }
@@ -797,15 +907,31 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
        if (!aiResponse.ok) {
          const errBody = await aiResponse.text();
          console.error("[AI API Error]:", aiResponse.status, errBody);
-         if (shouldRotateModel(aiResponse.status, errBody) && rotateRuntimeModel(provider, `HTTP ${aiResponse.status}`)) {
+         
+         // Check rotation FIRST (before tracking failure) to avoid immediate rotation on first timeout/504
+         if (shouldRotateModel(aiResponse.status, errBody, provider) && rotateRuntimeModel(provider, `HTTP ${aiResponse.status}`)) {
            return res.status(503).json({
              error: "O modelo automático deste provedor não respondeu corretamente. Rotacionei para outro modelo compatível e a página será tentada novamente.",
              retryAfter: "1s",
              modelRotated: true,
+             retryable: true,
            });
          }
-         const { userMessage, retryAfter } = extractAIError(aiResponse.status, errBody);
-         return res.status(aiResponse.status).json({ error: userMessage, retryAfter });
+         
+         // Track failure reason for current candidate (only if NOT rotating)
+         // This enables rotation on REPEATED timeout/504 from the same candidate
+         const state = runtimeModels[provider];
+         if (state) {
+           const current = state.candidates[state.activeIndex];
+           state.failures[current] = `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`;
+           // Track timeout/504 in telemetry for rotation logic
+           if (aiResponse.status === 504 || aiResponse.status === 503) {
+             recordTelemetry(provider, current, "timeout", 0);
+           }
+         }
+         
+         const { userMessage, retryAfter, retryable, modelRotated } = extractAIError(aiResponse.status, errBody);
+         return res.status(aiResponse.status).json({ error: userMessage, retryAfter, retryable, modelRotated });
        }
 
        const data = await aiResponse.json();
@@ -989,6 +1115,18 @@ app.get("/api/models/runtime/status", (req, res) => {
     refreshedAt: state?.refreshedAt || null,
   });
 });
+
+// Test-only endpoint to clear runtime models state
+if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+  app.post("/api/test/clear-runtime", (_req, res) => {
+    runtimeModels = {};
+    try {
+      if (fs.existsSync(MODEL_RUNTIME_FILE)) fs.unlinkSync(MODEL_RUNTIME_FILE);
+    } catch {}
+    console.log("[test] Runtime models cleared");
+    return res.json({ success: true });
+  });
+}
 
 app.post("/api/models/runtime/refresh-all", async (_req, res) => {
   try {

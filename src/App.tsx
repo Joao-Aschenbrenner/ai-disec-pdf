@@ -89,10 +89,13 @@ const VISIBLE_PROVIDERS = new Set([
   "OPENROUTER", "GROQ", "OLLAMA_CLOUD", "CODEX", "LOCAL_OLLAMA",
 ]);
 
+// Default concurrency (used before component mounts)
+let currentConcurrencyRef = AUTO_PIPELINE_CONCURRENCY;
+
 function providerConcurrency(_provider: string): number {
   // Produto simplificado: um único motor visível em modo Automático.
-  // Três páginas simultâneas equilibram throughput e retry/backoff.
-  return AUTO_PIPELINE_CONCURRENCY;
+  // Concorrência adaptativa: começa em 3, reduz sob pressão, recupera gradualmente.
+  return currentConcurrencyRef;
 }
 
 const PROCESSING_STAGE_LABELS: Record<string, string> = {
@@ -568,6 +571,23 @@ export default function App() {
   const [updateProgress, setUpdateProgress] = useState(0);
   const [updateError, setUpdateError] = useState("");
 
+  // Métricas reais de execução
+  const [attemptCount, setAttemptCount] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
+  const [rotationCount, setRotationCount] = useState(0);
+  const [finalSuccessCount, setFinalSuccessCount] = useState(0);
+  const [finalErrorCount, setFinalErrorCount] = useState(0);
+
+  // Concorrência adaptativa
+  const [currentConcurrency, setCurrentConcurrency] = useState(3);
+  const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
+  const [isStabilizing, setIsStabilizing] = useState(false);
+
+  // Sync ref for providerConcurrency function
+  useEffect(() => {
+    currentConcurrencyRef = currentConcurrency;
+  }, [currentConcurrency]);
+
   useEffect(() => {
     const api = window.electronAPI;
     if (!api) return;
@@ -756,6 +776,9 @@ export default function App() {
     page: SplitPage,
     correction?: string
   ): Promise<any> => {
+    // Incrementa contador de tentativas reais
+    setAttemptCount(prev => prev + 1);
+    
     const response = await fetch("/api/extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -777,9 +800,14 @@ export default function App() {
         typeof errJson.retryable === "boolean"
           ? errJson.retryable
           : [408, 429, 500, 502, 503, 504, 529].includes(response.status);
+      // Propaga modelRotated para o frontend poder reagir
+      err.modelRotated = errJson.modelRotated === true;
       throw err;
     }
-    return response.json();
+    
+    const data = await response.json();
+    // Retorna modelRotated se o backend enviou (para retry automático)
+    return { ...data, modelRotated: data.modelRotated === true };
   };
 
   const buildProcessedPage = (
@@ -948,6 +976,9 @@ export default function App() {
         error: message,
         retryAfter: err?.retryAfter,
         retryable: err?.retryable !== false,
+        // Propaga info de rotação/429 para retry inteligente
+        modelRotated: err?.modelRotated === true,
+        statusCode: err?.status,
       };
     }
   };
@@ -964,12 +995,44 @@ export default function App() {
       last = result;
 
       if (Array.isArray(result)) return result;
-      if (result.status !== "failed") return result;
+      if (result.status !== "failed") {
+        // Sucesso: reseta contadores de pressão
+        setConsecutiveSuccesses(prev => prev + 1);
+        // Recupera concorrência gradualmente após ~6 sucessos consecutivos
+        setConsecutiveSuccesses(prev => {
+          const next = prev + 1;
+          if (next >= 6 && currentConcurrency < 3) {
+            setCurrentConcurrency(c => Math.min(3, c + 1));
+            return 0; // reseta contador após subir
+          }
+          return next;
+        });
+        return result;
+      }
+      
+      // Falha definitiva (401/403)
       if (result.retryable === false) return result;
       if (attempt === 3) return result;
 
+      // Contadores de retry e rotação
+      if (attempt > 1) setRetryCount(prev => prev + 1);
+      if (result.modelRotated) setRotationCount(prev => prev + 1);
+
+      // Concorrência adaptativa: primeiro 504/timeout genérico → reduz para 2
+      // Se já estava em 2 e novo timeout/504 → reduz para 1
+      const isTimeoutOr504 = result.statusCode === 504 || result.statusCode === 503;
+      if (isTimeoutOr504 && !result.modelRotated) {
+        setIsStabilizing(true);
+        setCurrentConcurrency(prev => {
+          if (prev === 3) return 2;
+          if (prev === 2) return 1;
+          return prev;
+        });
+        setConsecutiveSuccesses(0); // reseta recuperação
+      }
+
       // Pequeno stagger evita que as 3 páginas falhadas retomem no mesmo milissegundo.
-      let delayMs = delays[attempt - 1] + ((page.index % AUTO_PIPELINE_CONCURRENCY) * 400);
+      let delayMs = delays[attempt - 1] + ((page.index % currentConcurrency) * 400);
       if (result.retryAfter) {
         const match = result.retryAfter.match(/(\d+)/);
         if (match) delayMs = Math.max(delayMs, parseInt(match[1], 10) * 1000);
@@ -1138,6 +1201,16 @@ export default function App() {
       return;
     }
 
+    // Inicializa métricas da execução
+    setAttemptCount(0);
+    setRetryCount(0);
+    setRotationCount(0);
+    setFinalSuccessCount(0);
+    setFinalErrorCount(0);
+    setCurrentConcurrency(3);
+    setConsecutiveSuccesses(0);
+    setIsStabilizing(false);
+
     setIsProcessing(true);
     window.electronAPI?.startProcessing();
 
@@ -1160,7 +1233,9 @@ export default function App() {
       const finalPhysical = new Map<string, SplitPage>();
 
       while (queue.length > 0 || activePromises.length > 0) {
-        while (queue.length > 0 && activePromises.length < concurrencyLimit) {
+        // Atualiza limite de concorrência dinamicamente
+        const currentLimit = providerConcurrency(currentProvider);
+        while (queue.length > 0 && activePromises.length < currentLimit) {
           const page = queue.shift()!;
           setSplitPages(prev => prev.map(p =>
             p.id === page.id
@@ -1281,6 +1356,13 @@ export default function App() {
       if (error?.code === "LAYA_REQUIRED") setShowSettings(true);
       alert(error?.message || "Falha no fluxo Classification V3.");
     } finally {
+      // Calcula métricas finais
+      const finalPages = splitPages.filter(p => p.status !== "pending");
+      const success = finalPages.filter(p => p.status === "success").length;
+      const failed = finalPages.filter(p => p.status === "failed").length;
+      setFinalSuccessCount(success);
+      setFinalErrorCount(failed);
+      
       setIsProcessing(false);
       window.electronAPI?.endProcessing();
     }
@@ -1815,6 +1897,22 @@ export default function App() {
                     </button>
                   )}
                 </div>
+                
+                {isProcessing && (
+                  <div className="mt-2 flex items-center gap-3 text-[11px]">
+                    <span className="px-2 py-1 bg-indigo-950/50 border border-indigo-800/30 rounded-full text-indigo-300 font-mono">
+                      Concorrência: {currentConcurrency}
+                    </span>
+                    {isStabilizing && (
+                      <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300 animate-pulse">
+                        Estabilizando provedor...
+                      </span>
+                    )}
+                    <span className="px-2 py-1 bg-slate-950/50 border border-slate-800/30 rounded-full text-slate-400 font-mono">
+                      Tentativas: {attemptCount} · Retries: {retryCount} · Rotações: {rotationCount}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Configurações do Layout */}
@@ -2542,7 +2640,11 @@ export default function App() {
               )}
 
               <div className="rounded-xl border border-cyan-900/30 bg-cyan-950/10 px-3 py-2.5">
-                <p className="text-[11px] text-cyan-300 font-semibold">Pipeline rápido: até 3 páginas simultâneas</p>
+                <p className="text-[11px] text-cyan-300 font-semibold">
+                  {isProcessing
+                    ? `Pipeline adaptativo: ${currentConcurrency} simultânea${currentConcurrency > 1 ? "s" : ""}${isStabilizing ? " · Estabilizando provedor..." : ""}`
+                    : "Pipeline adaptativo: até 3 simultâneas"}
+                </p>
                 <p className="text-[10px] text-slate-500 mt-1">Retry, backoff e rotação automática de modelo continuam ativos.</p>
               </div>
 

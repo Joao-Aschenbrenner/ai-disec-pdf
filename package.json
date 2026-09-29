@@ -17,6 +17,7 @@
     "update-models": "node scripts/update-models.cjs",
     "test": "vitest run --config vite.config.test.ts",
     "test:watch": "vitest --config vite.config.test.ts",
+    "test:integration:nvidia": "cross-env RUN_INTEGRATION_NVIDIA=1 vitest run --config vite.config.test.ts tests/integration-nvidia.test.ts",
     "clean": "if (Test-Path dist) { Remove-Item -Recurse -Force dist }",
     "lint": "tsc --noEmit"
   },

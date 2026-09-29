@@ -21,7 +21,7 @@ describe("Runtime model automation", () => {
 
     expect(server).toContain("activeIndex: 0");
     expect(server).toContain("rotateRuntimeModel(provider");
-    expect(server).toContain("shouldRotateModel(aiResponse.status, errBody)");
+    expect(server).toContain("shouldRotateModel(aiResponse.status, errBody, provider)");
     expect(server).toContain('rotateRuntimeModel(provider, "empty-response")');
     expect(server).toContain('rotateRuntimeModel(provider, "invalid-json-output")');
     expect(server).toContain("modelRotated: true");

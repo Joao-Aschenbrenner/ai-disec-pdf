@@ -37,26 +37,6 @@ describe("Servidor de Extração (API)", () => {
     const data = await response.json();
     expect(data.error).toContain("Faltando dados do PDF");
   });
-
-  it("deve converter PDF e enviar para API NVIDIA", async () => {
-    const response = await fetch(`${BASE_URL}/api/extract`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        pdfBase64: testPdfBase64,
-        originalName: "teste.pdf",
-        pageIndex: 0,
-      }),
-    });
-
-    console.log(`Status da requisição: ${response.status}`);
-    const data = await response.json();
-    console.log(`Resposta: ${JSON.stringify(data, null, 2)}`);
-
-    if (response.status === 500) {
-      expect(data.error).not.toContain("Falha ao converter PDF");
-    }
-  });
 });
 
 describe("Mock dos provedores de IA (catálogo externalizado)", () => {
