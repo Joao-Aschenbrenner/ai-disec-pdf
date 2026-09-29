@@ -193,6 +193,60 @@ describe("Adaptive Pipeline - Retry & Concurrency (Tests A–G)", () => {
     expect(res3.status).toBe(200);
   });
 
+  // ===== TEST B2 (timeout lançado como AbortError) =====
+  it("B2: AbortError (timeout lançado) repetido → rotate → retry → 200", async () => {
+    // Simula o provider estourando o timeout do servidor: a chamada ao provider
+    // rejeita com AbortError (o mesmo caminho do 504 real de 120s).
+    let providerCalls = 0;
+    vi.spyOn(globalThis as any, "fetch").mockImplementation(
+      (url: string | URL, init?: any) => {
+        const urlStr = url.toString();
+        if (urlStr.includes(`127.0.0.1:${PORT}`) || urlStr.includes(`localhost:${PORT}`)) {
+          return originalFetch(url, init);
+        }
+        if (urlStr.includes("127.0.0.1:8000") || urlStr.includes("localhost:8000")) {
+          return Promise.resolve(new Response(JSON.stringify({ laya: { healthy: true } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
+          return Promise.resolve(new Response(JSON.stringify({ data: [{ id: "z-ai/glm-5.3-flash", created: Date.now(), modalities: ["image"] }, { id: "nvidia/nemotron-3-ultra", created: Date.now() - 1000, modalities: ["image"] }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/chat/completions")) {
+          providerCalls++;
+          if (providerCalls <= 2) {
+            const abortErr: any = new Error("This operation was aborted");
+            abortErr.name = "AbortError";
+            return Promise.reject(abortErr);
+          }
+          return Promise.resolve(new Response(JSON.stringify({ choices: [{ message: { content: '{"isNotaFiscal":false,"companyName":"Test","valor":100,"documentType":"outros"}' } }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        return originalFetch(url, init);
+      }
+    );
+
+    // 1º timeout: sem rotação (mesmo candidato retém a página)
+    const res1 = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "test.pdf", pageIndex: 0 }),
+    });
+    expect(res1.status).toBe(504);
+    expect((await res1.json()).modelRotated).toBeUndefined();
+
+    // 2º timeout do MESMO candidato → rotação (503 modelRotated)
+    const res2 = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "test.pdf", pageIndex: 0 }),
+    });
+    expect(res2.status).toBe(503);
+    const b2 = await res2.json();
+    expect(b2.modelRotated).toBe(true);
+
+    // 3ª chamada usa novo candidato → sucesso
+    const res3 = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "test.pdf", pageIndex: 0 }),
+    });
+    expect(res3.status).toBe(200);
+  });
   // ===== TEST C =====
   it("C: 503 'no workers for model' → rotate imediato → retry → 200", async () => {
     mockProviderSequence([

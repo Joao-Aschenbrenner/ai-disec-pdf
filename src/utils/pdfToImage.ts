@@ -67,15 +67,6 @@ export async function pdfBase64ToJpeg(
   pdf.destroy();
   return jpegBase64;
 }
-export async function pdfBufferToPngBase64(pdfBuffer: Buffer): Promise<string[]> {
-  const { pdfBufferToPngBase64: fn } = await import("./pdfToImage.server");
-  return fn(pdfBuffer);
-}
-
-export async function pdfBase64ToPngBase64(pdfBase64: string): Promise<string[]> {
-  const { pdfBase64ToPngBase64: fn } = await import("./pdfToImage.server");
-  return fn(pdfBase64);
-}
 
 /**
  * Realce de contraste automático (autostretch) sobre o canvas.

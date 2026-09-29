@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { pdfBufferToPngBase64, pdfBase64ToPngBase64 } from "../src/utils/pdfToImage";
+import { pdfBufferToPngBase64, pdfBase64ToPngBase64 } from "../src/utils/pdfToImage.server";
 import fs from "fs";
 import path from "path";
 

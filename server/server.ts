@@ -895,10 +895,24 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             }
 } catch (aiErr) {
           await logError("Falha ao chamar o provedor de IA", aiErr);
-          // Detecta timeout/abort para telemetria
-          const isTimeout = aiErr?.name === "AbortError" || /abort|time.?out/i.test(String(aiErr?.message || ""));
-          // O modelo usado não está disponível aqui facilmente; telemetria de timeout será registrada pelo frontend
-          if (shouldRotateThrown(aiErr)) {
+          const isThrownTimeout = aiErr?.name === "AbortError" || /abort|time.?out/i.test(String(aiErr?.message || ""));
+          const thrownState = runtimeModels[provider];
+          const thrownCurrent = thrownState?.candidates?.[thrownState.activeIndex];
+          if (isThrownTimeout && thrownCurrent) {
+            // Política "504 repetido → rotaciona": o 1º timeout do candidato só
+            // registra telemetria (o frontend reduz concorrência e retenta no
+            // mesmo modelo); se o MESMO candidato já teve timeout, rotaciona.
+            const hadRecentTimeout = (thrownState.telemetry?.[thrownCurrent]?.timeoutCount ?? 0) > 0;
+            if (hadRecentTimeout && rotateRuntimeModel(provider, "timeout repetido (AbortError)")) {
+              return res.status(503).json({
+                error: "O modelo automático excedeu o tempo limite repetidamente. Rotacionei para outro candidato compatível e a página será tentada novamente.",
+                retryAfter: "1s",
+                modelRotated: true,
+                retryable: true,
+              });
+            }
+            recordTelemetry(provider, thrownCurrent, "timeout", 0);
+          } else if (shouldRotateThrown(aiErr)) {
             rotateRuntimeModel(provider, aiErr instanceof Error ? aiErr.message : String(aiErr));
           }
           throw aiErr;
