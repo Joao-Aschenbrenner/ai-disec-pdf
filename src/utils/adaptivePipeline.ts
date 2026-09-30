@@ -1,19 +1,23 @@
 /**
- * Pipeline adaptativo — retry + circuit breaker + concorrência.
+ * Pipeline adaptativo — concorrência + estabilização por página.
  *
- * Regra principal:
- * - enquanto o provider está saudável, até 3 páginas simultâneas;
- * - ao primeiro sinal transitório sério, NÃO lança novas páginas;
- * - a página que detectou a instabilidade vira a dona da estabilização;
- * - concorrência cai imediatamente para 1;
- * - o retry acontece na página atual;
- * - só depois de uma tentativa saudável a fila é liberada novamente;
- * - se não estabilizar após as tentativas permitidas, a fila fica pausada.
+ * Regras:
+ * - saudável: até 3 páginas simultâneas;
+ * - ao primeiro erro de modelo/provider, a página atual vira a dona da estabilização;
+ * - nenhuma página NOVA entra enquanto essa página percorre os candidatos Vision;
+ * - modelRotated=true NÃO tem limite fixo de 3 tentativas: continua até o backend
+ *   informar modelExhausted=true;
+ * - 401/403 param imediatamente porque trocar modelo não corrige chave/permissão;
+ * - 429 usa backoff no mesmo candidato e mantém um limite curto de tentativas;
+ * - quando um candidato estabiliza a página, a fila reabre em concorrência 1 e
+ *   recupera gradualmente até 3.
  */
 
-export const AUTO_PIPELINE_MAX_ATTEMPTS = 3;
+export const AUTO_PIPELINE_MAX_SAME_MODEL_ATTEMPTS = 3;
 export const AUTO_PIPELINE_MAX_CONCURRENCY = 3;
 export const AUTO_PIPELINE_SUCCESS_STREAK = 6;
+/** Apenas proteção contra bug/loop; o limite real do failover é modelsExhausted do backend. */
+export const AUTO_PIPELINE_SAFETY_ATTEMPTS = 64;
 
 export const RETRY_BASE_DELAYS_MS = [2000, 5000, 10000];
 
@@ -22,6 +26,10 @@ export interface PageFailureSignal {
   retryable?: boolean;
   retryAfter?: string;
   modelRotated?: boolean;
+  modelExhausted?: boolean;
+  candidateCount?: number;
+  modelsTried?: number;
+  modelsRemaining?: number;
   statusCode?: number;
 }
 
@@ -42,7 +50,7 @@ export class AdaptivePipeline {
   queuePaused = false;
   halted = false;
   stabilizingPageId: string | undefined;
-  haltReason: "provider-unstable" | "provider-auth" | null = null;
+  haltReason: "provider-unstable" | "provider-auth" | "models-exhausted" | null = null;
 
   attemptCount = 0;
   retryCount = 0;
@@ -139,8 +147,7 @@ export class AdaptivePipeline {
     this.halted = false;
     this.haltReason = null;
 
-    // Depois de estabilizar, a fila recomeça devagar. Só volta a 2/3 após
-    // sucessos consecutivos reais.
+    // Depois de estabilizar, recomeça em 1 e recupera gradualmente.
     this.currentConcurrency = 1;
     this.consecutiveSuccesses = 0;
     this.releaseWaiters(true);
@@ -149,7 +156,7 @@ export class AdaptivePipeline {
   private haltCircuit(pageId: string | undefined): void {
     if (this.stabilizingPageId && pageId && this.stabilizingPageId !== pageId) return;
     this.queuePaused = true;
-    this.stabilizing = true;
+    this.stabilizing = false;
     this.halted = true;
     this.haltReason = "provider-unstable";
     this.currentConcurrency = 1;
@@ -162,6 +169,17 @@ export class AdaptivePipeline {
     this.stabilizing = false;
     this.halted = true;
     this.haltReason = "provider-auth";
+    this.currentConcurrency = 1;
+    this.consecutiveSuccesses = 0;
+    this.releaseWaiters(false);
+  }
+
+  private haltForModelsExhausted(pageId: string | undefined): void {
+    if (this.stabilizingPageId && pageId && this.stabilizingPageId !== pageId) return;
+    this.queuePaused = true;
+    this.stabilizing = false;
+    this.halted = true;
+    this.haltReason = "models-exhausted";
     this.currentConcurrency = 1;
     this.consecutiveSuccesses = 0;
     this.releaseWaiters(false);
@@ -198,7 +216,12 @@ export class AdaptivePipeline {
   }
 
   recordFailure(result: PageFailureSignal, pageId?: string): void {
-    // Credencial/permissão são definitivos, mas não são "instabilidade".
+    if (result.modelExhausted) {
+      this.haltForModelsExhausted(pageId);
+      return;
+    }
+
+    // Credencial/permissão são definitivos, não instabilidade de modelo.
     if (result.retryable === false) return;
 
     const isPressure =
@@ -206,6 +229,7 @@ export class AdaptivePipeline {
       result.statusCode === 429 ||
       result.statusCode === 504 ||
       result.statusCode === 503 ||
+      result.statusCode === 500 ||
       result.statusCode === 408 ||
       result.statusCode === 502 ||
       result.statusCode === 529;
@@ -215,7 +239,11 @@ export class AdaptivePipeline {
   }
 
   retryDelayMs(result: PageFailureSignal, pageIndex: number, attempt: number): number {
-    let delayMs = RETRY_BASE_DELAYS_MS[attempt - 1] + ((pageIndex % Math.max(1, this.currentConcurrency)) * 400);
+    const baseDelay = result.modelRotated
+      ? 250
+      : RETRY_BASE_DELAYS_MS[Math.min(Math.max(attempt - 1, 0), RETRY_BASE_DELAYS_MS.length - 1)];
+
+    let delayMs = baseDelay + ((pageIndex % Math.max(1, this.currentConcurrency)) * 400);
     const match = result.retryAfter?.match(/(\d+)/);
     if (match) {
       const retryAfterMs = parseInt(match[1], 10) * 1000;
@@ -225,25 +253,34 @@ export class AdaptivePipeline {
   }
 
   /**
-   * Loop de retry para UMA página.
+   * Retry de UMA página.
    *
-   * Quando outra página já está estabilizando o provider, esta página espera.
-   * Assim não existe cascata de retries paralelos enquanto o provider está ruim.
+   * Rotação de modelo é exaustiva: modelRotated=true continua até o backend
+   * dizer modelExhausted=true. O limite de 3 vale apenas quando continuamos no
+   * mesmo candidato (ex.: 429/backoff).
    */
   async runPageWithRetry<T extends PipelineOutcomeLike>(
     page: { index: number; id?: string },
     processOnce: (page: { index: number; id?: string }, attempt: number) => Promise<T>,
-    onPageRetry?: (pageId: string | undefined, attempt: number, delayMs: number) => void | Promise<void>
+    onPageRetry?: (
+      pageId: string | undefined,
+      attempt: number,
+      delayMs: number,
+      signal?: PageFailureSignal
+    ) => void | Promise<void>
   ): Promise<T> {
     let last: T | null = null;
     const pageKey = page.id ?? `index:${page.index}`;
+    let attempt = 0;
+    let sameModelFailures = 0;
 
-    for (let attempt = 1; attempt <= AUTO_PIPELINE_MAX_ATTEMPTS; attempt++) {
-      if (attempt > 1) {
+    while (attempt < AUTO_PIPELINE_SAFETY_ATTEMPTS) {
+      if (attempt > 0) {
         const canContinue = await this.waitForCircuit(pageKey);
         if (!canContinue) return last as T;
       }
 
+      attempt += 1;
       this.recordAttempt();
       const result = await processOnce(page, attempt);
       last = result;
@@ -260,37 +297,44 @@ export class AdaptivePipeline {
 
       const signal = result as PageFailureSignal;
 
+      if (signal.modelExhausted) {
+        this.haltForModelsExhausted(pageKey);
+        return result;
+      }
+
       if (signal.retryable === false) {
         if (signal.statusCode === 401 || signal.statusCode === 403) {
           this.haltForProviderAuth();
-        } else if (this.queuePaused && this.stabilizingPageId === pageKey) {
+        } else {
           this.haltCircuit(pageKey);
         }
         return result;
       }
 
-      if (attempt === AUTO_PIPELINE_MAX_ATTEMPTS) {
-        if (this.queuePaused && this.stabilizingPageId === pageKey) {
+      if (signal.modelRotated) {
+        this.rotationCount += 1;
+        sameModelFailures = 0;
+      } else {
+        sameModelFailures += 1;
+        if (sameModelFailures >= AUTO_PIPELINE_MAX_SAME_MODEL_ATTEMPTS) {
           this.haltCircuit(pageKey);
+          return result;
         }
-        return result;
       }
 
       this.retryCount += 1;
-      if (signal.modelRotated) this.rotationCount += 1;
-
       this.recordFailure(signal, pageKey);
 
-      // Se outra página já é a dona da estabilização, esta espera antes de
-      // fazer qualquer nova chamada ao provider.
       const canContinue = await this.waitForCircuit(pageKey);
       if (!canContinue) return result;
 
       const delayMs = this.retryDelayMs(signal, page.index, attempt);
       this.backoffTimeMs += delayMs;
-      await onPageRetry?.(page.id, attempt, delayMs);
+      await onPageRetry?.(page.id, attempt, delayMs, signal);
     }
 
+    // Safety stop: nunca deveria ser atingido se o backend sinaliza exaustão.
+    this.haltCircuit(pageKey);
     return last as T;
   }
 }
