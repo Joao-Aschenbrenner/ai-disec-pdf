@@ -532,9 +532,11 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
     console.warn(`[models-runtime] ${provider}: refresh falhou; preservando catálogo. Motivo: ${reason}`);
   }
 
-  // O provider ao vivo vem primeiro (mais recente quando a API fornece created_at);
-  // catálogo curado completa os fallbacks conhecidos.
-  const candidates = Array.from(new Set([...(live || []), ...fallback]))
+  // Se a API respondeu com candidatos Vision válidos, o sweep usa SOMENTE
+  // o que ela declarou disponível agora. O catálogo versionado entra apenas
+  // quando a descoberta ao vivo falhar ou vier vazia.
+  const sourceCandidates = live.length > 0 ? live : fallback;
+  const candidates = Array.from(new Set(sourceCandidates))
     .filter(model => modelLooksCompatible(provider, model));
 
   const previous = runtimeModels[provider];
