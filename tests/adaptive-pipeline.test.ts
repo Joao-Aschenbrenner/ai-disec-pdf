@@ -391,7 +391,8 @@ describe("Adaptive Pipeline - Retry & Concurrency (Tests A–G)", () => {
     expect(p2.stabilizing).toBe(false);
     expect(p2.currentConcurrency).toBe(1);
 
-    // 401/403 não abrem circuito.
+    // recordFailure isolado não abre circuito para 401/403; o halt definitivo
+    // acontece no runPageWithRetry ao receber a resposta não-retryable.
     const p3 = new AdaptivePipeline(3);
     p3.recordFailure({ status: "failed", retryable: false, statusCode: 401 }, "page-b");
     expect(p3.currentConcurrency).toBe(3);
