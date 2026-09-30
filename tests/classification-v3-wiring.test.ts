@@ -25,14 +25,18 @@ describe("Classification V3 wiring", () => {
     expect(server).toContain("shouldRotateModel");
   });
 
-  it("renderer usa pipeline de 3 páginas e três tentativas reais", () => {
+  it("renderer usa pipeline de 3 páginas e failover exaustivo de modelos", () => {
     const app = read("src/App.tsx");
     const pipeline = read("src/utils/adaptivePipeline.ts");
     expect(app).toContain("const AUTO_PIPELINE_CONCURRENCY = 3");
     expect(app).toContain("AdaptivePipeline"); // mecanismo compartilhado app/benchmark
-    // Três tentativas reais vivem no módulo compartilhado
-    expect(pipeline).toContain("AUTO_PIPELINE_MAX_ATTEMPTS = 3");
+    // Três tentativas valem só para o MESMO candidato; rotações Vision
+    // continuam até modelExhausted, com safety ceiling alto.
+    expect(pipeline).toContain("AUTO_PIPELINE_MAX_SAME_MODEL_ATTEMPTS = 3");
+    expect(pipeline).toContain("AUTO_PIPELINE_SAFETY_ATTEMPTS = 64");
     expect(pipeline).toContain("AUTO_PIPELINE_MAX_CONCURRENCY = 3");
+    expect(pipeline).toContain("signal.modelExhausted");
+    expect(pipeline).toContain("signal.modelRotated");
     expect(pipeline).toContain("runPageWithRetry");
     expect(app).toContain("runV3Prepasses");
     expect(app).toContain("PASSAGEM 3");
