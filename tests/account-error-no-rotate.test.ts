@@ -13,7 +13,8 @@ const savedSettings = fs.existsSync(SETTINGS_FILE)
   : null;
 
 // Erros globais de conta/cota NÃO devem trocar o modelo.
-// 401 = credencial inválida; 429 = quota/rate-limit.
+// 401 ou mensagem explícita "invalid API key" (mesmo se vier como 400) = credencial inválida.
+// 429 = quota/rate-limit.
 // 403 genérico de acesso a MODELO é coberto pelo failover exaustivo.
 describe("Erros de conta NÃO rotacionam modelo", () => {
   let originalFetch: typeof globalThis.fetch;
@@ -77,6 +78,7 @@ describe("Erros de conta NÃO rotacionam modelo", () => {
 
   const accountScenarios = [
     { status: 401, message: "Invalid API key", expected: /Chave de API|configurações|chave/i },
+    { status: 400, message: "Invalid API key", expected: /Chave de API|configurações|chave/i },
     { status: 429, message: "rate limit exceeded", expected: /Cota|Muitas requisições|rate/i },
   ];
 
