@@ -42,6 +42,7 @@ export class AdaptivePipeline {
   queuePaused = false;
   halted = false;
   stabilizingPageId: string | undefined;
+  haltReason: "provider-unstable" | "provider-auth" | null = null;
 
   attemptCount = 0;
   retryCount = 0;
@@ -69,6 +70,7 @@ export class AdaptivePipeline {
     this.queuePaused = false;
     this.halted = false;
     this.stabilizingPageId = undefined;
+    this.haltReason = null;
     this.attemptCount = 0;
     this.retryCount = 0;
     this.rotationCount = 0;
@@ -125,6 +127,7 @@ export class AdaptivePipeline {
     this.stabilizing = false;
     this.stabilizingPageId = undefined;
     this.halted = false;
+    this.haltReason = null;
 
     // Depois de estabilizar, a fila recomeça devagar. Só volta a 2/3 após
     // sucessos consecutivos reais.
@@ -138,6 +141,17 @@ export class AdaptivePipeline {
     this.queuePaused = true;
     this.stabilizing = true;
     this.halted = true;
+    this.haltReason = "provider-unstable";
+    this.currentConcurrency = 1;
+    this.consecutiveSuccesses = 0;
+    this.releaseWaiters(false);
+  }
+
+  private haltForProviderAuth(): void {
+    this.queuePaused = true;
+    this.stabilizing = false;
+    this.halted = true;
+    this.haltReason = "provider-auth";
     this.currentConcurrency = 1;
     this.consecutiveSuccesses = 0;
     this.releaseWaiters(false);
@@ -237,7 +251,9 @@ export class AdaptivePipeline {
       const signal = result as PageFailureSignal;
 
       if (signal.retryable === false) {
-        if (this.queuePaused && this.stabilizingPageId === pageKey) {
+        if (signal.statusCode === 401 || signal.statusCode === 403) {
+          this.haltForProviderAuth();
+        } else if (this.queuePaused && this.stabilizingPageId === pageKey) {
           this.haltCircuit(pageKey);
         }
         return result;
