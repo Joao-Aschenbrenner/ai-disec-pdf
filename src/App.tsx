@@ -83,6 +83,7 @@ import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalText";
 import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
 import { AdaptivePipeline } from "./utils/adaptivePipeline";
+import { formatProcessingElapsed } from "./utils/processingTimer";
 import { version as appVersion } from "../package.json";
 
 const AUTO_PIPELINE_CONCURRENCY = 3;
@@ -98,18 +99,6 @@ function providerConcurrency(_provider: string): number {
   // Produto simplificado: um único motor visível em modo Automático.
   // Concorrência adaptativa: começa em 3, reduz sob pressão, recupera gradualmente.
   return currentConcurrencyRef;
-}
-
-function formatProcessingElapsed(ms: number): string {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  const mm = String(minutes).padStart(2, "0");
-  const ss = String(seconds).padStart(2, "0");
-  return hours > 0
-    ? `${String(hours).padStart(2, "0")}:${mm}:${ss}`
-    : `${mm}:${ss}`;
 }
 
 const PROCESSING_STAGE_LABELS: Record<string, string> = {
