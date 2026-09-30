@@ -68,6 +68,14 @@ describe("Classification V3 wiring", () => {
     expect(app).toContain("window.setInterval(refresh, 250)");
   });
 
+  it("os três retrys manuais resetam o sweep de failover da página", () => {
+    const app = read("src/App.tsx");
+    // Re-tentar N, Re-tentar individual e correção manual chamam
+    // resetPageModelFailover antes de reprocessar — nenhum bypassa o sweep.
+    expect(app.match(/await resetPageModelFailover\(/g)?.length).toBe(3);
+    expect(app).toContain("runtimePageId: page.id");
+  });
+
   it("Electron não desacelera o processamento em background", () => {
     const main = read("electron/main.cjs");
     expect(main).toContain("backgroundThrottling: false");

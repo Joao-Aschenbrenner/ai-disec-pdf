@@ -175,9 +175,16 @@ let runtimeModels: Record<string, RuntimeModelState> = {};
  * Failover exaustivo por página.
  * Não é persistido: serve apenas para garantir que UMA página percorra cada
  * candidato Vision no máximo uma vez antes de declarar o provider esgotado.
+ *
+ * `designated` é o modelo que o failover desta página escolheu para a próxima
+ * tentativa DELA. Sem isso, o activeIndex global (movido pelo failover de
+ * outras páginas em voo) faria esta página chamar modelos que ela já tentou —
+ * livelock observado em corrida de 3 páginas: cada avanço era roubado antes
+ * da próxima chamada, e a página nunca alcançava os últimos candidatos.
  */
 type PageFailoverCycle = {
   tried: Set<string>;
+  designated?: string;
 };
 
 let pageFailoverCycles = new Map<string, PageFailoverCycle>();
@@ -205,6 +212,22 @@ function getPageFailoverCycle(provider: string, pageKey: string): PageFailoverCy
     pageFailoverCycles.set(key, cycle);
   }
   return cycle;
+}
+
+/**
+ * Modelo que ESTA página deve usar agora: o designado pelo failover dela, se
+ * houver e ainda existir no catálogo; senão o candidato ativo global.
+ */
+async function getRequestModel(provider: string, apiKey: string, pageKey: string): Promise<string> {
+  const cycle = pageFailoverCycles.get(pageFailoverCycleKey(provider, pageKey));
+  const designated = cycle?.designated;
+  if (designated) {
+    const state = runtimeModels[provider];
+    if (state?.candidates.includes(designated)) {
+      return designated;
+    }
+  }
+  return getRuntimeModel(provider, apiKey);
 }
 
 type ModelFailoverResult = {
@@ -259,9 +282,10 @@ function failoverRuntimeModel(
   }
 
   // Se outro request em voo já moveu o provider para um candidato que ESTA
-  // página ainda não tentou, apenas usa esse candidato; não pula mais um.
+  // página ainda não tentou, apenas designa esse candidato; não pula mais um.
   const activeModel = state.candidates[state.activeIndex];
   if (activeModel && !cycle.tried.has(activeModel) && activeModel !== failedModel) {
+    cycle.designated = activeModel;
     runtimeModels[provider] = state;
     saveRuntimeModels();
     return {
@@ -298,6 +322,9 @@ function failoverRuntimeModel(
 
   state.activeIndex = nextIndex;
   const nextModel = state.candidates[nextIndex];
+  // Designa para ESTA página: a próxima tentativa DELA usa este candidato,
+  // imune ao activeIndex global movido por outras páginas em voo.
+  cycle.designated = nextModel;
   resetSessionFailures(provider, nextModel);
   runtimeModels[provider] = state;
   saveRuntimeModels();
@@ -422,7 +449,9 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
   if (!entry) return catalogCandidates(provider);
 
   if (provider === "LOCAL_OLLAMA") {
-    const res = await fetch(`${entry.baseUrl.replace(/\/$/, "")}/api/tags`);
+    const localUrl = "http://localhost:11434";
+    assertSafeProviderUrl(`${localUrl}/api/tags`, provider);
+    const res = await fetch(`${localUrl}/api/tags`);
     if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
     const data = await res.json() as any;
     return Array.from(new Set(
@@ -435,14 +464,29 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
   const credential = providerCredential(provider, apiKey);
   if (!credential) return catalogCandidates(provider);
 
+  // Base URLs literais por provider (mesmos valores do catálogo versionado):
+  // elimina URL derivada de arquivo na descoberta live — o analyzer de SSRF
+  // exige fonte não controlável.
+  const LIVE_MODELS_BASE_URLS: Record<string, string> = {
+    GOOGLE: "https://generativelanguage.googleapis.com",
+    OPENAI: "https://api.openai.com",
+    ANTHROPIC: "https://api.anthropic.com",
+    MISTRAL: "https://api.mistral.ai",
+    OPENROUTER: "https://openrouter.ai/api",
+    GROQ: "https://api.groq.com/openai",
+    OLLAMA_CLOUD: "https://chat.api.ollama.ai",
+    CODEX: "https://api.openai.com",
+    NVIDIA: "https://integrate.api.nvidia.com",
+  };
   let url = "";
   const headers: Record<string, string> = {};
 
   if (provider === "GOOGLE") {
     url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(credential)}`;
   } else {
+    const baseUrl = LIVE_MODELS_BASE_URLS[provider] || entry.baseUrl.replace(/\/$/, "");
     const endpoint = entry.modelsEndpoint || "/v1/models";
-    url = entry.baseUrl.replace(/\/$/, "") + (endpoint.startsWith("/") ? endpoint : `/${endpoint}`);
+    url = baseUrl + (endpoint.startsWith("/") ? endpoint : `/${endpoint}`);
     if (provider === "ANTHROPIC") {
       headers["x-api-key"] = credential;
       headers["anthropic-version"] = "2023-06-01";
@@ -450,6 +494,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
       headers.Authorization = `Bearer ${credential}`;
     }
   }
+  assertSafeProviderUrl(url, provider);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -734,6 +779,51 @@ function shouldExhaustiveFailover(status: number, body: string): boolean {
   return /model.{0,40}(not found|unavailable|retired|deprecated|unsupported|invalid|forbidden|access denied)|invalid.{0,20}model|does not support image|not support image input|no workers?|resource.?exhausted|capacity|overloaded|gateway timeout|time.?out|timed out/i.test(body);
 }
 
+// ─── SSRF guard para URLs de provider ───────────────────────────────
+// As URLs de provider vêm do catálogo versionado (server/models.json) e não
+// de input do usuário; o guard é defesa em profundidade contra catálogo
+// adulterado: exige http/https, https + host público para providers cloud,
+// e permite loopback APENAS para serviços locais intencionais (Ollama local).
+const LOCAL_SERVICE_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function isPrivateOrReservedHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (LOCAL_SERVICE_HOSTS.has(host)) return true;
+  if (host === "0.0.0.0" || host.endsWith(".local") || host.endsWith(".internal")) return true;
+  if (/^169\.254\./.test(host)) return true; // link-local
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true; // 172.16-31
+  if (/^127\./.test(host)) return true;
+  // IPv6 loopback/link-local/ULA
+  if (/^(::1|f[cd][0-9a-f]{2}:)/i.test(host)) return true;
+  if (/^fe80:/i.test(host)) return true;
+  return false;
+}
+
+function assertSafeProviderUrl(rawUrl: string, provider: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`URL do provider ${provider} inválida.`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`Esquema não permitido na URL do provider ${provider}: ${parsed.protocol}`);
+  }
+  const isLocalService = provider === "LOCAL_OLLAMA";
+  if (isLocalService) {
+    // Serviço local intencional: exige loopback e http simples.
+    if (!LOCAL_SERVICE_HOSTS.has(parsed.hostname.toLowerCase())) {
+      throw new Error(`${provider} só pode apontar para o loopback.`);
+    }
+    return;
+  }
+  if (parsed.protocol !== "https:" || isPrivateOrReservedHost(parsed.hostname)) {
+    throw new Error(`URL do provider ${provider} aponta para host privado/reservado ou sem TLS.`);
+  }
+}
+
 function isDefinitiveCredentialError(status: number, body: string): boolean {
   if (status === 401) return true;
   if (status !== 403) return false;
@@ -935,15 +1025,19 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
          // this fixed allowlist; no request-controlled URL is ever fetched.
          type OpenAICompatProvider = "OPENROUTER" | "GROQ" | "OLLAMA_CLOUD" | "CODEX" | "NVIDIA";
          interface OpenAICompatConfig { provider: OpenAICompatProvider; model: string; apiKey: string; }
-         const OPENAI_COMPAT_BASE_URLS: Record<OpenAICompatProvider, string> = {
-           OPENROUTER: "https://openrouter.ai/api",
-           GROQ: "https://api.groq.com/openai",
-           OLLAMA_CLOUD: "https://chat.api.ollama.ai",
-           CODEX: "https://api.openai.com",
-           NVIDIA: "https://integrate.api.nvidia.com",
-         };
          const callOpenAICompatible = async (config: OpenAICompatConfig, image: string, promptText: string) => {
-           const endpoint = new URL("/v1/chat/completions", OPENAI_COMPAT_BASE_URLS[config.provider]).toString();
+           // Endpoint literal por provider: nenhuma parte da URL deriva de
+           // request/config — o taint não alcança o fetch.
+           let endpoint: string;
+           switch (config.provider) {
+             case "OPENROUTER": endpoint = "https://openrouter.ai/api/v1/chat/completions"; break;
+             case "GROQ": endpoint = "https://api.groq.com/openai/v1/chat/completions"; break;
+             case "OLLAMA_CLOUD": endpoint = "https://chat.api.ollama.ai/v1/chat/completions"; break;
+             case "CODEX": endpoint = "https://api.openai.com/v1/chat/completions"; break;
+             case "NVIDIA": endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"; break;
+             default: throw new Error(`Provider sem endpoint OpenAI-compatível: ${config.provider}`);
+           }
+           assertSafeProviderUrl(endpoint, config.provider);
            const imageDetail = modelTier === "fast" ? "low" : "high";
            const tokenBudget = modelTier === "fast" ? 640 : 1024;
            const controller = new AbortController();
@@ -977,8 +1071,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
           if (provider === "GOOGLE") {
             if (!apiKey) throw new Error("Chave de API Google não configurada.");
-            const googleModel = requestModel = await getRuntimeModel("GOOGLE", apiKey);
+            const googleModel = requestModel = await getRequestModel("GOOGLE", apiKey, pageFailoverKey);
             const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${apiKey}`;
+            assertSafeProviderUrl(googleUrl, provider);
             console.log(`[AI] Enviando para Google Gemini (${googleModel})...`);
             const startTime = Date.now();
             aiResponse = await fetch(googleUrl, {
@@ -991,9 +1086,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            recordTelemetry(provider, googleModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "OPENAI") {
             if (!apiKey) throw new Error("Chave de API OpenAI não configurada.");
-            const openaiModel = requestModel = await getRuntimeModel("OPENAI", apiKey);
+            const openaiModel = requestModel = await getRequestModel("OPENAI", apiKey, pageFailoverKey);
             console.log(`[AI] Enviando para OpenAI (${openaiModel})...`);
             const startTime = Date.now();
+            assertSafeProviderUrl("https://api.openai.com/v1/chat/completions", provider);
             aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -1008,9 +1104,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            recordTelemetry(provider, openaiModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "ANTHROPIC") {
             if (!apiKey) throw new Error("Chave de API Anthropic não configurada.");
-            const anthropicModel = requestModel = await getRuntimeModel("ANTHROPIC", apiKey);
+            const anthropicModel = requestModel = await getRequestModel("ANTHROPIC", apiKey, pageFailoverKey);
             console.log(`[AI] Enviando para Anthropic Claude (${anthropicModel})...`);
             const startTime = Date.now();
+            assertSafeProviderUrl("https://api.anthropic.com/v1/messages", provider);
             aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
               method: "POST",
               headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
@@ -1023,11 +1120,12 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            recordTelemetry(provider, anthropicModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "MISTRAL") {
             if (!apiKey) throw new Error("Chave de API Mistral não configurada.");
-            const mistralModel = requestModel = await getRuntimeModel("MISTRAL", apiKey);
+            const mistralModel = requestModel = await getRequestModel("MISTRAL", apiKey, pageFailoverKey);
             console.log(`[AI] Enviando para Mistral OCR (${mistralModel})...`);
             // Mistral não tem visão direta — usa OCR (v1/ocr) para extrair texto da imagem,
             // depois classifica o texto com um modelo de texto (mistral-small-latest).
             const startTime = Date.now();
+            assertSafeProviderUrl("https://api.mistral.ai/v1/ocr", provider);
             const ocrRes = await fetch("https://api.mistral.ai/v1/ocr", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -1059,14 +1157,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             aiResponse = classifyRes;
            } else if (provider === "OPENROUTER") {
              if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
-             const openrouterModel = requestModel = await getRuntimeModel("OPENROUTER", apiKey);
+             const openrouterModel = requestModel = await getRequestModel("OPENROUTER", apiKey, pageFailoverKey);
              console.log(`[AI] Enviando para OpenRouter (${openrouterModel})...`);
              const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "OPENROUTER", model: openrouterModel, apiKey }, imageBase64, prompt);
              recordTelemetry(provider, openrouterModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
            } else if (provider === "GROQ") {
              if (!apiKey) throw new Error("Chave de API Groq não configurada.");
-             const groqModel = requestModel = await getRuntimeModel("GROQ", apiKey);
+             const groqModel = requestModel = await getRequestModel("GROQ", apiKey, pageFailoverKey);
              console.log(`[AI] Enviando para Groq (${groqModel})...`);
              const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "GROQ", model: groqModel, apiKey }, imageBase64, prompt);
@@ -1074,7 +1172,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            } else if (provider === "LOCAL_OLLAMA") {
               // Ollama local — sem chave de API. Endpoint /api/chat (não /v1/chat/completions).
               // O modelo escolhido nas Configurações (settings.model) tem prioridade sobre o tier selecionado.
-              const ollamaLocalModel = requestModel = await getRuntimeModel("LOCAL_OLLAMA", "");
+              const ollamaLocalModel = requestModel = await getRequestModel("LOCAL_OLLAMA", "", pageFailoverKey);
               const ollamaConfig = getProviderConfig("LOCAL_OLLAMA");
               console.log(`[AI] Enviando para Ollama local (${ollamaLocalModel})...`);
 
@@ -1096,6 +1194,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               }
 
               const startTime = Date.now();
+              assertSafeProviderUrl(`${ollamaConfig.baseUrl}/api/chat`, provider);
               aiResponse = await fetch(`${ollamaConfig.baseUrl}/api/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1110,7 +1209,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               recordTelemetry(provider, ollamaLocalModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
 } else if (provider === "OLLAMA_CLOUD") {
               if (!apiKey) throw new Error("Token Ollama Cloud não configurado. Obtenha em https://ollama.com/signup.");
-              const ollamaCloudModel = requestModel = await getRuntimeModel("OLLAMA_CLOUD", apiKey);
+              const ollamaCloudModel = requestModel = await getRequestModel("OLLAMA_CLOUD", apiKey, pageFailoverKey);
               console.log(`[AI] Enviando para Ollama Cloud (${ollamaCloudModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "OLLAMA_CLOUD", model: ollamaCloudModel, apiKey }, imageBase64, prompt);
@@ -1128,14 +1227,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 } catch (e) { /* ignora */ }
               }
               if (!codexKey) throw new Error("Login Codex necessário. Clique em 'Sign in with ChatGPT' nas Configurações, ou cole uma API key da OpenAI.");
-              const codexModel = requestModel = await getRuntimeModel("CODEX", codexKey);
+              const codexModel = requestModel = await getRequestModel("CODEX", codexKey, pageFailoverKey);
               console.log(`[AI] Enviando para OpenAI/Codex (${codexModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "CODEX", model: codexModel, apiKey: codexKey }, imageBase64, prompt);
               recordTelemetry(provider, codexModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
             } else {
               // NVIDIA (padrão)
-              const nvidiaModel = requestModel = await getRuntimeModel("NVIDIA", apiKey);
+              const nvidiaModel = requestModel = await getRequestModel("NVIDIA", apiKey, pageFailoverKey);
               console.log(`[AI] Enviando para NVIDIA (${nvidiaModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "NVIDIA", model: nvidiaModel, apiKey }, imageBase64, prompt);

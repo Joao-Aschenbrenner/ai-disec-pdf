@@ -134,7 +134,9 @@ describe("Erros de conta NÃO rotacionam modelo", () => {
 
       expect(res.status).toBe(scenario.status);
       const body = await res.json();
-      expect(body.modelRotated).toBeUndefined();
+      // Contrato: nenhuma rotação. O 429 pode devolver modelRotated=false explícito;
+      // o 401 devolve providerAuthError sem o campo.
+      expect(body.modelRotated ?? false).toBe(false);
       expect(body.error).toMatch(scenario.expected);
       expect(modelsUsed.every(m => m === "fixture-vision-a")).toBe(true);
       expect(chatCalls).toBe(1);

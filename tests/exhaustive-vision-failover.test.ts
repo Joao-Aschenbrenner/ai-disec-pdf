@@ -306,4 +306,167 @@ describe("Exhaustive Vision failover", () => {
     expect(body.modelRotated).toBeUndefined();
     expect(body.modelExhausted).toBeUndefined();
   });
+
+  // Seção 12 do LOCAL_AUDIT: corrida determinística entre 3 páginas.
+  it("corrida entre 3 páginas: cada página mantém seu próprio Set e nenhum candidato é pulado", async () => {
+    const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "NVIDIA" }),
+    });
+    const candidateCount = Number(await refresh.json().then(b => b.candidateCount));
+    expect(candidateCount).toBe(8);
+
+    const pageIds = ["race-p1", "race-p2", "race-p3"];
+    const triedByPage = new Map<string, Set<string>>();
+    pageIds.forEach(id => triedByPage.set(id, new Set()));
+    const exhaustedPages = new Set<string>();
+
+    // Interleave determinístico: em cada rodada, cada página chama extract e
+    // registra o modelo realmente chamado (todo extract gera exatamente UMA
+    // chamada ao provider — a exaustão é detectada depois dela). Uma página só
+    // esgota quando o PRÓPRIO Set cobre todos os candidatos; o modelo ativo
+    // global pode ter sido movido pelo failover de outra página, mas o failover
+    // desta página sempre avança para um candidato que ELA ainda não tentou.
+    // Folga de 6x: uma página pode gastar chamadas com o modelo ativo global
+    // que ela mesma já tentou (o Set não cresce nessa chamada).
+    for (let round = 0; round < candidateCount * 6 && exhaustedPages.size < pageIds.length; round++) {
+      for (const pageId of pageIds) {
+        if (exhaustedPages.has(pageId)) continue;
+        const tried = triedByPage.get(pageId)!;
+        const res = await fetch(`${BASE_URL}/api/extract`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pdfBase64: image,
+            originalName: "fixture.pdf",
+            pageIndex: 0,
+            runtimePageId: pageId,
+          }),
+        });
+        const body = await res.json();
+        tried.add(usedModels[usedModels.length - 1]);
+        if (body.modelExhausted) {
+          exhaustedPages.add(pageId);
+          expect(body.modelsTried).toBe(candidateCount);
+          expect(body.modelsRemaining).toBe(0);
+        }
+      }
+    }
+
+    // Cada página tentou TODOS os 8 candidatos, sem pular nenhum.
+    for (const pageId of pageIds) {
+      const tried = triedByPage.get(pageId)!;
+      if (tried.size !== candidateCount) {
+        throw new Error(`página ${pageId} tentou apenas [${[...tried].join(", ")}]`);
+      }
+    }
+    // União das páginas = todos os candidatos.
+    const union = new Set([...triedByPage.values()].flatMap(set => [...set]));
+    expect(union.size).toBe(candidateCount);
+    // Cada página esgota por si só.
+    expect(exhaustedPages.size).toBe(pageIds.length);
+  });
+
+  // Seção 13: reset-page-failover limpa o sweep DAQUELA página.
+  it("reset-page-failover limpa o sweep da página e permite tentar de novo", async () => {
+    const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "NVIDIA" }),
+    });
+    const candidateCount = Number(await refresh.json().then(b => b.candidateCount));
+
+    const runtimePageId = "reset-sweep-page";
+    let lastBody: any = null;
+    for (let i = 0; i < candidateCount; i++) {
+      const res = await fetch(`${BASE_URL}/api/extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 0, runtimePageId }),
+      });
+      lastBody = await res.json();
+    }
+    expect(lastBody.modelExhausted).toBe(true);
+    const usedBeforeReset = usedModels.length;
+
+    const reset = await fetch(`${BASE_URL}/api/models/runtime/reset-page-failover`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "NVIDIA", runtimePageId }),
+    });
+    expect(reset.status).toBe(200);
+
+    // Depois do reset, a página começa o sweep de novo: rotaciona em vez de
+    // responder esgotado imediatamente.
+    const again = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 0, runtimePageId }),
+    });
+    const againBody = await again.json();
+    expect(againBody.modelExhausted).toBeFalsy();
+    expect(againBody.modelRotated).toBe(true);
+    expect(usedModels.length).toBeGreaterThan(usedBeforeReset);
+  });
+
+  // Seção 5: candidatos live exclusivos + text-only excluído.
+  it("usa SOMENTE candidatos Vision live (sem catálogo) e exclui text-only", async () => {
+    vi.mocked(globalThis.fetch as any).mockImplementation(
+      (url: string | URL, init?: any) => {
+        const urlStr = url.toString();
+        if (urlStr.includes(`127.0.0.1:${PORT}`) || urlStr.includes(`localhost:${PORT}`)) {
+          return originalFetch(url, init);
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
+          return Promise.resolve(new Response(JSON.stringify({
+            data: [
+              { id: "live-text-only", created: 300, modalities: ["text"] },
+              { id: "live-vision-x", created: 200, modalities: ["text", "image"] },
+              { id: "live-vision-y", created: 100, modalities: ["text", "image"] },
+            ],
+          }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/chat/completions")) {
+          const body = init?.body ? JSON.parse(init.body) : {};
+          usedModels.push(body.model);
+          return Promise.resolve(new Response(JSON.stringify({
+            error: { message: "provider timeout for this model" },
+          }), { status: 504, headers: { "Content-Type": "application/json" } }));
+        }
+        return originalFetch(url, init);
+      }
+    );
+
+    const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "NVIDIA" }),
+    });
+    const candidateCount = Number(await refresh.json().then(b => b.candidateCount));
+    // live-text-only fora; catálogo versionado NÃO entra (live tem 2 Vision).
+    expect(candidateCount).toBe(2);
+
+    const runtimePageId = "live-only-page";
+    const first = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 0, runtimePageId }),
+    });
+    const firstBody = await first.json();
+    expect(firstBody.modelRotated).toBe(true);
+    expect(usedModels[0]).toBe("live-vision-x");
+    expect(usedModels).not.toContain("live-text-only");
+
+    const second = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 0, runtimePageId }),
+    });
+    const secondBody = await second.json();
+    expect(secondBody.modelExhausted).toBe(true);
+    expect(secondBody.modelsTried).toBe(2);
+    // Nenhum modelo do catálogo versionado entrou no sweep.
+    expect(usedModels.every(m => m.startsWith("live-vision-"))).toBe(true);
+  });
 });
