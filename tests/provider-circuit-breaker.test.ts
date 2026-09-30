@@ -101,7 +101,7 @@ describe("Provider circuit breaker", () => {
     expect(pipeline.currentConcurrency).toBe(1);
   });
 
-  it("401/403 não viram instabilidade e não abrem o circuito", async () => {
+  it("401/403 param a fila imediatamente sem retry nem rotação", async () => {
     const pipeline = new AdaptivePipeline(3);
 
     const result = await pipeline.runPageWithRetry(
@@ -111,9 +111,12 @@ describe("Provider circuit breaker", () => {
 
     expect(result.status).toBe("failed");
     expect(pipeline.retryCount).toBe(0);
-    expect(pipeline.queuePaused).toBe(false);
-    expect(pipeline.halted).toBe(false);
-    expect(pipeline.currentConcurrency).toBe(3);
+    expect(pipeline.rotationCount).toBe(0);
+    expect(pipeline.queuePaused).toBe(true);
+    expect(pipeline.halted).toBe(true);
+    expect(pipeline.haltReason).toBe("provider-auth");
+    expect(pipeline.currentConcurrency).toBe(1);
+    expect(pipeline.canLaunchNewPages()).toBe(false);
   });
 
   it("usa index como identidade quando o benchmark não fornece id", async () => {
