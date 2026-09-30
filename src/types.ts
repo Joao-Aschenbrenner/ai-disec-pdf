@@ -50,6 +50,11 @@ export interface SplitPage {
   retryAfter?: string;
   /** Se false, o erro é definitivo para a requisição atual (ex.: 401/403). */
   retryable?: boolean;
+  modelRotated?: boolean;
+  modelExhausted?: boolean;
+  candidateCount?: number;
+  modelsTried?: number;
+  modelsRemaining?: number;
   /** Se true, o backend rotacionou o modelo e a página deve ser retentada. */
   modelRotated?: boolean;
   /** Código de status HTTP do erro (ex.: 504, 429, 401). */
