@@ -610,10 +610,8 @@ function recordTelemetry(provider: string, model: string, outcome: "success" | "
   saveRuntimeModels();
 }
 
-function markCurrentModelSemanticSuccess(provider: string): void {
-  const state = runtimeModels[provider];
-  const current = state?.candidates?.[state.activeIndex];
-  if (current) resetSessionFailures(provider, current);
+function markModelSemanticSuccess(provider: string, model: string): void {
+  if (model) resetSessionFailures(provider, model);
 }
 
 function shouldRotateModel(status: number, body: string, provider?: string): boolean {
@@ -1249,7 +1247,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       if (shouldTreatAsClassificationText(trimmed)) {
         await logUpload(originalName, pageIndex, "success", provider, "Resposta sem JSON; texto corrido usado como classificationText (fallback V3)");
         const routedTextData = await applyDocumentRoutingV3({ classificationText: trimmed }, v3Hint);
-        markCurrentModelSemanticSuccess(provider);
+        markModelSemanticSuccess(provider, requestModel);
         resetPageFailoverCycle(provider, pageFailoverKey);
         await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", routedTextData);
         return res.json(routedTextData);
@@ -1313,14 +1311,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
         const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
-        markCurrentModelSemanticSuccess(provider);
+        markModelSemanticSuccess(provider, requestModel);
         resetPageFailoverCycle(provider, pageFailoverKey);
         await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V3)`, routedDocuments);
         return res.json({ _multiple: true, documents: routedDocuments });
       }
 
       const routedData = await applyDocumentRoutingV3(extractedData, v3Hint);
-      markCurrentModelSemanticSuccess(provider);
+      markModelSemanticSuccess(provider, requestModel);
       resetPageFailoverCycle(provider, pageFailoverKey);
       await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", routedData);
       return res.json(routedData);
