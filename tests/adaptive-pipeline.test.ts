@@ -376,14 +376,25 @@ describe("Adaptive Pipeline - Retry & Concurrency (Tests A–G)", () => {
     for (let i = 0; i < 12; i++) pipeline.recordSuccess();
     expect(pipeline.currentConcurrency).toBe(3); // nunca ultrapassa 3
 
-    // Redução sob pressão: 3 → 2 → 1
+    // Circuit breaker: primeiro sinal de pressão pausa a fila e cai direto para 1.
     const p2 = new AdaptivePipeline(3);
-    p2.recordFailure({ status: "failed", retryable: true, statusCode: 504 });
-    expect(p2.currentConcurrency).toBe(2);
-    p2.recordFailure({ status: "failed", retryable: true, statusCode: 429 });
+    p2.recordFailure({ status: "failed", retryable: true, statusCode: 504 }, "page-a");
     expect(p2.currentConcurrency).toBe(1);
-    // 401/403 não mexe na concorrência
-    p2.recordFailure({ status: "failed", retryable: false });
+    expect(p2.queuePaused).toBe(true);
+    expect(p2.stabilizing).toBe(true);
+    expect(p2.stabilizingPageId).toBe("page-a");
+
+    // Sucesso da própria página estabilizadora libera a fila, mas mantém 1
+    // para recuperação gradual.
+    p2.recordSuccess("page-a");
+    expect(p2.queuePaused).toBe(false);
+    expect(p2.stabilizing).toBe(false);
     expect(p2.currentConcurrency).toBe(1);
+
+    // 401/403 não abrem circuito.
+    const p3 = new AdaptivePipeline(3);
+    p3.recordFailure({ status: "failed", retryable: false, statusCode: 401 }, "page-b");
+    expect(p3.currentConcurrency).toBe(3);
+    expect(p3.queuePaused).toBe(false);
   });
 });
