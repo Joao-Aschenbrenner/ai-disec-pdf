@@ -52,6 +52,18 @@ describe("Classification V3 wiring", () => {
     expect(app).not.toContain("GPT-4o");
   });
 
+  it("UI mantém cronômetro total do processamento e acumula retries", () => {
+    const app = read("src/App.tsx");
+    expect(app).toContain("formatProcessingElapsed");
+    expect(app).toContain("Tempo total:");
+    expect(app).toContain("startProcessingTimer(true)");
+    expect(app).toContain("startProcessingTimer(false)");
+    expect(app).toContain("stopProcessingTimer()");
+    expect(app).toContain("resetProcessingTimer()");
+    expect(app).toContain("processingTimerAccumulatedMsRef");
+    expect(app).toContain("window.setInterval(refresh, 250)");
+  });
+
   it("Electron não desacelera o processamento em background", () => {
     const main = read("electron/main.cjs");
     expect(main).toContain("backgroundThrottling: false");
