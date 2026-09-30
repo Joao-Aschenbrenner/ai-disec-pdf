@@ -126,35 +126,68 @@ Se a passagem inicial já indica `HOLERITE` / `HOLERITE_13`, o layout é testado
 
 Se a página tiver somente um holerite, o detector deve preservar a página original.
 
-## Concorrência e timeout
+## Concorrência, modelo automático e timeout
 
-Modo automático:
+O usuário escolhe apenas o **provider**. A UI não expõe ID de modelo, tier rápido/equilibrado/preciso ou fallback manual.
 
-- NVIDIA: 1 chamada visual por vez;
-- Ollama Local: 1;
-- demais providers: 2.
+Em toda nova sessão o runtime:
 
-NVIDIA usa timeout de 120 s.
+1. consulta o catálogo ao vivo dos providers configurados quando a API permitir;
+2. filtra candidatos multimodais por metadata de modalidade e heurísticas conservadoras;
+3. prioriza o candidato mais recente descoberto;
+4. usa `server/models.json` somente como fallback;
+5. testa o candidato no processamento real;
+6. rotaciona automaticamente quando detectar modelo removido/sem visão, 503/capacidade, timeout, resposta vazia ou saída incompatível.
+
+O estado da rotação é local em:
+
+```text
+~/.ai-disec-pdf/model-runtime.json
+```
+
+Ele não contém API keys.
+
+### Pipeline
+
+```text
+AUTO_PIPELINE_CONCURRENCY = 3
+```
+
+As seguintes etapas trabalham com até três páginas simultâneas:
+
+- extração de texto local;
+- passagem Laya;
+- leitura visual.
 
 Retry real:
 
 ```text
 tentativa 1
-2 s
+2 s + stagger
 tentativa 2
-5 s
+5 s + stagger
 tentativa 3
 ```
 
-`retryAfter` do provider pode aumentar o intervalo.
+O stagger evita que três páginas que falharam retomem no mesmo milissegundo.
 
-No modo Automático:
+Timeout de chamadas de visão permanece conservador para providers lentos.
 
-- página já classificada com alta confiança -> tier fast / detail low / budget menor;
-- caso não claro -> tier medium;
-- V3 não seleciona Nemotron automaticamente.
+### Render adaptativo
 
-O usuário ainda pode escolher `Preciso` manualmente.
+Documentos fáceis e já bem classificados podem usar render visual mais leve.
+
+Casos que exigem detalhe, principalmente:
+
+- HOLERITE;
+- HOLERITE_13;
+- FOPAG_RESUMO;
+- FOPAG_13_RESUMO;
+- casos ambíguos;
+
+continuam com render detalhado.
+
+A escolha de esforço visual é interna do modo Automático e não altera o provider escolhido pelo usuário.
 
 ## Background
 

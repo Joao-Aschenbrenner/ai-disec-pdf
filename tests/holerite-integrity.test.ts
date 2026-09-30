@@ -327,13 +327,15 @@ describe("Prompt Holerite — Verificação de Conteúdo do Prompt", () => {
 });
 
 describe("pdfToImage Scale — Verificação de Configuração", () => {
-  it("deve usar scale 3.0 (resolução maior p/ escaneados)", async () => {
+  it("deve usar render adaptativo: detail 3.0/0.95, fast 2.2/0.88 (p/ escaneados)", async () => {
     const fs = await import("fs");
     const path = await import("path");
     const pdfToImagePath = path.join(__dirname, "..", "src", "utils", "pdfToImage.ts");
     const content = fs.readFileSync(pdfToImagePath, "utf8");
 
-    expect(content).toContain("scale: 3.0");
-    expect(content).not.toContain("scale: 2.0");
+    // Render adaptativo (auto pipeline): detail continua 3.0 — nunca menos para
+    // holerites/ambíguos; fast (documentos já classificados) usa 2.2.
+    expect(content).toContain('mode === "fast" ? 2.2 : 3.0');
+    expect(content).toContain('mode === "fast" ? 0.88 : 0.95');
   });
 });

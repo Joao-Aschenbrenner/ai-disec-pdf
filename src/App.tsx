@@ -81,14 +81,22 @@ import { sanitizeFilename, generatePageFilename, generateCombinedFilename, makeW
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalText";
 import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
+import { AdaptivePipeline } from "./utils/adaptivePipeline";
 import { version as appVersion } from "../package.json";
 
-const DEFAULT_CONCURRENT_REQUESTS = 2;
-function providerConcurrency(provider: string): number {
-  // GLM Vision mediu perto de 60s em smoke real; uma fila NVIDIA evita aborts/rate-limit em lote.
-  if (provider === "NVIDIA") return 1;
-  if (provider === "LOCAL_OLLAMA") return 1;
-  return DEFAULT_CONCURRENT_REQUESTS;
+const AUTO_PIPELINE_CONCURRENCY = 3;
+const VISIBLE_PROVIDERS = new Set([
+  "NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC",
+  "OPENROUTER", "GROQ", "OLLAMA_CLOUD", "CODEX", "LOCAL_OLLAMA",
+]);
+
+// Default concurrency (used before component mounts)
+let currentConcurrencyRef = AUTO_PIPELINE_CONCURRENCY;
+
+function providerConcurrency(_provider: string): number {
+  // Produto simplificado: um único motor visível em modo Automático.
+  // Concorrência adaptativa: começa em 3, reduz sob pressão, recupera gradualmente.
+  return currentConcurrencyRef;
 }
 
 const PROCESSING_STAGE_LABELS: Record<string, string> = {
@@ -139,161 +147,75 @@ function nextPageId(): string {
 }
 
 // ════════════════════════════════════════════════════════════
-// Ollama Local Setup — detecta hardware, 3 opções de modelo, detecta instalados
+// Ollama Local automático — sem exposição de ID/modelo
 // ════════════════════════════════════════════════════════════
-const OLLAMA_MODELS = [
-  { id: "moondream:1.8b", label: "Moondream 1.8B", size: "1.3 GB", minRam: 4, desc: "Leve — PCs fracos (4GB+ RAM)" },
-  { id: "llama3.2-vision:11b", label: "Llama 3.2 Vision 11B", size: "7.8 GB", minRam: 8, desc: "Balanceado — PCs moderados (8GB+ RAM)" },
-  { id: "llama3.2-vision:90b", label: "Llama 3.2 Vision 90B", size: "55 GB", minRam: 32, desc: "Preciso — PCs robustos (32GB+ RAM)" },
-];
-
-const MODEL_TIERS = [
-  { value: "auto", label: "Automático", hint: "Laya/contexto escolhem o esforço" },
-  { value: "fast", label: "Rápido", hint: "modelo mais leve" },
-  { value: "medium", label: "Equilibrado", hint: "modelo padrão" },
-  { value: "precise", label: "Preciso", hint: "manual; pode ser mais lento/instável" },
-];
-
-function OllamaLocalSetup({ model, onModelChange }: { model: string; onModelChange: (m: string) => void }) {
-  const [hw, setHw] = useState<{ totalMemGB: number; cpuCores: number; gpu: string; hasGpu: boolean; suggestedModel: string; reason: string } | null>(null);
-  const [installState, setInstallState] = useState<"idle" | "checking" | "downloading" | "installing" | "pulling" | "done" | "error">("idle");
-  const [progress, setProgress] = useState<string>("");
-  const [errorMsg, setErrorMsg] = useState("");
-  const [installedModels, setInstalledModels] = useState<string[]>([]);
+function OllamaAutoSetup() {
   const api = window.electronAPI;
-  // Refs para uso no efeito de montagem sem recriar o efeito a cada render
-  const modelRef = useRef(model);
-  modelRef.current = model;
-  const onModelChangeRef = useRef(onModelChange);
-  onModelChangeRef.current = onModelChange;
+  const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [message, setMessage] = useState("Verificando ambiente local...");
 
-  useEffect(() => {
-    if (api?.getHardware) {
-      api.getHardware().then(h => {
-        setHw(h);
-        // Só sugere modelo se o usuário ainda não salvou uma escolha
-        if (!modelRef.current) onModelChangeRef.current(h.suggestedModel);
-      }).catch(() => {});
-    }
-    if (api?.onPullProgress) {
-      const clean = api.onPullProgress((p: { line: string; model: string }) => {
-        setProgress(p.line);
-      });
-      return clean;
-    }
-  }, []);
-
-  // Detectar modelos já baixados via /api/tags do Ollama
-  useEffect(() => {
-    fetch("http://localhost:11434/api/tags")
-      .then(r => r.json())
-      .then(d => setInstalledModels((d.models || []).map((m: any) => m.name || m.model)))
-      .catch(() => setInstalledModels([]));
-  }, [installState]);
-
-  const handleSetup = async () => {
-    if (!api) { setErrorMsg("Electron API não disponível."); return; }
-    if (!model) { setErrorMsg("Selecione um modelo primeiro."); return; }
-    setErrorMsg("");
+  const refresh = async () => {
     try {
-      setInstallState("checking");
-      const check = await api.checkInstalled();
+      const check = await api?.checkInstalled?.();
+      setReady(Boolean(check?.installed));
+      setMessage(check?.installed
+        ? "Ollama detectado. O modelo multimodal compatível é escolhido automaticamente."
+        : "Ollama ainda não está instalado.");
+    } catch {
+      setReady(false);
+      setMessage("Não foi possível verificar o Ollama.");
+    }
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  const prepare = async () => {
+    if (!api) return;
+    setBusy(true);
+    try {
+      const hw = await api.getHardware();
+      let check = await api.checkInstalled();
       if (!check.installed) {
-        setInstallState("downloading");
-        setProgress("Baixando instalador do Ollama...");
-        const inst = await api.install();
-        if (!inst.ok) { setErrorMsg(inst.error || "Falha ao instalar"); setInstallState("error"); return; }
+        setMessage("Instalando Ollama...");
+        const installed = await api.install();
+        if (!installed.ok) throw new Error(installed.error || "Falha ao instalar Ollama.");
+        check = await api.checkInstalled();
       }
-      setInstallState("pulling");
-      setProgress(`Baixando modelo ${model}...`);
-      const pull = await api.pullModel(model);
-      if (!pull.ok) { setErrorMsg(pull.error || "Falha ao baixar modelo"); setInstallState("error"); return; }
-      setInstallState("done");
-      setProgress(`Modelo ${model} pronto! Salve as configurações.`);
-    } catch (e: any) {
-      setErrorMsg(e.message || "Erro inesperado");
-      setInstallState("error");
+
+      setMessage("Preparando o modelo local automático...");
+      const pulled = await api.pullModel(hw.suggestedModel);
+      if (!pulled.ok) throw new Error(pulled.error || "Falha ao preparar modelo local.");
+      setReady(true);
+      setMessage("Ollama Local pronto. O app selecionará e rotacionará o modelo automaticamente.");
+      fetch("/api/models/runtime/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "LOCAL_OLLAMA" }),
+      }).catch(() => {});
+    } catch (error: any) {
+      setReady(false);
+      setMessage(error?.message || "Falha ao preparar Ollama Local.");
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <div className="space-y-3">
-      {hw && (
-        <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800">
-          <div className="flex items-center gap-2 mb-2">
-            <Cpu className="w-4 h-4 text-cyan-400" />
-            <span className="text-xs font-bold text-slate-200">Hardware detectado</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400">
-            <div className="flex items-center gap-1.5"><HardDrive className="w-3 h-3" /> RAM: <strong className="text-slate-200">{hw.totalMemGB} GB</strong></div>
-            <div className="flex items-center gap-1.5"><Cpu className="w-3 h-3" /> Cores: <strong className="text-slate-200">{hw.cpuCores}</strong></div>
-            <div className="flex items-center gap-1.5 col-span-2"><Zap className="w-3 h-3" /> GPU: <strong className="text-slate-200">{hw.gpu}</strong></div>
-          </div>
-          <p className="text-[11px] text-cyan-300 mt-2">{hw.reason}</p>
-        </div>
-      )}
-
-      <div>
-        <label className="block text-xs font-semibold text-slate-300 mb-1.5">Escolha o modelo local</label>
-        <div className="space-y-2">
-          {OLLAMA_MODELS.map(m => {
-            const isInstalled = installedModels.includes(m.id);
-            const isSuggested = hw?.suggestedModel === m.id;
-            const ramOk = hw ? hw.totalMemGB >= m.minRam : true;
-            return (
-              <label key={m.id} className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all ${model === m.id ? "border-emerald-600 bg-emerald-950/30" : "border-slate-800 bg-slate-950/40 hover:border-slate-700"}`}>
-                <input
-                  type="radio"
-                  name="ollama-model"
-                  value={m.id}
-                  checked={model === m.id}
-                  onChange={e => onModelChange(e.target.value)}
-                  className="mt-0.5 accent-emerald-500"
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-slate-200">{m.label}</span>
-                    {isSuggested && <span className="text-[10px] text-cyan-300 bg-cyan-950/40 px-1.5 py-0.5 rounded">sugerido</span>}
-                    {isInstalled && <span className="text-[10px] text-emerald-300 bg-emerald-950/40 px-1.5 py-0.5 rounded flex items-center gap-0.5"><CheckCircle className="w-2.5 h-2.5" /> instalado</span>}
-                    {!ramOk && <span className="text-[10px] text-amber-300 bg-amber-950/40 px-1.5 py-0.5 rounded">RAM insuficiente</span>}
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5">{m.desc} • {m.size}</p>
-                </div>
-              </label>
-            );
-          })}
-        </div>
+    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Cpu className="w-4 h-4 text-emerald-400" />
+        <span className="text-xs font-bold text-slate-200">Ollama Local automático</span>
+        {ready && <span className="text-[9px] font-bold text-emerald-300 bg-emerald-950/40 px-1.5 py-0.5 rounded">pronto</span>}
       </div>
-
-      {installedModels.length > 0 && (
-        <p className="text-[11px] text-emerald-400 flex items-center gap-1.5">
-          <CheckCircle className="w-3.5 h-3.5" />
-          {installedModels.length} modelo(s) já baixado(s): {installedModels.join(", ")}
-        </p>
-      )}
-
-      {installState !== "idle" && installState !== "done" && progress && (
-        <div className="p-2 bg-slate-950 rounded-xl border border-slate-800 text-[11px] text-slate-400 font-mono break-all max-h-24 overflow-y-auto">
-          {progress}
-        </div>
-      )}
-      {errorMsg && <p className="text-[11px] text-rose-400">{errorMsg}</p>}
-      {installState === "done" && (
-        <p className="text-[11px] text-emerald-400 flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5" /> Pronto! Clique em Salvar.</p>
-      )}
-
+      <p className="text-[11px] text-slate-500 mb-3">{message}</p>
       <button
-        onClick={handleSetup}
-        disabled={installState === "downloading" || installState === "installing" || installState === "pulling"}
-        className="w-full px-4 py-2.5 text-sm font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+        type="button"
+        onClick={prepare}
+        disabled={busy}
+        className="w-full px-3 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
       >
-        {(installState === "downloading" || installState === "installing" || installState === "pulling") ? (
-          <><Loader2 className="w-4 h-4 animate-spin" /> {installState === "downloading" ? "Baixando Ollama..." : installState === "pulling" ? "Baixando modelo..." : "Instalando..."}</>
-        ) : installedModels.includes(model) ? (
-          <><Check className="w-4 h-4" /> Modelo pronto — salvar e usar</>
-        ) : (
-          <><Download className="w-4 h-4" /> Baixar {model}</>
-        )}
+        {busy ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Preparando...</> : <><RefreshCw className="w-3.5 h-3.5" /> Preparar / atualizar automaticamente</>}
       </button>
     </div>
   );
@@ -598,9 +520,6 @@ export default function App() {
   const [showDocModal, setShowDocModal] = useState(false);
   const [settingsProvider, setSettingsProvider] = useState("NVIDIA");
   const [settingsApiKey, setSettingsApiKey] = useState("");
-  const [settingsLocalModel, setSettingsLocalModel] = useState("");
-  const [settingsModelTier, setSettingsModelTier] = useState("auto");
-  const [modelCatalog, setModelCatalog] = useState<Record<string, { tiers?: Record<string, string> }>>({});
   const [currentProvider, setCurrentProvider] = useState("NVIDIA");
   const [savingSettings, setSavingSettings] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -613,19 +532,38 @@ export default function App() {
 
   // Carrega settings ao montar
   useEffect(() => {
-    fetch("/api/settings").then(r => r.json()).then(s => {
-      if (s.provider) setCurrentProvider(s.provider);
-      if (s.provider) setSettingsProvider(s.provider);
-      if (s.apiKey) setSettingsApiKey(s.apiKey);
-      if (s.model) setSettingsLocalModel(s.model);
-      if (s.modelTier) setSettingsModelTier(s.modelTier);
-      if (!s.apiKey) {
-        setTimeout(() => setShowFirstTimeWarning(true), 800);
+    fetch("/api/settings").then(async sRes => {
+      const s = await sRes.json();
+      const provider = VISIBLE_PROVIDERS.has(String(s.provider || "").toUpperCase())
+        ? String(s.provider).toUpperCase()
+        : "NVIDIA";
+
+      setCurrentProvider(provider);
+      setSettingsProvider(provider);
+
+      if (provider === String(s.provider || "").toUpperCase()) {
+        setSettingsApiKey(typeof s.apiKey === "string" ? s.apiKey : "");
+        if (!s.apiKey && provider !== "LOCAL_OLLAMA" && provider !== "CODEX") {
+          setTimeout(() => setShowFirstTimeWarning(true), 800);
+        }
+      } else {
+        // Provider legado/oculto: busca a chave correta do fallback visível,
+        // sem reutilizar a credencial do provider anterior.
+        try {
+          const keyRes = await fetch(`/api/settings?provider=${provider}`);
+          const keyData = await keyRes.json();
+          setSettingsApiKey(typeof keyData.apiKey === "string" ? keyData.apiKey : "");
+        } catch {
+          setSettingsApiKey("");
+        }
       }
+
+      // Todo início de sessão atualiza os catálogos dos providers configurados.
+      fetch("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
     }).catch(() => {
       setTimeout(() => setShowFirstTimeWarning(true), 800);
+      fetch("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
     });
-    fetch("/api/models").then(r => r.json()).then(c => setModelCatalog(c)).catch(() => {});
   }, []);
 
   // Update overlay
@@ -633,6 +571,23 @@ export default function App() {
   const [updateVersion, setUpdateVersion] = useState("");
   const [updateProgress, setUpdateProgress] = useState(0);
   const [updateError, setUpdateError] = useState("");
+
+  // Métricas reais de execução
+  const [attemptCount, setAttemptCount] = useState(0);
+  const [retryCount, setRetryCount] = useState(0);
+  const [rotationCount, setRotationCount] = useState(0);
+  const [finalSuccessCount, setFinalSuccessCount] = useState(0);
+  const [finalErrorCount, setFinalErrorCount] = useState(0);
+
+  // Concorrência adaptativa
+  const [currentConcurrency, setCurrentConcurrency] = useState(3);
+  const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
+  const [isStabilizing, setIsStabilizing] = useState(false);
+
+  // Sync ref for providerConcurrency function
+  useEffect(() => {
+    currentConcurrencyRef = currentConcurrency;
+  }, [currentConcurrency]);
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -670,6 +625,8 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blobUrlsRef = useRef<string[]>([]);
+  // Pipeline adaptativo compartilhado (mesmo mecanismo do benchmark)
+  const pipelineRef = useRef<AdaptivePipeline>(new AdaptivePipeline());
 
   const revokeAllBlobUrls = () => {
     blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
@@ -822,6 +779,9 @@ export default function App() {
     page: SplitPage,
     correction?: string
   ): Promise<any> => {
+    // Incrementa contador de tentativas reais
+    setAttemptCount(prev => prev + 1);
+    
     const response = await fetch("/api/extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -839,9 +799,18 @@ export default function App() {
       const err = new Error(errJson.error || "Erro de requisição.") as any;
       err.retryAfter = errJson.retryAfter;
       err.status = response.status;
+      err.retryable =
+        typeof errJson.retryable === "boolean"
+          ? errJson.retryable
+          : [408, 429, 500, 502, 503, 504, 529].includes(response.status);
+      // Propaga modelRotated para o frontend poder reagir
+      err.modelRotated = errJson.modelRotated === true;
       throw err;
     }
-    return response.json();
+    
+    const data = await response.json();
+    // Retorna modelRotated se o backend enviou (para retry automático)
+    return { ...data, modelRotated: data.modelRotated === true };
   };
 
   const buildProcessedPage = (
@@ -915,7 +884,19 @@ export default function App() {
   ): Promise<ProcessedPageResult> => {
     try {
       updatePageStage(id, "extracting", 50);
-      const imageBase64 = await pdfBase64ToJpeg(page.base64);
+      const detailedVisualClasses = new Set([
+        "HOLERITE",
+        "HOLERITE_13",
+        "FOPAG_RESUMO",
+        "FOPAG_13_RESUMO",
+      ]);
+      const visualMode =
+        page.v3Hint?.modelTier === "fast" &&
+        !detailedVisualClasses.has(page.v3Hint?.documentClass || "") &&
+        page.segmentIndex === undefined
+          ? "fast"
+          : "detail";
+      const imageBase64 = await pdfBase64ToJpeg(page.base64, { mode: visualMode });
 
       // V3: se a primeira/segunda passagem já indicou holerite, detecta layout ANTES
       // de mandar a página física inteira ao VLM.
@@ -997,42 +978,38 @@ export default function App() {
         processingProgress: 100,
         error: message,
         retryAfter: err?.retryAfter,
+        retryable: err?.retryable !== false,
+        // Propaga info de rotação/429 para retry inteligente
+        modelRotated: err?.modelRotated === true,
+        statusCode: err?.status,
       };
     }
+  };
+
+  const syncPipelineState = () => {
+    const p = pipelineRef.current;
+    setCurrentConcurrency(p.currentConcurrency);
+    setConsecutiveSuccesses(p.consecutiveSuccesses);
+    setIsStabilizing(p.stabilizing);
+    setAttemptCount(p.attemptCount);
+    setRetryCount(p.retryCount);
+    setRotationCount(p.rotationCount);
   };
 
   const processWithRetry = async (
     page: SplitPage,
     correction?: string
   ): Promise<ProcessedPageResult> => {
-    const delays = [2000, 5000, 10000];
-    let last: ProcessedPageResult | null = null;
-
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const result = await processSinglePage(page.id, page, correction);
-      last = result;
-
-      if (Array.isArray(result)) return result;
-      if (result.status !== "failed") return result;
-      if (attempt === 3) return result;
-
-      let delayMs = delays[attempt - 1];
-      if (result.retryAfter) {
-        const match = result.retryAfter.match(/(\d+)/);
-        if (match) delayMs = Math.max(delayMs, parseInt(match[1], 10) * 1000);
+    // Delega ao módulo compartilhado — o MESMO mecanismo usado pelo benchmark.
+    return pipelineRef.current.runPageWithRetry(
+      page,
+      async (p) => processSinglePage(p.id ?? page.id, page, correction),
+      async (pageId, _attempt, delayMs) => {
+        if (pageId) updatePageStage(pageId, "retrying", 48);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        syncPipelineState();
       }
-
-      updatePageStage(page.id, "retrying", 48);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-    }
-
-    return last || {
-      ...page,
-      status: "failed",
-      processingStage: "failed",
-      processingProgress: 100,
-      error: "Falha após 3 tentativas",
-    };
+    );
   };
 
   const replaceProcessedResult = (targetId: string, result: ProcessedPageResult) => {
@@ -1061,7 +1038,7 @@ export default function App() {
 
     // PASSAGEM 1A: extrai camada de texto local. Em scan puro isso retorna vazio,
     // e a página será classificada pelo Laya depois que o VLM produzir classificationText.
-    const withText = await mapPool(pages, 4, async (page) => {
+    const withText = await mapPool(pages, AUTO_PIPELINE_CONCURRENCY, async (page) => {
       updatePageStage(page.id, "preparing", 8);
       let localText = "";
       try {
@@ -1185,6 +1162,12 @@ export default function App() {
       return;
     }
 
+    // Inicializa métricas da execução (pipeline compartilhado + espelho React)
+    pipelineRef.current.reset(3);
+    setFinalSuccessCount(0);
+    setFinalErrorCount(0);
+    syncPipelineState();
+
     setIsProcessing(true);
     window.electronAPI?.startProcessing();
 
@@ -1194,6 +1177,7 @@ export default function App() {
         status: (p.status === "success" ? "success" : "pending") as "success" | "pending",
         error: undefined,
         retryAfter: undefined,
+        retryable: undefined,
         processingStage: (p.status === "success" ? "done" : "waiting") as SplitPage["processingStage"],
         processingProgress: p.status === "success" ? 100 : 0,
       }));
@@ -1201,12 +1185,13 @@ export default function App() {
 
       const workingPages = await runV3Prepasses(initialPages);
       const queue = workingPages.filter(p => p.status !== "success");
-      const concurrencyLimit = providerConcurrency(currentProvider);
       const activePromises: Promise<void>[] = [];
       const finalPhysical = new Map<string, SplitPage>();
 
       while (queue.length > 0 || activePromises.length > 0) {
-        while (queue.length > 0 && activePromises.length < concurrencyLimit) {
+        // Concorrência adaptativa: lê o estado atual do pipeline compartilhado
+        const currentLimit = pipelineRef.current.currentConcurrency;
+        while (queue.length > 0 && activePromises.length < currentLimit) {
           const page = queue.shift()!;
           setSplitPages(prev => prev.map(p =>
             p.id === page.id
@@ -1327,6 +1312,13 @@ export default function App() {
       if (error?.code === "LAYA_REQUIRED") setShowSettings(true);
       alert(error?.message || "Falha no fluxo Classification V3.");
     } finally {
+      // Calcula métricas finais
+      const finalPages = splitPages.filter(p => p.status !== "pending");
+      const success = finalPages.filter(p => p.status === "success").length;
+      const failed = finalPages.filter(p => p.status === "failed").length;
+      setFinalSuccessCount(success);
+      setFinalErrorCount(failed);
+      
       setIsProcessing(false);
       window.electronAPI?.endProcessing();
     }
@@ -1584,6 +1576,23 @@ export default function App() {
     }
   };
 
+  const handleProviderChange = async (provider: string) => {
+    setSettingsProvider(provider);
+    setSettingsApiKey("");
+    try {
+      const res = await fetch(`/api/settings?provider=${encodeURIComponent(provider)}`);
+      const data = await res.json();
+      setSettingsApiKey(typeof data.apiKey === "string" ? data.apiKey : "");
+      fetch("/api/models/runtime/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider }),
+      }).catch(() => {});
+    } catch {
+      setSettingsApiKey("");
+    }
+  };
+
   // Save settings to server
   const saveSettings = async () => {
     setSavingSettings(true);
@@ -1591,10 +1600,15 @@ export default function App() {
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: settingsProvider, apiKey: settingsApiKey, model: settingsLocalModel, modelTier: settingsModelTier }),
+        body: JSON.stringify({ provider: settingsProvider, apiKey: settingsApiKey, model: "", modelTier: "auto" }),
       });
       if (res.ok) {
         setCurrentProvider(settingsProvider);
+        fetch("/api/models/runtime/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: settingsProvider }),
+        }).catch(() => {});
         setShowSettings(false);
       } else {
         const err = await res.json();
@@ -1652,23 +1666,13 @@ export default function App() {
         <div className="flex items-center gap-4">
           <div className="flex flex-col items-end hidden md:flex">
             <span className="text-[9px] uppercase tracking-widest text-slate-500 font-bold">Motor Inteligente</span>
-              {currentProvider === "LOCAL_OLLAMA" ? (
+              {settingsApiKey ? (
                 <span className="text-xs font-semibold flex items-center gap-1.5 mt-0.5 text-emerald-400">
-                  <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-emerald-500"></span> Ollama Local ativo
-                </span>
-              ) : settingsApiKey ? (
-                <span className="text-xs font-semibold flex items-center gap-1.5 mt-0.5 text-emerald-400">
-                  <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-emerald-500"></span> {currentProvider} ativo
+                  <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-emerald-500"></span> {currentProvider.replace("_", " ")} ativo
                 </span>
               ) : (
                 <span className="text-xs font-semibold flex items-center gap-1.5 mt-0.5 text-rose-400">
                   <span className="w-2.5 h-2.5 rounded-full animate-pulse bg-rose-500"></span> Configure a chave de API
-                  <span className="group relative">
-                    <Info className="w-3.5 h-3.5 text-rose-400 cursor-help" />
-                    <span className="absolute right-0 top-6 w-56 bg-slate-800 text-slate-300 text-[10px] leading-relaxed p-2 rounded-lg border border-slate-700 shadow-xl opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                      Va em Configuracoes (engrenagem) para adicionar uma chave de API. Ollama Local funciona sem chave.
-                    </span>
-                  </span>
                 </span>
               )}
           </div>
@@ -1703,7 +1707,7 @@ export default function App() {
       </header>
       </div>
 
-      {showFirstTimeWarning && !settingsApiKey && currentProvider !== "LOCAL_OLLAMA" && (
+      {showFirstTimeWarning && !settingsApiKey && currentProvider !== "LOCAL_OLLAMA" && currentProvider !== "CODEX" && (
         <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 pt-2">
           <div className="bg-rose-950/30 border border-rose-800/40 rounded-xl px-5 py-3 flex items-start gap-3 animate-fadeIn">
             <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
@@ -1761,7 +1765,7 @@ export default function App() {
                 Arraste seu PDF unificado aqui
               </h2>
               <p className="text-sm text-slate-400 max-w-sm mb-6 leading-relaxed">
-                Nós iremos fatiar o PDF automaticamente em páginas individuais e usar o Gemini para renomear cada uma de forma inteligente.
+                Nós iremos fatiar o PDF automaticamente em páginas individuais e usar o motor de IA configurado para organizar e renomear cada uma.
               </p>
               <button 
                 type="button" 
@@ -1849,6 +1853,22 @@ export default function App() {
                     </button>
                   )}
                 </div>
+                
+                {isProcessing && (
+                  <div className="mt-2 flex items-center gap-3 text-[11px]">
+                    <span className="px-2 py-1 bg-indigo-950/50 border border-indigo-800/30 rounded-full text-indigo-300 font-mono">
+                      Concorrência: {currentConcurrency}
+                    </span>
+                    {isStabilizing && (
+                      <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300 animate-pulse">
+                        Estabilizando provedor...
+                      </span>
+                    )}
+                    <span className="px-2 py-1 bg-slate-950/50 border border-slate-800/30 rounded-full text-slate-400 font-mono">
+                      Tentativas: {attemptCount} · Retries: {retryCount} · Rotações: {rotationCount}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Configurações do Layout */}
@@ -2316,7 +2336,7 @@ export default function App() {
                                 )}
                                 {page.error?.includes("Provedor não aceita") && (
                                   <span className="text-[11px] text-rose-400/60 mt-1 block">
-                                    Troque para Google Gemini ou outro provedor com suporte a imagens ⚙️
+                                    O app tentará rotacionar automaticamente para outro modelo compatível deste provedor.
                                   </span>
                                 )}
                               </div>
@@ -2367,8 +2387,8 @@ export default function App() {
                     2
                   </div>
                   <div>
-                    <h4 className="text-xs font-bold text-slate-200">Extração com Gemini API</h4>
-                    <p className="text-[12px] text-slate-400 leading-normal mt-0.5">Nossa API lê meticulosamente página por página do PDF sem expor chaves públicas aos navegadores dos clientes.</p>
+                    <h4 className="text-xs font-bold text-slate-200">Extração com IA</h4>
+                    <p className="text-[12px] text-slate-400 leading-normal mt-0.5">O motor configurado lê página por página; o app seleciona e rotaciona modelos compatíveis automaticamente.</p>
                   </div>
                 </div>
 
@@ -2437,18 +2457,18 @@ export default function App() {
               </section>
               <section>
                 <h4 className="font-bold text-white text-base mb-2">Provedores de IA</h4>
-                <p>São 9 provedores disponíveis. Escolha em Configurações (ícone de engrenagem):</p>
+                <p>Escolha o provedor em Configurações. O modelo exato não é exposto: o app atualiza o catálogo, escolhe o candidato compatível mais recente e rotaciona automaticamente quando necessário:</p>
                 <ul className="list-disc list-inside space-y-1 text-slate-400 mt-1">
-                  <li><strong className="text-slate-200">NVIDIA Llama 3.2 Vision</strong> — Modelo 11B rápido</li>
-                  <li><strong className="text-slate-200">Google Gemini 2.5 Flash</strong> — Rápido, suporta imagens</li>
-                  <li><strong className="text-slate-200">OpenAI GPT-4o</strong> — Modelo multimodal da OpenAI</li>
-                  <li><strong className="text-slate-200">Anthropic Claude Sonnet 4</strong> — Multimodal</li>
-                  <li><strong className="text-slate-200">OpenRouter</strong> — Modelos compatíveis</li>
-                  <li><strong className="text-slate-200">Groq</strong> — Qwen 3.8 multimodal</li>
-                  <li><strong className="text-slate-200">Laya local</strong> — apoio à classificação; não recebe a imagem</li>
-                  <li><strong className="text-slate-200">Ollama Cloud</strong> — Llama Vision via Ollama</li>
-                  <li><strong className="text-slate-200">Codex Pro</strong> — Limite elevado via login OAuth</li>
-                  <li><strong className="text-slate-200">Ollama Local</strong> — 100% offline, download automático</li>
+                  <li><strong className="text-slate-200">NVIDIA</strong></li>
+                  <li><strong className="text-slate-200">Google</strong></li>
+                  <li><strong className="text-slate-200">OpenAI</strong></li>
+                  <li><strong className="text-slate-200">Anthropic</strong></li>
+                  <li><strong className="text-slate-200">OpenRouter</strong></li>
+                  <li><strong className="text-slate-200">Groq</strong></li>
+                  <li><strong className="text-slate-200">Ollama Cloud</strong></li>
+                  <li><strong className="text-slate-200">Codex</strong></li>
+                  <li><strong className="text-slate-200">Ollama Local</strong></li>
+                  <li><strong className="text-slate-200">Laya local</strong> — apoio à classificação</li>
                 </ul>
               </section>
               <section>
@@ -2505,53 +2525,42 @@ export default function App() {
                 <label className="block text-xs font-semibold text-slate-300 mb-1.5">Provedor de IA</label>
                 <select
                   value={settingsProvider}
-                  onChange={e => setSettingsProvider(e.target.value)}
+                  onChange={e => handleProviderChange(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
                 >
-                  <optgroup label="Modelos na Nuvem (API Key)">
-                    <option value="NVIDIA">NVIDIA (GLM-5.3-Flash — padrão)</option>
-                    <option value="GOOGLE">Google Gemini 2.5 Flash</option>
-                    <option value="OPENAI">OpenAI (GPT-4o)</option>
-                    <option value="ANTHROPIC">Anthropic (Claude Sonnet 4)</option>
-                    <option value="OPENROUTER">OpenRouter (modelos free compatíveis)</option>
-                    <option value="GROQ">Groq (Qwen 3.8 27B multimodal)</option>
-                    <option value="OLLAMA_CLOUD">Ollama Cloud (token ollama.com)</option>
-                    <option value="CODEX">Codex Pro (login OAuth)</option>
+                  <optgroup label="Modelos na Nuvem">
+                    <option value="NVIDIA">NVIDIA</option>
+                    <option value="GOOGLE">Google</option>
+                    <option value="OPENAI">OpenAI</option>
+                    <option value="ANTHROPIC">Anthropic</option>
+                    <option value="OPENROUTER">OpenRouter</option>
+                    <option value="GROQ">Groq</option>
+                    <option value="OLLAMA_CLOUD">Ollama Cloud</option>
+                    <option value="CODEX">Codex</option>
                   </optgroup>
-                  <optgroup label="Modelo Local (offline, sem chave)">
-                    <option value="LOCAL_OLLAMA">Ollama Local (offline, download automático)</option>
+                  <optgroup label="Local">
+                    <option value="LOCAL_OLLAMA">Ollama Local</option>
                   </optgroup>
                 </select>
+                <div className="mt-2 rounded-xl border border-indigo-900/40 bg-indigo-950/20 px-3 py-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-[10px] uppercase tracking-wider text-indigo-400 font-bold">Modo</span>
+                    <span className="text-xs font-bold text-slate-100">Automático</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    O app atualiza, testa e rotaciona modelos compatíveis automaticamente. IDs de modelo não precisam ser escolhidos manualmente.
+                  </p>
+                </div>
               </div>
 
-              {settingsProvider !== "LOCAL_OLLAMA" && (
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1.5">Precisão do modelo</label>
-                  <select
-                    value={settingsModelTier}
-                    onChange={e => setSettingsModelTier(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 cursor-pointer"
-                  >
-                    {MODEL_TIERS.map(t => {
-                      const modelName = modelCatalog[settingsProvider]?.tiers?.[t.value];
-                      return (
-                        <option key={t.value} value={t.value}>
-                          {t.label} — {t.hint}{modelName ? ` (${modelName})` : ""}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </div>
-              )}
-
-              {settingsProvider === "LOCAL_OLLAMA" ? (
-                <OllamaLocalSetup model={settingsLocalModel} onModelChange={setSettingsLocalModel} />
-              ) : settingsProvider === "CODEX" ? (
+              {settingsProvider === "CODEX" ? (
                 <CodexLogin apiKey={settingsApiKey} setApiKey={setSettingsApiKey} />
+              ) : settingsProvider === "LOCAL_OLLAMA" ? (
+                <OllamaAutoSetup />
               ) : (
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                    {settingsProvider === "OLLAMA_CLOUD" ? "Token Ollama Cloud" : "Chave de API"}
+                    {settingsProvider === "OLLAMA_CLOUD" ? "Token" : "Chave de API"}
                   </label>
                   <div className="flex gap-2">
                     <div className="relative flex-1">
@@ -2575,21 +2584,25 @@ export default function App() {
                       <button
                         onClick={() => setSettingsApiKey("")}
                         className="px-3 py-2.5 text-xs font-bold text-rose-400 bg-rose-950/30 border border-rose-900/30 hover:bg-rose-950/50 rounded-xl transition-all cursor-pointer shrink-0"
-                        title="Remover chave"
                       >
                         Remover
                       </button>
                     )}
                   </div>
                   <p className="text-[11px] text-slate-500 mt-1.5">
-                    {settingsProvider === "OLLAMA_CLOUD"
-                      ? "Obtenha o token em ollama.com/signup"
-                      : settingsApiKey
-                        ? "Chave salva em ~/.ai-disec-pdf/settings.json"
-                        : "Sua chave fica salva localmente no disco."}
+                    O modelo é selecionado automaticamente e pode ser rotacionado se falhar.
                   </p>
                 </div>
               )}
+
+              <div className="rounded-xl border border-cyan-900/30 bg-cyan-950/10 px-3 py-2.5">
+                <p className="text-[11px] text-cyan-300 font-semibold">
+                  {isProcessing
+                    ? `Pipeline adaptativo: ${currentConcurrency} simultânea${currentConcurrency > 1 ? "s" : ""}${isStabilizing ? " · Estabilizando provedor..." : ""}`
+                    : "Pipeline adaptativo: até 3 simultâneas"}
+                </p>
+                <p className="text-[10px] text-slate-500 mt-1">Retry, backoff e rotação automática de modelo continuam ativos.</p>
+              </div>
 
               <div className="border-t border-slate-800 pt-4">
                 <LayaSetup />

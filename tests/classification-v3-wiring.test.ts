@@ -15,18 +15,41 @@ describe("Classification V3 wiring", () => {
     expect(server).toContain('app.post("/api/learning/confirm"');
   });
 
-  it("mantém NVIDIA com timeout maior e modo automático sem Nemotron implícito", () => {
+  it("usa seleção automática de modelo com timeout e rotação", () => {
     const server = read("server/server.ts");
     expect(server).toContain('config.provider === "NVIDIA" ? 120_000 : 75_000');
-    expect(server).toContain('configuredTier === "auto" ? hintedTier : configuredTier');
+    expect(server).toContain('app.post("/api/models/runtime/refresh"');
+    expect(server).toContain('app.post("/api/models/runtime/refresh-all"');
+    expect(server).toContain("rotateRuntimeModel");
+    expect(server).toContain("getRuntimeModel");
+    expect(server).toContain("shouldRotateModel");
   });
 
-  it("renderer usa concorrência NVIDIA=1 e três tentativas reais", () => {
+  it("renderer usa pipeline de 3 páginas e três tentativas reais", () => {
     const app = read("src/App.tsx");
-    expect(app).toContain('if (provider === "NVIDIA") return 1');
-    expect(app).toContain('for (let attempt = 1; attempt <= 3; attempt++)');
+    const pipeline = read("src/utils/adaptivePipeline.ts");
+    expect(app).toContain("const AUTO_PIPELINE_CONCURRENCY = 3");
+    expect(app).toContain("AdaptivePipeline"); // mecanismo compartilhado app/benchmark
+    // Três tentativas reais vivem no módulo compartilhado
+    expect(pipeline).toContain("AUTO_PIPELINE_MAX_ATTEMPTS = 3");
+    expect(pipeline).toContain("AUTO_PIPELINE_MAX_CONCURRENCY = 3");
+    expect(pipeline).toContain("runPageWithRetry");
     expect(app).toContain("runV3Prepasses");
     expect(app).toContain("PASSAGEM 3");
+  });
+
+  it("UI expõe providers sem IDs de modelo e sem seletor de precisão", () => {
+    const app = read("src/App.tsx");
+    expect(app).toContain('<option value="NVIDIA">NVIDIA</option>');
+    expect(app).toContain('<option value="GOOGLE">Google</option>');
+    expect(app).toContain('<option value="OPENAI">OpenAI</option>');
+    expect(app).toContain('<option value="ANTHROPIC">Anthropic</option>');
+    expect(app).toContain('<option value="OPENROUTER">OpenRouter</option>');
+    expect(app).toContain('<option value="GROQ">Groq</option>');
+    expect(app).toContain("O app atualiza, testa e rotaciona modelos compatíveis automaticamente");
+    expect(app).not.toContain("Precisão do modelo");
+    expect(app).not.toContain("GLM-5.3-Flash — padrão");
+    expect(app).not.toContain("GPT-4o");
   });
 
   it("Electron não desacelera o processamento em background", () => {

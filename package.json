@@ -17,6 +17,7 @@
     "update-models": "node scripts/update-models.cjs",
     "test": "vitest run --config vite.config.test.ts",
     "test:watch": "vitest --config vite.config.test.ts",
+    "test:integration:nvidia": "cross-env RUN_INTEGRATION_NVIDIA=1 vitest run --config vite.config.test.ts tests/integration-nvidia.test.ts",
     "clean": "if (Test-Path dist) { Remove-Item -Recurse -Force dist }",
     "lint": "tsc --noEmit"
   },
@@ -81,6 +82,7 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
+    "@napi-rs/canvas": "^1.0.9",
     "@types/express": "^4.17.21",
     "@types/jszip": "^3.4.0",
     "@types/node": "^22.19.21",
