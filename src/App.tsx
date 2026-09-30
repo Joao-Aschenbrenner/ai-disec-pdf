@@ -584,6 +584,7 @@ export default function App() {
   const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
   const [isStabilizing, setIsStabilizing] = useState(false);
   const [pipelineHalted, setPipelineHalted] = useState(false);
+  const [pipelineHaltReason, setPipelineHaltReason] = useState<"provider-unstable" | "provider-auth" | null>(null);
 
   // Sync ref for providerConcurrency function
   useEffect(() => {
@@ -993,6 +994,7 @@ export default function App() {
     setConsecutiveSuccesses(p.consecutiveSuccesses);
     setIsStabilizing(p.stabilizing);
     setPipelineHalted(p.halted);
+    setPipelineHaltReason(p.haltReason);
     setAttemptCount(p.attemptCount);
     setRetryCount(p.retryCount);
     setRotationCount(p.rotationCount);
@@ -1168,6 +1170,7 @@ export default function App() {
     // Inicializa métricas da execução (pipeline compartilhado + espelho React)
     pipelineRef.current.reset(3);
     setPipelineHalted(false);
+    setPipelineHaltReason(null);
     setFinalSuccessCount(0);
     setFinalErrorCount(0);
     syncPipelineState();
@@ -1878,6 +1881,7 @@ export default function App() {
                       onClick={async () => {
                         pipelineRef.current.reset(1);
                         setPipelineHalted(false);
+                        setPipelineHaltReason(null);
                         syncPipelineState();
                         setIsProcessing(true);
                         window.electronAPI?.startProcessing();
@@ -1913,7 +1917,9 @@ export default function App() {
                     )}
                     {pipelineHalted && (
                       <span className="px-2 py-1 bg-rose-950/50 border border-rose-800/30 rounded-full text-rose-300">
-                        Fila pausada — provedor não estabilizou. Re-tente para continuar.
+                        {pipelineHaltReason === "provider-auth"
+                          ? "Fila pausada — verifique a chave/permissão do provedor."
+                          : "Fila pausada — provedor não estabilizou. Re-tente para continuar."}
                       </span>
                     )}
                     <span className="px-2 py-1 bg-slate-950/50 border border-slate-800/30 rounded-full text-slate-400 font-mono">
@@ -2396,6 +2402,7 @@ export default function App() {
                                 onClick={async () => {
                                   pipelineRef.current.reset(1);
                                   setPipelineHalted(false);
+                                  setPipelineHaltReason(null);
                                   syncPipelineState();
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                                   const res = await processWithRetry(page);
@@ -2880,6 +2887,7 @@ export default function App() {
                   if (!page) return;
                   pipelineRef.current.reset(1);
                   setPipelineHalted(false);
+                  setPipelineHaltReason(null);
                   syncPipelineState();
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
