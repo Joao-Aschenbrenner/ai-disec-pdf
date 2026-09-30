@@ -29,7 +29,8 @@ import {
   HardDrive,
   Zap,
   LogIn,
-  Cloud
+  Cloud,
+  Clock3
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -97,6 +98,18 @@ function providerConcurrency(_provider: string): number {
   // Produto simplificado: um único motor visível em modo Automático.
   // Concorrência adaptativa: começa em 3, reduz sob pressão, recupera gradualmente.
   return currentConcurrencyRef;
+}
+
+function formatProcessingElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const mm = String(minutes).padStart(2, "0");
+  const ss = String(seconds).padStart(2, "0");
+  return hours > 0
+    ? `${String(hours).padStart(2, "0")}:${mm}:${ss}`
+    : `${mm}:${ss}`;
 }
 
 const PROCESSING_STAGE_LABELS: Record<string, string> = {
@@ -579,6 +592,13 @@ export default function App() {
   const [finalSuccessCount, setFinalSuccessCount] = useState(0);
   const [finalErrorCount, setFinalErrorCount] = useState(0);
 
+  // Cronômetro total do processamento ativo do PDF atual.
+  // Pausa quando o pipeline para aguardando ação do usuário e retoma nos retries.
+  const [processingElapsedMs, setProcessingElapsedMs] = useState(0);
+  const [processingTimerRunning, setProcessingTimerRunning] = useState(false);
+  const processingTimerStartedAtRef = useRef<number | null>(null);
+  const processingTimerAccumulatedMsRef = useRef(0);
+
   // Concorrência adaptativa
   const [currentConcurrency, setCurrentConcurrency] = useState(3);
   const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
@@ -624,6 +644,48 @@ export default function App() {
     }));
     return () => cleanups.forEach((fn) => fn());
   }, []);
+
+  const startProcessingTimer = (reset = false) => {
+    if (reset) {
+      processingTimerAccumulatedMsRef.current = 0;
+      setProcessingElapsedMs(0);
+    }
+    if (processingTimerStartedAtRef.current === null) {
+      processingTimerStartedAtRef.current = Date.now();
+      setProcessingTimerRunning(true);
+    }
+  };
+
+  const stopProcessingTimer = () => {
+    const startedAt = processingTimerStartedAtRef.current;
+    if (startedAt !== null) {
+      processingTimerAccumulatedMsRef.current += Date.now() - startedAt;
+      processingTimerStartedAtRef.current = null;
+      setProcessingElapsedMs(processingTimerAccumulatedMsRef.current);
+    }
+    setProcessingTimerRunning(false);
+  };
+
+  const resetProcessingTimer = () => {
+    processingTimerStartedAtRef.current = null;
+    processingTimerAccumulatedMsRef.current = 0;
+    setProcessingElapsedMs(0);
+    setProcessingTimerRunning(false);
+  };
+
+  useEffect(() => {
+    if (!processingTimerRunning) return;
+    const refresh = () => {
+      const startedAt = processingTimerStartedAtRef.current;
+      if (startedAt === null) return;
+      setProcessingElapsedMs(
+        processingTimerAccumulatedMsRef.current + (Date.now() - startedAt)
+      );
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 250);
+    return () => window.clearInterval(interval);
+  }, [processingTimerRunning]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blobUrlsRef = useRef<string[]>([]);
@@ -677,6 +739,7 @@ export default function App() {
   // Load PDF and split pages in the browser
   const selectPdfFile = async (file: File) => {
     revokeAllBlobUrls();
+    resetProcessingTimer();
     setSelectedFile(file);
     setIsSplitting(true);
     setSplitPages([]);
@@ -1175,6 +1238,7 @@ export default function App() {
     setFinalErrorCount(0);
     syncPipelineState();
 
+    startProcessingTimer(true);
     setIsProcessing(true);
     window.electronAPI?.startProcessing();
 
@@ -1363,7 +1427,8 @@ export default function App() {
       const failed = finalPages.filter(p => p.status === "failed").length;
       setFinalSuccessCount(success);
       setFinalErrorCount(failed);
-      
+
+      stopProcessingTimer();
       setIsProcessing(false);
       window.electronAPI?.endProcessing();
     }
@@ -1372,6 +1437,7 @@ export default function App() {
   // Clear / Reset App
   const resetApp = () => {
     revokeAllBlobUrls();
+    resetProcessingTimer();
     setSelectedFile(null);
     setSplitPages([]);
     setActivePreviewUrl(null);
@@ -1884,20 +1950,25 @@ export default function App() {
                         setPipelineHalted(false);
                         setPipelineHaltReason(null);
                         syncPipelineState();
+                        startProcessingTimer(false);
                         setIsProcessing(true);
                         window.electronAPI?.startProcessing();
-                        const failed = splitPages.filter(p => p.status === "failed");
-                        for (const page of failed) {
-                          if (!pipelineRef.current.canLaunchNewPages()) break;
-                          pipelineRef.current.notePageLaunched();
-                          setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
-                          const res = await processWithRetry(page);
-                          replaceProcessedResult(page.id, res);
-                          syncPipelineState();
-                          if (pipelineRef.current.halted) break;
+                        try {
+                          const failed = splitPages.filter(p => p.status === "failed");
+                          for (const page of failed) {
+                            if (!pipelineRef.current.canLaunchNewPages()) break;
+                            pipelineRef.current.notePageLaunched();
+                            setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
+                            const res = await processWithRetry(page);
+                            replaceProcessedResult(page.id, res);
+                            syncPipelineState();
+                            if (pipelineRef.current.halted) break;
+                          }
+                        } finally {
+                          stopProcessingTimer();
+                          setIsProcessing(false);
+                          window.electronAPI?.endProcessing();
                         }
-                        setIsProcessing(false);
-                        window.electronAPI?.endProcessing();
                       }}
                       className="py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition-all shadow-lg active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
                     >
@@ -1907,10 +1978,14 @@ export default function App() {
                   )}
                 </div>
                 
-                {(isProcessing || pipelineHalted) && (
+                {(isProcessing || pipelineHalted || processingElapsedMs > 0) && (
                   <div className="mt-2 flex items-center gap-3 text-[11px] flex-wrap">
                     <span className="px-2 py-1 bg-indigo-950/50 border border-indigo-800/30 rounded-full text-indigo-300 font-mono">
                       Concorrência: {currentConcurrency}
+                    </span>
+                    <span className="px-2 py-1 bg-slate-950/60 border border-slate-700/50 rounded-full text-slate-200 font-mono flex items-center gap-1.5">
+                      <Clock3 className="w-3.5 h-3.5 text-cyan-400" />
+                      Tempo total: {formatProcessingElapsed(processingElapsedMs)}
                     </span>
                     {isStabilizing && !pipelineHalted && (
                       <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300 animate-pulse">
@@ -2406,11 +2481,16 @@ export default function App() {
                                   setPipelineHalted(false);
                                   setPipelineHaltReason(null);
                                   syncPipelineState();
+                                  startProcessingTimer(false);
                                   pipelineRef.current.notePageLaunched();
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
-                                  const res = await processWithRetry(page);
-                                  replaceProcessedResult(page.id, res);
-                                  syncPipelineState();
+                                  try {
+                                    const res = await processWithRetry(page);
+                                    replaceProcessedResult(page.id, res);
+                                    syncPipelineState();
+                                  } finally {
+                                    stopProcessingTimer();
+                                  }
                                 }}
                                 className="px-3 py-1 bg-rose-900 hover:bg-rose-800 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                               >
@@ -2892,12 +2972,17 @@ export default function App() {
                   setPipelineHalted(false);
                   setPipelineHaltReason(null);
                   syncPipelineState();
+                  startProcessingTimer(false);
                   pipelineRef.current.notePageLaunched();
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
-                  const res = await processWithRetry(page, correctionMsg);
-                  replaceProcessedResult(correctionPageId, res);
-                  syncPipelineState();
+                  try {
+                    const res = await processWithRetry(page, correctionMsg);
+                    replaceProcessedResult(correctionPageId, res);
+                    syncPipelineState();
+                  } finally {
+                    stopProcessingTimer();
+                  }
                 }}
                 className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-all cursor-pointer"
               >
