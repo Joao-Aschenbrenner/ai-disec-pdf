@@ -171,6 +171,149 @@ const MODEL_RUNTIME_FILE = path.join(DATA_DIR, "model-runtime.json");
 const RUNTIME_SESSION_STARTED_AT = Date.now();
 let runtimeModels: Record<string, RuntimeModelState> = {};
 
+/**
+ * Failover exaustivo por página.
+ * Não é persistido: serve apenas para garantir que UMA página percorra cada
+ * candidato Vision no máximo uma vez antes de declarar o provider esgotado.
+ */
+type PageFailoverCycle = {
+  tried: Set<string>;
+};
+
+let pageFailoverCycles = new Map<string, PageFailoverCycle>();
+
+function pageFailoverCycleKey(provider: string, pageKey: string): string {
+  return `${provider}::${pageKey}`;
+}
+
+function resetPageFailoverCycle(provider: string, pageKey: string): void {
+  pageFailoverCycles.delete(pageFailoverCycleKey(provider, pageKey));
+}
+
+function resetProviderFailoverCycles(provider: string): void {
+  const prefix = `${provider}::`;
+  for (const key of pageFailoverCycles.keys()) {
+    if (key.startsWith(prefix)) pageFailoverCycles.delete(key);
+  }
+}
+
+function getPageFailoverCycle(provider: string, pageKey: string): PageFailoverCycle {
+  const key = pageFailoverCycleKey(provider, pageKey);
+  let cycle = pageFailoverCycles.get(key);
+  if (!cycle) {
+    cycle = { tried: new Set<string>() };
+    pageFailoverCycles.set(key, cycle);
+  }
+  return cycle;
+}
+
+type ModelFailoverResult = {
+  modelRotated: boolean;
+  modelExhausted: boolean;
+  candidateCount: number;
+  modelsTried: number;
+  modelsRemaining: number;
+};
+
+function failoverRuntimeModel(
+  provider: string,
+  pageKey: string,
+  failedModel: string,
+  reason: string
+): ModelFailoverResult {
+  const state = runtimeModels[provider];
+  if (!state || !state.candidates.length) {
+    return {
+      modelRotated: false,
+      modelExhausted: true,
+      candidateCount: 0,
+      modelsTried: 0,
+      modelsRemaining: 0,
+    };
+  }
+
+  const cycle = getPageFailoverCycle(provider, pageKey);
+  if (failedModel) cycle.tried.add(failedModel);
+
+  if (failedModel) {
+    state.failures[failedModel] = reason.slice(0, 200);
+    if (state.telemetry[failedModel]) {
+      state.telemetry[failedModel].rotationCount += 1;
+    }
+    resetSessionFailures(provider, failedModel);
+  }
+
+  const candidateCount = state.candidates.length;
+  const modelsTried = cycle.tried.size;
+
+  if (modelsTried >= candidateCount) {
+    runtimeModels[provider] = state;
+    saveRuntimeModels();
+    return {
+      modelRotated: false,
+      modelExhausted: true,
+      candidateCount,
+      modelsTried,
+      modelsRemaining: 0,
+    };
+  }
+
+  // Se outro request em voo já moveu o provider para um candidato que ESTA
+  // página ainda não tentou, apenas usa esse candidato; não pula mais um.
+  const activeModel = state.candidates[state.activeIndex];
+  if (activeModel && !cycle.tried.has(activeModel) && activeModel !== failedModel) {
+    runtimeModels[provider] = state;
+    saveRuntimeModels();
+    return {
+      modelRotated: true,
+      modelExhausted: false,
+      candidateCount,
+      modelsTried,
+      modelsRemaining: candidateCount - modelsTried,
+    };
+  }
+
+  const startIndex = Math.max(0, state.candidates.indexOf(failedModel));
+  let nextIndex = -1;
+  for (let step = 1; step <= candidateCount; step++) {
+    const idx = (startIndex + step) % candidateCount;
+    const candidate = state.candidates[idx];
+    if (!cycle.tried.has(candidate)) {
+      nextIndex = idx;
+      break;
+    }
+  }
+
+  if (nextIndex < 0) {
+    runtimeModels[provider] = state;
+    saveRuntimeModels();
+    return {
+      modelRotated: false,
+      modelExhausted: true,
+      candidateCount,
+      modelsTried,
+      modelsRemaining: 0,
+    };
+  }
+
+  state.activeIndex = nextIndex;
+  const nextModel = state.candidates[nextIndex];
+  resetSessionFailures(provider, nextModel);
+  runtimeModels[provider] = state;
+  saveRuntimeModels();
+  console.warn(
+    `[models-runtime] ${provider}: página ${pageKey} falhou no candidato atual; avançando para candidato #${nextIndex + 1} (${modelsTried}/${candidateCount} já tentados)`
+  );
+
+  return {
+    modelRotated: true,
+    modelExhausted: false,
+    candidateCount,
+    modelsTried,
+    modelsRemaining: candidateCount - modelsTried,
+  };
+}
+
 type SessionFailureStreak = {
   timeout: number;
   invalidOutput: number;
@@ -411,6 +554,7 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
     }
   }
   runtimeModels[provider] = next;
+  resetProviderFailoverCycles(provider);
   saveRuntimeModels();
   console.log(`[models-runtime] ${provider}: ${next.candidates.length} candidatos atualizados; ativo #${next.activeIndex + 1}`);
   return next;
@@ -546,6 +690,48 @@ async function logUpload(originalName: string, pageIndex: number, status: string
   } catch (e) {
     console.error("Failed to write upload log", e);
   }
+}
+
+function buildModelFailoverResponse(
+  provider: string,
+  pageKey: string,
+  failedModel: string,
+  reason: string
+) {
+  const result = failoverRuntimeModel(provider, pageKey, failedModel, reason);
+
+  if (result.modelExhausted) {
+    return {
+      status: 503,
+      body: {
+        error: `Todos os ${result.candidateCount} modelos Vision disponíveis deste provedor falharam nesta página. A fila foi preservada para você re-tentar depois ou trocar a chave/provedor.`,
+        retryable: false,
+        modelExhausted: true,
+        candidateCount: result.candidateCount,
+        modelsTried: result.modelsTried,
+        modelsRemaining: 0,
+      },
+    };
+  }
+
+  return {
+    status: 503,
+    body: {
+      error: `Este candidato falhou. Vou tentar outro modelo Vision na mesma página antes de liberar a fila.`,
+      retryAfter: "1s",
+      retryable: true,
+      modelRotated: true,
+      modelExhausted: false,
+      candidateCount: result.candidateCount,
+      modelsTried: result.modelsTried,
+      modelsRemaining: result.modelsRemaining,
+    },
+  };
+}
+
+function shouldExhaustiveFailover(status: number, body: string): boolean {
+  if ([404, 408, 410, 422, 500, 502, 503, 504, 529].includes(status)) return true;
+  return /model.{0,40}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers?|resource.?exhausted|capacity|overloaded|gateway timeout|time.?out|timed out/i.test(body);
 }
 
 function extractAIError(status: number, body: string): { userMessage: string; retryAfter?: string; retryable?: boolean; modelRotated?: boolean } {
@@ -690,7 +876,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
   app.post("/api/extract", async (req, res) => {
     try {
-      const { pdfBase64, originalName, pageIndex, correction, v3Hint } = req.body;
+      const { pdfBase64, originalName, pageIndex, correction, v3Hint, runtimePageId } = req.body;
 
       if (!pdfBase64) {
         return res.status(400).json({ error: "Faltando dados do PDF (pdfBase64)." });
@@ -733,6 +919,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
        // O usuário não escolhe modelo/tier. O contexto ajusta só o custo visual;
        // o modelo real é descoberto e rotacionado automaticamente.
        const modelTier = hintedTier;
+       const pageFailoverKey = String(runtimePageId || `${originalName || "document"}::${pageIndex ?? 0}`);
+       let requestModel = "";
        let aiResponse;
        try {
          // Helper for OpenAI-compatible providers. The endpoint is selected from
@@ -781,7 +969,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
           if (provider === "GOOGLE") {
             if (!apiKey) throw new Error("Chave de API Google não configurada.");
-            const googleModel = await getRuntimeModel("GOOGLE", apiKey);
+            const googleModel = requestModel = await getRuntimeModel("GOOGLE", apiKey);
             const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${apiKey}`;
             console.log(`[AI] Enviando para Google Gemini (${googleModel})...`);
             const startTime = Date.now();
@@ -795,7 +983,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            recordTelemetry(provider, googleModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "OPENAI") {
             if (!apiKey) throw new Error("Chave de API OpenAI não configurada.");
-            const openaiModel = await getRuntimeModel("OPENAI", apiKey);
+            const openaiModel = requestModel = await getRuntimeModel("OPENAI", apiKey);
             console.log(`[AI] Enviando para OpenAI (${openaiModel})...`);
             const startTime = Date.now();
             aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -812,7 +1000,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            recordTelemetry(provider, openaiModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "ANTHROPIC") {
             if (!apiKey) throw new Error("Chave de API Anthropic não configurada.");
-            const anthropicModel = await getRuntimeModel("ANTHROPIC", apiKey);
+            const anthropicModel = requestModel = await getRuntimeModel("ANTHROPIC", apiKey);
             console.log(`[AI] Enviando para Anthropic Claude (${anthropicModel})...`);
             const startTime = Date.now();
             aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
@@ -827,7 +1015,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            recordTelemetry(provider, anthropicModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "MISTRAL") {
             if (!apiKey) throw new Error("Chave de API Mistral não configurada.");
-            const mistralModel = await getRuntimeModel("MISTRAL", apiKey);
+            const mistralModel = requestModel = await getRuntimeModel("MISTRAL", apiKey);
             console.log(`[AI] Enviando para Mistral OCR (${mistralModel})...`);
             // Mistral não tem visão direta — usa OCR (v1/ocr) para extrair texto da imagem,
             // depois classifica o texto com um modelo de texto (mistral-small-latest).
@@ -863,14 +1051,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             aiResponse = classifyRes;
            } else if (provider === "OPENROUTER") {
              if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
-             const openrouterModel = await getRuntimeModel("OPENROUTER", apiKey);
+             const openrouterModel = requestModel = await getRuntimeModel("OPENROUTER", apiKey);
              console.log(`[AI] Enviando para OpenRouter (${openrouterModel})...`);
              const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "OPENROUTER", model: openrouterModel, apiKey }, imageBase64, prompt);
              recordTelemetry(provider, openrouterModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
            } else if (provider === "GROQ") {
              if (!apiKey) throw new Error("Chave de API Groq não configurada.");
-             const groqModel = await getRuntimeModel("GROQ", apiKey);
+             const groqModel = requestModel = await getRuntimeModel("GROQ", apiKey);
              console.log(`[AI] Enviando para Groq (${groqModel})...`);
              const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "GROQ", model: groqModel, apiKey }, imageBase64, prompt);
@@ -878,7 +1066,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            } else if (provider === "LOCAL_OLLAMA") {
               // Ollama local — sem chave de API. Endpoint /api/chat (não /v1/chat/completions).
               // O modelo escolhido nas Configurações (settings.model) tem prioridade sobre o tier selecionado.
-              const ollamaLocalModel = await getRuntimeModel("LOCAL_OLLAMA", "");
+              const ollamaLocalModel = requestModel = await getRuntimeModel("LOCAL_OLLAMA", "");
               const ollamaConfig = getProviderConfig("LOCAL_OLLAMA");
               console.log(`[AI] Enviando para Ollama local (${ollamaLocalModel})...`);
 
@@ -914,7 +1102,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               recordTelemetry(provider, ollamaLocalModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
 } else if (provider === "OLLAMA_CLOUD") {
               if (!apiKey) throw new Error("Token Ollama Cloud não configurado. Obtenha em https://ollama.com/signup.");
-              const ollamaCloudModel = await getRuntimeModel("OLLAMA_CLOUD", apiKey);
+              const ollamaCloudModel = requestModel = await getRuntimeModel("OLLAMA_CLOUD", apiKey);
               console.log(`[AI] Enviando para Ollama Cloud (${ollamaCloudModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "OLLAMA_CLOUD", model: ollamaCloudModel, apiKey }, imageBase64, prompt);
@@ -932,14 +1120,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 } catch (e) { /* ignora */ }
               }
               if (!codexKey) throw new Error("Login Codex necessário. Clique em 'Sign in with ChatGPT' nas Configurações, ou cole uma API key da OpenAI.");
-              const codexModel = await getRuntimeModel("CODEX", codexKey);
+              const codexModel = requestModel = await getRuntimeModel("CODEX", codexKey);
               console.log(`[AI] Enviando para OpenAI/Codex (${codexModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "CODEX", model: codexModel, apiKey: codexKey }, imageBase64, prompt);
               recordTelemetry(provider, codexModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
             } else {
               // NVIDIA (padrão)
-              const nvidiaModel = await getRuntimeModel("NVIDIA", apiKey);
+              const nvidiaModel = requestModel = await getRuntimeModel("NVIDIA", apiKey);
               console.log(`[AI] Enviando para NVIDIA (${nvidiaModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "NVIDIA", model: nvidiaModel, apiKey }, imageBase64, prompt);
@@ -947,54 +1135,70 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             }
 } catch (aiErr) {
           await logError("Falha ao chamar o provedor de IA", aiErr);
-          const isThrownTimeout = aiErr?.name === "AbortError" || /abort|time.?out/i.test(String(aiErr?.message || ""));
-          const thrownState = runtimeModels[provider];
-          const thrownCurrent = thrownState?.candidates?.[thrownState.activeIndex];
-          if (isThrownTimeout && thrownCurrent) {
-            const streak = noteSessionFailure(provider, thrownCurrent, "timeout");
-            recordTelemetry(provider, thrownCurrent, "timeout", 0);
 
-            if (streak >= 2 && rotateRuntimeModel(provider, "timeout consecutivo na sessão (AbortError)")) {
-              return res.status(503).json({
-                error: "O modelo automático excedeu o tempo limite repetidamente. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-                retryAfter: "1s",
-                modelRotated: true,
-                retryable: true,
-              });
-            }
-          } else if (shouldRotateThrown(aiErr)) {
-            rotateRuntimeModel(provider, aiErr instanceof Error ? aiErr.message : String(aiErr));
+          const message = aiErr instanceof Error ? aiErr.message : String(aiErr);
+          const isCredentialProblem =
+            /api key|unauthorized|forbidden|permission|login .*necess/i.test(message);
+
+          if (!isCredentialProblem && requestModel) {
+            recordTelemetry(provider, requestModel, /abort|time.?out/i.test(message) ? "timeout" : "failure", 0);
+            const failover = buildModelFailoverResponse(
+              provider,
+              pageFailoverKey,
+              requestModel,
+              `throw: ${message}`
+            );
+            return res.status(failover.status).json(failover.body);
           }
+
           throw aiErr;
         }
 
        if (!aiResponse.ok) {
          const errBody = await aiResponse.text();
          console.error("[AI API Error]:", aiResponse.status, errBody);
-         
-         const state = runtimeModels[provider];
-         const current = state?.candidates?.[state.activeIndex];
 
-         if (state && current) {
-           state.failures[current] = `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`;
+         const parsedError = extractAIError(aiResponse.status, errBody);
 
-           if ([408, 502, 503, 504, 529].includes(aiResponse.status)) {
-             noteSessionFailure(provider, current, "timeout");
-             recordTelemetry(provider, current, "timeout", 0);
-           }
-         }
-
-         if (shouldRotateModel(aiResponse.status, errBody, provider) && rotateRuntimeModel(provider, `HTTP ${aiResponse.status}`)) {
-           return res.status(503).json({
-             error: "O modelo automático realmente ficou indisponível ou repetiu a falha. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-             retryAfter: "1s",
-             modelRotated: true,
-             retryable: true,
+         // Chave/permissão é global ao provider: trocar modelo não resolve.
+         if (aiResponse.status === 401 || aiResponse.status === 403) {
+           return res.status(aiResponse.status).json({
+             error: parsedError.userMessage,
+             retryable: false,
+             providerAuthError: true,
            });
          }
 
-         const { userMessage, retryAfter, retryable, modelRotated } = extractAIError(aiResponse.status, errBody);
-         return res.status(aiResponse.status).json({ error: userMessage, retryAfter, retryable, modelRotated });
+         // 429 é pressão/cota do provider: respeita backoff no MESMO candidato.
+         if (aiResponse.status === 429) {
+           return res.status(429).json({
+             error: parsedError.userMessage,
+             retryAfter: parsedError.retryAfter || "60s",
+             retryable: true,
+             modelRotated: false,
+           });
+         }
+
+         if (requestModel && shouldExhaustiveFailover(aiResponse.status, errBody)) {
+           if ([408, 502, 503, 504, 529].includes(aiResponse.status)) {
+             recordTelemetry(provider, requestModel, "timeout", 0);
+           } else {
+             recordTelemetry(provider, requestModel, "failure", 0);
+           }
+           const failover = buildModelFailoverResponse(
+             provider,
+             pageFailoverKey,
+             requestModel,
+             `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`
+           );
+           return res.status(failover.status).json(failover.body);
+         }
+
+         return res.status(aiResponse.status).json({
+           error: parsedError.userMessage,
+           retryAfter: parsedError.retryAfter,
+           retryable: parsedError.retryable,
+         });
        }
 
        const data = await aiResponse.json();
@@ -1014,28 +1218,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         console.log("[AI OCR] Resposta recebida:", responseText?.substring(0, 200));
 
       if (!responseText) {
-        const invalidState = runtimeModels[provider];
-        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
-        const invalidStreak = invalidModel
-          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
-          : 1;
-
-        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
-
-        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "empty-response-repeated")) {
-          return res.status(503).json({
-            error: "O modelo respondeu vazio repetidamente. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-            retryAfter: "1s",
-            modelRotated: true,
-            retryable: true,
-          });
-        }
-
-        return res.status(503).json({
-          error: "O modelo respondeu vazio. Vou repetir nesta mesma página e manter a fila pausada antes de considerar troca de modelo.",
-          retryAfter: "1s",
-          retryable: true,
-        });
+        if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
+        const failover = buildModelFailoverResponse(
+          provider,
+          pageFailoverKey,
+          requestModel,
+          "empty-response"
+        );
+        return res.status(failover.status).json(failover.body);
       }
 
       const cleaned = responseText
@@ -1060,6 +1250,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         await logUpload(originalName, pageIndex, "success", provider, "Resposta sem JSON; texto corrido usado como classificationText (fallback V3)");
         const routedTextData = await applyDocumentRoutingV3({ classificationText: trimmed }, v3Hint);
         markCurrentModelSemanticSuccess(provider);
+        resetPageFailoverCycle(provider, pageFailoverKey);
         await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", routedTextData);
         return res.json(routedTextData);
       }
@@ -1083,28 +1274,15 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         const jsonEnd = trimmed.lastIndexOf("}");
         if (jsonStart === -1 || jsonEnd === -1) {
           await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
-        const invalidState = runtimeModels[provider];
-        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
-        const invalidStreak = invalidModel
-          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
-          : 1;
+          if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
+          const failover = buildModelFailoverResponse(
+            provider,
+            pageFailoverKey,
+            requestModel,
+            "no-usable-json"
+          );
+          return res.status(failover.status).json(failover.body);
 
-        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
-
-        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "no-usable-json-repeated")) {
-          return res.status(503).json({
-            error: "O modelo repetiu a resposta incompatível. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-            retryAfter: "1s",
-            modelRotated: true,
-            retryable: true,
-          });
-        }
-
-        return res.status(503).json({
-          error: "O modelo respondeu em formato incompatível. Vou repetir nesta mesma página sem avançar a fila.",
-          retryAfter: "1s",
-          retryable: true,
-        });
         }
         jsonStr = trimmed.substring(jsonStart, jsonEnd + 1);
       }
@@ -1121,53 +1299,29 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       }
       // Ultima tentativa: se ainda falhou e era multiplos objetos, tenta parsear cada um individualmente
       if (!parseSucceeded) {
-        const objs = extractIndividualObjects(jsonStr);
-        if (objs.length > 1) {
-          const parsed = [];
-          for (const o of objs) {
-            for (const attempt of [o, fixJSON(o)]) {
-              try { parsed.push(JSON.parse(attempt)); break; } catch {}
-            }
-          }
-          if (parsed.length > 0) { extractedData = parsed; parseSucceeded = true; }
-        }
-      }
-      if (!parseSucceeded) {
         await logUpload(originalName, pageIndex, "error", provider, `JSON inválido: ${jsonStr.substring(0, 500)}`);
-        const invalidState = runtimeModels[provider];
-        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
-        const invalidStreak = invalidModel
-          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
-          : 1;
-
-        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
-
-        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "invalid-json-output-repeated")) {
-          return res.status(503).json({
-            error: "O modelo repetiu a saída incompatível. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-            retryAfter: "1s",
-            modelRotated: true,
-            retryable: true,
-          });
-        }
-
-        return res.status(503).json({
-          error: "O modelo retornou uma resposta incompatível. Vou repetir nesta mesma página sem avançar a fila.",
-          retryAfter: "1s",
-          retryable: true,
-        });
+        if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
+        const failover = buildModelFailoverResponse(
+          provider,
+          pageFailoverKey,
+          requestModel,
+          "invalid-json-output"
+        );
+        return res.status(failover.status).json(failover.body);
       }
 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
         const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
         markCurrentModelSemanticSuccess(provider);
+        resetPageFailoverCycle(provider, pageFailoverKey);
         await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V3)`, routedDocuments);
         return res.json({ _multiple: true, documents: routedDocuments });
       }
 
       const routedData = await applyDocumentRoutingV3(extractedData, v3Hint);
       markCurrentModelSemanticSuccess(provider);
+      resetPageFailoverCycle(provider, pageFailoverKey);
       await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", routedData);
       return res.json(routedData);
 
@@ -1229,6 +1383,7 @@ if (process.env.NODE_ENV === "test" || process.env.VITEST) {
   app.post("/api/test/clear-runtime", (_req, res) => {
     runtimeModels = {};
     sessionFailureStreaks = {};
+    pageFailoverCycles.clear();
     try {
       if (fs.existsSync(MODEL_RUNTIME_FILE)) fs.unlinkSync(MODEL_RUNTIME_FILE);
     } catch {}
@@ -1236,6 +1391,15 @@ if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     return res.json({ success: true });
   });
 }
+
+app.post("/api/models/runtime/reset-page-failover", (req, res) => {
+  const settings = getSettings();
+  const provider = String(req.body?.provider || settings.provider || "NVIDIA").toUpperCase();
+  const runtimePageId = String(req.body?.runtimePageId || "");
+  if (!runtimePageId) return res.status(400).json({ error: "runtimePageId obrigatório" });
+  resetPageFailoverCycle(provider, runtimePageId);
+  return res.json({ success: true });
+});
 
 app.post("/api/models/runtime/refresh-all", async (_req, res) => {
   try {
