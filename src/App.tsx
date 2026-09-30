@@ -593,7 +593,8 @@ export default function App() {
   const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
   const [isStabilizing, setIsStabilizing] = useState(false);
   const [pipelineHalted, setPipelineHalted] = useState(false);
-  const [pipelineHaltReason, setPipelineHaltReason] = useState<"provider-unstable" | "provider-auth" | null>(null);
+  const [pipelineHaltReason, setPipelineHaltReason] = useState<"provider-unstable" | "provider-auth" | "models-exhausted" | null>(null);
+  const [modelFailoverProgress, setModelFailoverProgress] = useState<{ tried: number; total: number } | null>(null);
 
   // Sync ref for providerConcurrency function
   useEffect(() => {
@@ -843,6 +844,7 @@ export default function App() {
         pdfBase64: imageBase64,
         originalName: page.originalFileName,
         pageIndex: page.sourcePageIndex ?? page.index,
+        runtimePageId: page.id,
         v3Hint: page.v3Hint,
         ...(correction ? { correction } : {}),
       }),
@@ -857,8 +859,13 @@ export default function App() {
         typeof errJson.retryable === "boolean"
           ? errJson.retryable
           : [408, 429, 500, 502, 503, 504, 529].includes(response.status);
-      // Propaga modelRotated para o frontend poder reagir
+      // Propaga estado do failover Vision para o pipeline.
       err.modelRotated = errJson.modelRotated === true;
+      err.modelExhausted = errJson.modelExhausted === true;
+      err.candidateCount = Number(errJson.candidateCount || 0);
+      err.modelsTried = Number(errJson.modelsTried || 0);
+      err.modelsRemaining = Number(errJson.modelsRemaining || 0);
+      err.providerAuthError = errJson.providerAuthError === true;
       throw err;
     }
     
@@ -1033,8 +1040,12 @@ export default function App() {
         error: message,
         retryAfter: err?.retryAfter,
         retryable: err?.retryable !== false,
-        // Propaga info de rotação/429 para retry inteligente
+        // Propaga info do failover Vision para retry inteligente.
         modelRotated: err?.modelRotated === true,
+        modelExhausted: err?.modelExhausted === true,
+        candidateCount: Number(err?.candidateCount || 0),
+        modelsTried: Number(err?.modelsTried || 0),
+        modelsRemaining: Number(err?.modelsRemaining || 0),
         statusCode: err?.status,
       };
     }
@@ -1052,21 +1063,46 @@ export default function App() {
     setRotationCount(p.rotationCount);
   };
 
-  const processWithRetry = async (
+  const resetPageModelFailover = async (page: SplitPage) => {
+    try {
+      await fetch("/api/models/runtime/reset-page-failover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: currentProvider,
+          runtimePageId: page.id,
+        }),
+      });
+    } catch {
+      // Se o reset administrativo falhar, a chamada real ainda devolve o erro correto.
+    }
+  };
+
+    const processWithRetry = async (
     page: SplitPage,
     correction?: string
   ): Promise<ProcessedPageResult> => {
     // Delega ao módulo compartilhado — o MESMO mecanismo usado pelo benchmark.
-    return pipelineRef.current.runPageWithRetry(
-      page,
-      async (p) => processSinglePage(p.id ?? page.id, page, correction),
-      async (pageId, _attempt, delayMs) => {
-        if (pageId) updatePageStage(pageId, "retrying", 48);
-        syncPipelineState();
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-        syncPipelineState();
-      }
-    );
+    try {
+      return await pipelineRef.current.runPageWithRetry(
+        page,
+        async (p) => processSinglePage(p.id ?? page.id, page, correction),
+        async (pageId, _attempt, delayMs, signal) => {
+          if (pageId) updatePageStage(pageId, "retrying", 48);
+          if (signal?.candidateCount) {
+            setModelFailoverProgress({
+              tried: Number(signal.modelsTried || 0),
+              total: Number(signal.candidateCount || 0),
+            });
+          }
+          syncPipelineState();
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          syncPipelineState();
+        }
+      );
+    } finally {
+      setModelFailoverProgress(null);
+    }
   };
 
   const replaceProcessedResult = (targetId: string, result: ProcessedPageResult) => {
@@ -1222,6 +1258,7 @@ export default function App() {
     // Inicializa métricas da execução (pipeline compartilhado + espelho React)
     pipelineRef.current.reset(3);
     setPipelineHalted(false);
+    setModelFailoverProgress(null);
     setPipelineHaltReason(null);
     setFinalSuccessCount(0);
     setFinalErrorCount(0);
@@ -1946,6 +1983,7 @@ export default function App() {
                           const failed = splitPages.filter(p => p.status === "failed");
                           for (const page of failed) {
                             if (!pipelineRef.current.canLaunchNewPages()) break;
+                            await resetPageModelFailover(page);
                             pipelineRef.current.notePageLaunched();
                             setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                             const res = await processWithRetry(page);
@@ -1978,14 +2016,18 @@ export default function App() {
                     </span>
                     {isStabilizing && !pipelineHalted && (
                       <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300 animate-pulse">
-                        Fila pausada — estabilizando a página atual...
+                        {modelFailoverProgress?.total
+                          ? `Estabilizando esta página — testando modelos Vision ${Math.min(modelFailoverProgress.tried + 1, modelFailoverProgress.total)}/${modelFailoverProgress.total}...`
+                          : "Estabilizando esta página — testando outro modelo Vision..."}
                       </span>
                     )}
                     {pipelineHalted && (
                       <span className="px-2 py-1 bg-rose-950/50 border border-rose-800/30 rounded-full text-rose-300">
                         {pipelineHaltReason === "provider-auth"
-                          ? "Fila pausada — verifique a chave/permissão do provedor."
-                          : "Fila pausada — provedor não estabilizou. Re-tente para continuar."}
+                          ? "Processamento parado — verifique a chave/permissão do provedor."
+                          : pipelineHaltReason === "models-exhausted"
+                            ? "Todos os modelos Vision deste provedor falharam nesta página. Re-tente ou troque o provedor."
+                            : "O provedor não estabilizou. Re-tente para continuar."}
                       </span>
                     )}
                     <span className="px-2 py-1 bg-slate-950/50 border border-slate-800/30 rounded-full text-slate-400 font-mono">
@@ -2471,6 +2513,7 @@ export default function App() {
                                   setPipelineHaltReason(null);
                                   syncPipelineState();
                                   startProcessingTimer(false);
+                                  await resetPageModelFailover(page);
                                   pipelineRef.current.notePageLaunched();
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                                   try {
@@ -2962,6 +3005,7 @@ export default function App() {
                   setPipelineHaltReason(null);
                   syncPipelineState();
                   startProcessingTimer(false);
+                  await resetPageModelFailover(page);
                   pipelineRef.current.notePageLaunched();
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
