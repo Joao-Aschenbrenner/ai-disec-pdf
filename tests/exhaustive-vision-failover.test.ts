@@ -193,6 +193,71 @@ describe("Exhaustive Vision failover", () => {
     expect(new Set(usedModels).size).toBe(candidateCount);
   });
 
+  it("403 de acesso ao modelo tenta o próximo Vision em vez de tratar como chave inválida", async () => {
+    let calls = 0;
+    const models: string[] = [];
+
+    vi.mocked(globalThis.fetch as any).mockImplementation(
+      (url: string | URL, init?: any) => {
+        const urlStr = url.toString();
+        if (urlStr.includes(`127.0.0.1:${PORT}`) || urlStr.includes(`localhost:${PORT}`)) {
+          return originalFetch(url, init);
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
+          return Promise.resolve(new Response(JSON.stringify({
+            data: [
+              { id: "fixture-vision-forbidden-a", created: 2, modalities: ["text", "image"] },
+              { id: "fixture-vision-forbidden-b", created: 1, modalities: ["text", "image"] },
+            ],
+          }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/chat/completions")) {
+          calls += 1;
+          const body = init?.body ? JSON.parse(init.body) : {};
+          models.push(body.model);
+          if (calls === 1) {
+            return Promise.resolve(new Response(JSON.stringify({
+              error: { message: "Forbidden: no access to this model" },
+            }), { status: 403, headers: { "Content-Type": "application/json" } }));
+          }
+          return Promise.resolve(new Response(JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({
+              classificationText: "DOCUMENTO ADMINISTRATIVO TESTE",
+              companyName: "Mock",
+              valor: 10,
+            }) } }],
+          }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        return originalFetch(url, init);
+      }
+    );
+
+    await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "NVIDIA" }),
+    });
+
+    const runtimePageId = "model-specific-403";
+    const first = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 0, runtimePageId }),
+    });
+    expect(first.status).toBe(503);
+    const body1 = await first.json();
+    expect(body1.modelRotated).toBe(true);
+    expect(body1.providerAuthError).toBeUndefined();
+
+    const second = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 0, runtimePageId }),
+    });
+    expect(second.status).toBe(200);
+    expect(models[0]).not.toBe(models[1]);
+  });
+
   it("401 não percorre modelos porque a chave é comum ao provider", async () => {
     vi.mocked(globalThis.fetch as any).mockImplementation(
       (url: string | URL, init?: any) => {
