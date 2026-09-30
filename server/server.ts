@@ -775,7 +775,12 @@ function buildModelFailoverResponse(
 }
 
 function shouldExhaustiveFailover(status: number, body: string): boolean {
-  if ([403, 404, 408, 410, 422, 500, 502, 503, 504, 529].includes(status)) return true;
+  // 400 de provider pode ser específico do candidato (parâmetro/capacidade/
+  // suporte multimodal). Como o contrato do modo automático é esgotar os
+  // candidatos Vision da página antes de desistir, 400 também entra no sweep.
+  // Erros globais de credencial são interceptados antes por
+  // isDefinitiveCredentialError().
+  if ([400, 403, 404, 408, 410, 422, 500, 502, 503, 504, 529].includes(status)) return true;
   return /model.{0,40}(not found|unavailable|retired|deprecated|unsupported|invalid|forbidden|access denied)|invalid.{0,20}model|does not support image|not support image input|no workers?|resource.?exhausted|capacity|overloaded|gateway timeout|time.?out|timed out/i.test(body);
 }
 
@@ -825,9 +830,13 @@ function assertSafeProviderUrl(rawUrl: string, provider: string): void {
 }
 
 function isDefinitiveCredentialError(status: number, body: string): boolean {
+  // Alguns gateways devolvem credencial inválida como 400/403 em vez de 401.
+  // A mensagem explícita de autenticação vence o failover de modelos.
+  if (/invalid api key|invalid key|unauthorized|authentication failed|expired token|invalid token|bad credentials/i.test(body)) {
+    return true;
+  }
   if (status === 401) return true;
-  if (status !== 403) return false;
-  return /invalid api key|invalid key|unauthorized|authentication failed|expired token|invalid token|bad credentials/i.test(body);
+  return false;
 }
 
 function extractAIError(status: number, body: string): { userMessage: string; retryAfter?: string; retryable?: boolean; modelRotated?: boolean } {
