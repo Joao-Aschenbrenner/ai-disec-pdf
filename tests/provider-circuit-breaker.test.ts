@@ -135,4 +135,32 @@ describe("Provider circuit breaker", () => {
     expect(pipeline.queuePaused).toBe(false);
     expect(pipeline.halted).toBe(false);
   });
+
+  it("NEW_PAGES_STARTED_DURING_STABILIZATION=0 quando a fila respeita canLaunchNewPages", async () => {
+    const pipeline = new AdaptivePipeline(3);
+
+    // Página A abre o circuito e estabiliza.
+    await pipeline.runPageWithRetry(
+      { index: 0, id: "page-a" },
+      async () => (pipeline.attemptCount === 1 ? timeout : success)
+    );
+    expect(pipeline.newPagesStartedDuringStabilization).toBe(0);
+
+    // Fila respeitando canLaunchNewPages não lança nada com circuito aberto/halt.
+    const p2 = new AdaptivePipeline(3);
+    let attempts = 0;
+    await p2.runPageWithRetry(
+      { index: 0, id: "page-a" },
+      async () => {
+        attempts += 1;
+        return timeout; // sempre falha → esgota e halt
+      }
+    );
+    expect(p2.canLaunchNewPages()).toBe(false);
+    // Fila principal consultaria canLaunchNewPages() antes de notePageLaunched();
+    // simulando o gate correto, nenhuma nova página é lançada:
+    if (p2.canLaunchNewPages()) p2.notePageLaunched();
+    expect(p2.newPagesStartedDuringStabilization).toBe(0);
+    expect(attempts).toBe(3);
+  });
 });

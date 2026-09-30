@@ -51,6 +51,8 @@ export class AdaptivePipeline {
   concurrencyMin: number;
   concurrencyEvents: ConcurrencyEvent[] = [];
   backoffTimeMs = 0;
+  /** Gate de auditoria: páginas NOVAS iniciadas enquanto a fila estava pausada. Deve ser sempre 0. */
+  newPagesStartedDuringStabilization = 0;
 
   private stabilityWaiters: Array<(canContinue: boolean) => void> = [];
 
@@ -76,10 +78,18 @@ export class AdaptivePipeline {
     this.rotationCount = 0;
     this.concurrencyEvents = [];
     this.backoffTimeMs = 0;
+    this.newPagesStartedDuringStabilization = 0;
   }
 
   canLaunchNewPages(): boolean {
     return !this.queuePaused && !this.halted;
+  }
+
+  /** Chame ANTES de tirar uma página da fila e enviá-la ao provider. */
+  notePageLaunched(): void {
+    if (this.queuePaused && !this.halted) {
+      this.newPagesStartedDuringStabilization += 1;
+    }
   }
 
   recordAttempt(): void {

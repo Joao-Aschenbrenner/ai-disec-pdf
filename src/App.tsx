@@ -1220,6 +1220,7 @@ export default function App() {
           pipeline.canLaunchNewPages()
         ) {
           const page = queue.shift()!;
+          pipeline.notePageLaunched();
           setSplitPages(prev => prev.map(p =>
             p.id === page.id
               ? { ...p, status: "processing", processingStage: "extracting", processingProgress: 45 }
@@ -1888,6 +1889,7 @@ export default function App() {
                         const failed = splitPages.filter(p => p.status === "failed");
                         for (const page of failed) {
                           if (!pipelineRef.current.canLaunchNewPages()) break;
+                          pipelineRef.current.notePageLaunched();
                           setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                           const res = await processWithRetry(page);
                           replaceProcessedResult(page.id, res);
@@ -2404,6 +2406,7 @@ export default function App() {
                                   setPipelineHalted(false);
                                   setPipelineHaltReason(null);
                                   syncPipelineState();
+                                  pipelineRef.current.notePageLaunched();
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                                   const res = await processWithRetry(page);
                                   replaceProcessedResult(page.id, res);
@@ -2889,6 +2892,7 @@ export default function App() {
                   setPipelineHalted(false);
                   setPipelineHaltReason(null);
                   syncPipelineState();
+                  pipelineRef.current.notePageLaunched();
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
                   const res = await processWithRetry(page, correctionMsg);

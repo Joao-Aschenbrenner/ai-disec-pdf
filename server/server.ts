@@ -477,7 +477,7 @@ function shouldRotateModel(status: number, body: string, provider?: string): boo
   if ([404, 410, 422].includes(status)) return true;
 
   const hardModelFailure =
-    /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers? for this model|worker.{0,50}limit.{0,20}reached|request limit reached|resourceexhausted|capacity exhausted|explicitly unavailable/i.test(body);
+    /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers?( available)? for (this|the) model|worker.{0,50}limit.{0,20}reached|request limit reached|resourceexhausted|resource exhausted|capacity exhausted|explicitly unavailable/i.test(body);
 
   if (hardModelFailure) return true;
 
@@ -500,7 +500,7 @@ function shouldRotateThrown(error: any): boolean {
   const message = String(error?.message || "");
   // Rotação em erro lançado apenas para indisponibilidade explícita do modelo
   // AbortError/timeout genérico NÃO rotaciona aqui — o frontend retenta no mesmo candidato
-  return /model.{0,30}(unavailable|not found)|no workers? for this model|capacity exhausted|explicitly unavailable/i.test(message);
+  return /model.{0,30}(unavailable|not found)|no workers?( available)? for (this|the) model|resource?( exhausted)?|capacity exhausted|explicitly unavailable/i.test(message);
 }
 
 let serverInstance: any = null;
