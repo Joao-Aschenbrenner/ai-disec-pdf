@@ -583,6 +583,7 @@ export default function App() {
   const [currentConcurrency, setCurrentConcurrency] = useState(3);
   const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
   const [isStabilizing, setIsStabilizing] = useState(false);
+  const [pipelineHalted, setPipelineHalted] = useState(false);
 
   // Sync ref for providerConcurrency function
   useEffect(() => {
@@ -991,6 +992,7 @@ export default function App() {
     setCurrentConcurrency(p.currentConcurrency);
     setConsecutiveSuccesses(p.consecutiveSuccesses);
     setIsStabilizing(p.stabilizing);
+    setPipelineHalted(p.halted);
     setAttemptCount(p.attemptCount);
     setRetryCount(p.retryCount);
     setRotationCount(p.rotationCount);
@@ -1006,6 +1008,7 @@ export default function App() {
       async (p) => processSinglePage(p.id ?? page.id, page, correction),
       async (pageId, _attempt, delayMs) => {
         if (pageId) updatePageStage(pageId, "retrying", 48);
+        syncPipelineState();
         await new Promise(resolve => setTimeout(resolve, delayMs));
         syncPipelineState();
       }
@@ -1164,6 +1167,7 @@ export default function App() {
 
     // Inicializa métricas da execução (pipeline compartilhado + espelho React)
     pipelineRef.current.reset(3);
+    setPipelineHalted(false);
     setFinalSuccessCount(0);
     setFinalErrorCount(0);
     syncPipelineState();
@@ -1189,9 +1193,29 @@ export default function App() {
       const finalPhysical = new Map<string, SplitPage>();
 
       while (queue.length > 0 || activePromises.length > 0) {
-        // Concorrência adaptativa: lê o estado atual do pipeline compartilhado
-        const currentLimit = pipelineRef.current.currentConcurrency;
-        while (queue.length > 0 && activePromises.length < currentLimit) {
+        const pipeline = pipelineRef.current;
+
+        // Circuit breaker: se uma página detectou instabilidade, nenhuma página
+        // NOVA entra no provider até a página atual estabilizar.
+        if (!pipeline.canLaunchNewPages()) {
+          syncPipelineState();
+
+          if (activePromises.length > 0) {
+            await Promise.race(activePromises);
+            continue;
+          }
+
+          // O dono da estabilização esgotou as tentativas. Não vamos transformar
+          // o restante do PDF em uma cascata de erros.
+          break;
+        }
+
+        const currentLimit = pipeline.currentConcurrency;
+        while (
+          queue.length > 0 &&
+          activePromises.length < currentLimit &&
+          pipeline.canLaunchNewPages()
+        ) {
           const page = queue.shift()!;
           setSplitPages(prev => prev.map(p =>
             p.id === page.id
@@ -1204,6 +1228,7 @@ export default function App() {
             const result = await processWithRetry(page);
             replaceProcessedResult(page.id, result);
             finalPhysical.set(page.id, Array.isArray(result) ? result[0] : result);
+            syncPipelineState();
             const idx = activePromises.indexOf(promise);
             if (idx !== -1) activePromises.splice(idx, 1);
           };
@@ -1215,6 +1240,22 @@ export default function App() {
         if (activePromises.length > 0) {
           await Promise.race(activePromises);
         }
+      }
+
+      if (pipelineRef.current.halted && queue.length > 0) {
+        const waitingIds = new Set(queue.map(page => page.id));
+        setSplitPages(prev => prev.map(page =>
+          waitingIds.has(page.id)
+            ? {
+                ...page,
+                status: "pending",
+                processingStage: "waiting",
+                processingProgress: Math.min(page.processingProgress || 0, 44),
+                error: undefined,
+              }
+            : page
+        ));
+        syncPipelineState();
       }
 
       // PASSAGEM 3: reavalia a sequência já com classificationText vindo do VLM.
@@ -1854,14 +1895,19 @@ export default function App() {
                   )}
                 </div>
                 
-                {isProcessing && (
-                  <div className="mt-2 flex items-center gap-3 text-[11px]">
+                {(isProcessing || pipelineHalted) && (
+                  <div className="mt-2 flex items-center gap-3 text-[11px] flex-wrap">
                     <span className="px-2 py-1 bg-indigo-950/50 border border-indigo-800/30 rounded-full text-indigo-300 font-mono">
                       Concorrência: {currentConcurrency}
                     </span>
-                    {isStabilizing && (
+                    {isStabilizing && !pipelineHalted && (
                       <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300 animate-pulse">
-                        Estabilizando provedor...
+                        Fila pausada — estabilizando a página atual...
+                      </span>
+                    )}
+                    {pipelineHalted && (
+                      <span className="px-2 py-1 bg-rose-950/50 border border-rose-800/30 rounded-full text-rose-300">
+                        Fila pausada — provedor não estabilizou. Re-tente para continuar.
                       </span>
                     )}
                     <span className="px-2 py-1 bg-slate-950/50 border border-slate-800/30 rounded-full text-slate-400 font-mono">
