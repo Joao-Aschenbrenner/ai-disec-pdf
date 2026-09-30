@@ -212,10 +212,11 @@ export class AdaptivePipeline {
     onPageRetry?: (pageId: string | undefined, attempt: number, delayMs: number) => void | Promise<void>
   ): Promise<T> {
     let last: T | null = null;
+    const pageKey = page.id ?? `index:${page.index}`;
 
     for (let attempt = 1; attempt <= AUTO_PIPELINE_MAX_ATTEMPTS; attempt++) {
       if (attempt > 1) {
-        const canContinue = await this.waitForCircuit(page.id);
+        const canContinue = await this.waitForCircuit(pageKey);
         if (!canContinue) return last as T;
       }
 
@@ -224,27 +225,27 @@ export class AdaptivePipeline {
       last = result;
 
       if (Array.isArray(result)) {
-        this.recordSuccess(page.id);
+        this.recordSuccess(pageKey);
         return result;
       }
 
       if (result.status !== "failed") {
-        this.recordSuccess(page.id);
+        this.recordSuccess(pageKey);
         return result;
       }
 
       const signal = result as PageFailureSignal;
 
       if (signal.retryable === false) {
-        if (this.queuePaused && this.stabilizingPageId === page.id) {
-          this.haltCircuit(page.id);
+        if (this.queuePaused && this.stabilizingPageId === pageKey) {
+          this.haltCircuit(pageKey);
         }
         return result;
       }
 
       if (attempt === AUTO_PIPELINE_MAX_ATTEMPTS) {
-        if (this.queuePaused && this.stabilizingPageId === page.id) {
-          this.haltCircuit(page.id);
+        if (this.queuePaused && this.stabilizingPageId === pageKey) {
+          this.haltCircuit(pageKey);
         }
         return result;
       }
@@ -252,11 +253,11 @@ export class AdaptivePipeline {
       this.retryCount += 1;
       if (signal.modelRotated) this.rotationCount += 1;
 
-      this.recordFailure(signal, page.id);
+      this.recordFailure(signal, pageKey);
 
       // Se outra página já é a dona da estabilização, esta espera antes de
       // fazer qualquer nova chamada ao provider.
-      const canContinue = await this.waitForCircuit(page.id);
+      const canContinue = await this.waitForCircuit(pageKey);
       if (!canContinue) return result;
 
       const delayMs = this.retryDelayMs(signal, page.index, attempt);
