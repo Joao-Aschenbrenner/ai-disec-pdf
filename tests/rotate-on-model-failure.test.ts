@@ -12,43 +12,11 @@ const savedSettings = fs.existsSync(SETTINGS_FILE)
   ? fs.readFileSync(SETTINGS_FILE, "utf8")
   : null;
 
-interface Scenario {
-  name: string;
-  scenario: string;
-  failNewModel: () => Response;
-  expectStatus: number;
-  expectRotated: boolean;
-}
-
-// Falhas do MODELO devem rotacionar: timeout, resposta vazia e saída sem JSON.
-describe("Erros de modelo DEVEM rotacionar", () => {
+describe("Falhas transitórias só rotacionam após repetição na sessão", () => {
   let originalFetch: typeof globalThis.fetch;
   let testImageBase64 = "";
   const usedModels: string[] = [];
-
-  const scenarios: Array<{
-    scenario: string;
-    newModelBehavior: () => Response;
-    expectedStatus: number;
-  }> = [
-    {
-      scenario: "timeout (AbortError simulado via 504 gateway)",
-      newModelBehavior: () => new Response(JSON.stringify({ error: { message: "upstream timeout" } }), { status: 504, headers: { "Content-Type": "application/json" } }),
-      expectedStatus: 503, // rotação aconteceu → 503 modelRotated
-    },
-    {
-      scenario: "resposta vazia (content vazio)",
-      newModelBehavior: () => new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), { status: 200, headers: { "Content-Type": "application/json" } }),
-      expectedStatus: 503,
-    },
-    {
-      scenario: "saída sem JSON nem texto utilizável",
-      newModelBehavior: () => new Response(JSON.stringify({ choices: [{ message: { content: "curto" } }] }), { status: 200, headers: { "Content-Type": "application/json" } }),
-      expectedStatus: 503,
-    },
-  ];
-
-  let activeScenario = scenarios[0];
+  let behavior: "timeout" | "empty" | "invalid" = "timeout";
 
   beforeAll(async () => {
     originalFetch = globalThis.fetch;
@@ -65,9 +33,11 @@ describe("Erros de modelo DEVEM rotacionar", () => {
     vi.spyOn(globalThis as any, "fetch").mockImplementation(
       (url: string | URL, init?: any) => {
         const urlStr = url.toString();
+
         if (urlStr.includes(`127.0.0.1:${PORT}`) || urlStr.includes(`localhost:${PORT}`)) {
           return originalFetch(url, init);
         }
+
         if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
           return Promise.resolve(new Response(JSON.stringify({
             data: [
@@ -76,11 +46,27 @@ describe("Erros de modelo DEVEM rotacionar", () => {
             ],
           }), { status: 200, headers: { "Content-Type": "application/json" } }));
         }
+
         if (urlStr.includes("integrate.api.nvidia.com/v1/chat/completions")) {
           const body = init?.body ? JSON.parse(init.body) : {};
           usedModels.push(body.model);
-          if (body.model === "fixture-vision-rot-novo") return activeScenario.newModelBehavior();
-          // candidato antigo responde com sucesso válido
+
+          if (body.model === "fixture-vision-rot-novo") {
+            if (behavior === "timeout") {
+              return Promise.resolve(new Response(JSON.stringify({
+                error: { message: "upstream timeout" },
+              }), { status: 504, headers: { "Content-Type": "application/json" } }));
+            }
+            if (behavior === "empty") {
+              return Promise.resolve(new Response(JSON.stringify({
+                choices: [{ message: { content: "" } }],
+              }), { status: 200, headers: { "Content-Type": "application/json" } }));
+            }
+            return Promise.resolve(new Response(JSON.stringify({
+              choices: [{ message: { content: "curto" } }],
+            }), { status: 200, headers: { "Content-Type": "application/json" } }));
+          }
+
           return Promise.resolve(new Response(JSON.stringify({
             choices: [{
               message: {
@@ -95,27 +81,34 @@ describe("Erros de modelo DEVEM rotacionar", () => {
             }],
           }), { status: 200, headers: { "Content-Type": "application/json" } }));
         }
-        return Promise.resolve(new Response(JSON.stringify({}), { status: 500, headers: { "Content-Type": "application/json" } }));
+
+        return Promise.resolve(new Response(JSON.stringify({}), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        }));
       }
     );
+
     await new Promise(resolve => setTimeout(resolve, 100));
   });
 
   afterAll(() => {
     vi.restoreAllMocks();
     stopServer();
-    if (savedSettings !== null) {
-      fs.writeFileSync(SETTINGS_FILE, savedSettings, "utf8");
-    } else if (fs.existsSync(SETTINGS_FILE)) {
-      fs.unlinkSync(SETTINGS_FILE);
-    }
+    if (savedSettings !== null) fs.writeFileSync(SETTINGS_FILE, savedSettings, "utf8");
+    else if (fs.existsSync(SETTINGS_FILE)) fs.unlinkSync(SETTINGS_FILE);
   });
 
-  for (const sc of scenarios) {
-    it(`rotaciona após: ${sc.scenario}`, async () => {
-      activeScenario = sc;
+  for (const scenario of [
+    { key: "timeout" as const, name: "504/timeout" },
+    { key: "empty" as const, name: "resposta vazia" },
+    { key: "invalid" as const, name: "formato incompatível" },
+  ]) {
+    it(`${scenario.name}: 1ª falha mantém modelo; 2ª consecutiva rotaciona`, async () => {
+      behavior = scenario.key;
       usedModels.length = 0;
-      // Refresh por cenário para voltar ao candidato mais recente antes de cada caso.
+
+      await fetch(`${BASE_URL}/api/test/clear-runtime`, { method: "POST" });
       const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -123,29 +116,40 @@ describe("Erros de modelo DEVEM rotacionar", () => {
       });
       expect(refresh.status).toBe(200);
 
-      const res = await fetch(`${BASE_URL}/api/extract`, {
+      const first = await fetch(`${BASE_URL}/api/extract`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
       });
 
-      const body = await res.json();
-      // O primeiro request precisa provar que o candidato falho foi rotacionado.
-      // Um 504/200 silencioso aqui não é sucesso: isso esconderia regressão do runtime.
-      expect(res.status).toBe(sc.expectedStatus);
-      expect(body.modelRotated).toBe(true);
+      expect(first.status).toBe(scenario.key === "timeout" ? 504 : 503);
+      const firstBody = await first.json();
+      expect(firstBody.retryable).toBe(true);
+      expect(firstBody.modelRotated).toBeUndefined();
       expect(usedModels[0]).toBe("fixture-vision-rot-novo");
 
-      // O request seguinte precisa usar o candidato rotacionado e concluir.
-      const retry = await fetch(`${BASE_URL}/api/extract`, {
+      const second = await fetch(`${BASE_URL}/api/extract`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
       });
-      expect(retry.status).toBe(200);
-      const retryBody = await retry.json();
-      expect(retryBody.companyName).toBe("Mock");
-      expect(usedModels[1]).toBe("fixture-vision-rot-antigo");
+
+      expect(second.status).toBe(503);
+      const secondBody = await second.json();
+      expect(secondBody.retryable).toBe(true);
+      expect(secondBody.modelRotated).toBe(true);
+      expect(usedModels[1]).toBe("fixture-vision-rot-novo");
+
+      const third = await fetch(`${BASE_URL}/api/extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
+      });
+
+      expect(third.status).toBe(200);
+      const thirdBody = await third.json();
+      expect(thirdBody.companyName).toBe("Mock");
+      expect(usedModels[2]).toBe("fixture-vision-rot-antigo");
     });
   }
 });
