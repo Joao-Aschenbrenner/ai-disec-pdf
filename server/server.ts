@@ -171,6 +171,45 @@ const MODEL_RUNTIME_FILE = path.join(DATA_DIR, "model-runtime.json");
 const RUNTIME_SESSION_STARTED_AT = Date.now();
 let runtimeModels: Record<string, RuntimeModelState> = {};
 
+type SessionFailureStreak = {
+  timeout: number;
+  invalidOutput: number;
+};
+
+// Histórico persistido serve para score/observabilidade. Decisão de rotação usa
+// somente falhas consecutivas da sessão atual, para não punir um modelo hoje
+// por um timeout ocorrido ontem.
+let sessionFailureStreaks: Record<string, SessionFailureStreak> = {};
+
+function sessionFailureKey(provider: string, model: string): string {
+  return `${provider}::${model}`;
+}
+
+function getSessionFailureStreak(provider: string, model: string): SessionFailureStreak {
+  const key = sessionFailureKey(provider, model);
+  if (!sessionFailureStreaks[key]) {
+    sessionFailureStreaks[key] = { timeout: 0, invalidOutput: 0 };
+  }
+  return sessionFailureStreaks[key];
+}
+
+function noteSessionFailure(
+  provider: string,
+  model: string,
+  kind: keyof SessionFailureStreak
+): number {
+  const streak = getSessionFailureStreak(provider, model);
+  streak[kind] += 1;
+  return streak[kind];
+}
+
+function resetSessionFailures(provider: string, model: string): void {
+  sessionFailureStreaks[sessionFailureKey(provider, model)] = {
+    timeout: 0,
+    invalidOutput: 0,
+  };
+}
+
 try {
   if (fs.existsSync(MODEL_RUNTIME_FILE)) {
     const parsed = JSON.parse(fs.readFileSync(MODEL_RUNTIME_FILE, "utf8"));
@@ -395,7 +434,10 @@ function rotateRuntimeModel(provider: string, reason: string): boolean {
   if (state.telemetry[current]) {
     state.telemetry[current].rotationCount += 1;
   }
+  resetSessionFailures(provider, current);
   state.activeIndex = (state.activeIndex + 1) % state.candidates.length;
+  const nextModel = state.candidates[state.activeIndex];
+  if (nextModel) resetSessionFailures(provider, nextModel);
   runtimeModels[provider] = state;
   saveRuntimeModels();
   console.warn(`[models-runtime] ${provider}: modelo rotacionado após falha; novo candidato #${state.activeIndex + 1}`);
@@ -408,6 +450,7 @@ function recordTelemetry(provider: string, model: string, outcome: "success" | "
   const tel = state.telemetry[model];
   const now = new Date().toISOString();
   if (outcome === "success") {
+    getSessionFailureStreak(provider, model).timeout = 0;
     tel.successCount += 1;
     // Média móvel simples
     tel.avgLatencyMs = tel.successCount === 1 ? latencyMs : Math.round((tel.avgLatencyMs * (tel.successCount - 1) + latencyMs) / tel.successCount);
@@ -423,32 +466,33 @@ function recordTelemetry(provider: string, model: string, outcome: "success" | "
   saveRuntimeModels();
 }
 
+function markCurrentModelSemanticSuccess(provider: string): void {
+  const state = runtimeModels[provider];
+  const current = state?.candidates?.[state.activeIndex];
+  if (current) resetSessionFailures(provider, current);
+}
+
 function shouldRotateModel(status: number, body: string, provider?: string): boolean {
-  // Rotação IMEDIATA apenas para sinais explícitos de indisponibilidade/incompatibilidade do MODELO
+  // Erro explícito de modelo: troca imediatamente.
   if ([404, 410, 422].includes(status)) return true;
-  
-  // Se provider foi passado, verifica se o candidato atual já falhou recentemente com timeout/504
-  if (provider) {
+
+  const hardModelFailure =
+    /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers?( available)? for (this|the) model|worker.{0,50}limit.{0,20}reached|request limit reached|resourceexhausted|resource exhausted|capacity exhausted|explicitly unavailable/i.test(body);
+
+  if (hardModelFailure) return true;
+
+  // 429 é pressão/cota: nunca é motivo para trocar de modelo.
+  if (status === 429) return false;
+
+  // Timeout/5xx genérico só troca após repetição CONSECUTIVA na sessão.
+  if (provider && [408, 502, 503, 504, 529].includes(status)) {
     const state = runtimeModels[provider];
-    if (state) {
-      const current = state.candidates[state.activeIndex];
-      const tel = state.telemetry?.[current];
-      // Se o candidato atual já teve timeout/504 recente (telemetry timeoutCount > 0), rotaciona
-      if (tel && tel.timeoutCount > 0) {
-        return true;
-      }
-      // Also check failures object for HTTP 504/timeout (backward compat)
-      const recentFailure = state.failures[current];
-      if (recentFailure && /time.?out|504|gateway timeout/i.test(recentFailure)) {
-        return true;
-      }
-    }
+    const current = state?.candidates?.[state.activeIndex];
+    if (!current) return false;
+    return getSessionFailureStreak(provider, current).timeout >= 2;
   }
-  
-  // 503/504/529 genéricos NÃO rotacionam no primeiro ocorrência — o frontend fará retry no mesmo candidato
-  // e reduzirá concorrência. Rotação só se o MESMO candidato repetir a falha.
-  // Exceção: esgotamento real de capacidade ("no workers"-class) → rotação imediata.
-  return /model.{0,30}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers? for this model|worker.{0,50}limit.{0,20}reached|request limit reached|resourceexhausted|capacity exhausted|explicitly unavailable/i.test(body);
+
+  return false;
 }
 
 function shouldRotateThrown(error: any): boolean {
@@ -456,7 +500,7 @@ function shouldRotateThrown(error: any): boolean {
   const message = String(error?.message || "");
   // Rotação em erro lançado apenas para indisponibilidade explícita do modelo
   // AbortError/timeout genérico NÃO rotaciona aqui — o frontend retenta no mesmo candidato
-  return /model.{0,30}(unavailable|not found)|no workers? for this model|capacity exhausted|explicitly unavailable/i.test(message);
+  return /model.{0,30}(unavailable|not found)|no workers?( available)? for (this|the) model|resource?( exhausted)?|capacity exhausted|explicitly unavailable/i.test(message);
 }
 
 let serverInstance: any = null;
@@ -514,7 +558,8 @@ function extractAIError(status: number, body: string): { userMessage: string; re
     }
     const msgStr = String(msg);
     // Check for retryable/retryAfter in parsed object (when error is a string but body has extra fields)
-    const explicitRetryable = parsed.retryable === true;
+    const hasExplicitRetryable = typeof parsed.retryable === "boolean";
+    const explicitRetryable = hasExplicitRetryable ? parsed.retryable : undefined;
     const explicitRetryAfter = typeof parsed.retryAfter === "string" ? parsed.retryAfter : undefined;
     
     if (status === 429 || msgStr.includes("quota") || msgStr.includes("rate limit")) {
@@ -532,8 +577,14 @@ function extractAIError(status: number, body: string): { userMessage: string; re
       // 401/403: NÃO retryable, SEM retryAfter, SEM modelRotated
       return { userMessage: "Chave de API inválida ou sem acesso ao modelo. Verifique suas configurações.", retryable: false };
     }
-    // Pass through explicit retryable/retryAfter if present
-    return { userMessage: msgStr.length > 200 ? msgStr.slice(0, 200) + "…" : msgStr, retryable: explicitRetryable, retryAfter: explicitRetryAfter };
+    // Falhas temporárias do provider são retryable por padrão, mesmo quando
+    // a API externa não envia um campo "retryable" explícito.
+    const defaultRetryable = status === 408 || status >= 500;
+    return {
+      userMessage: msgStr.length > 200 ? msgStr.slice(0, 200) + "…" : msgStr,
+      retryable: explicitRetryable ?? defaultRetryable,
+      retryAfter: explicitRetryAfter,
+    };
   } catch {}
   if (status === 429) {
     return { userMessage: "Muitas requisições. Aguarde um momento e tente novamente.", retryAfter: "60s", retryable: true };
@@ -900,19 +951,17 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           const thrownState = runtimeModels[provider];
           const thrownCurrent = thrownState?.candidates?.[thrownState.activeIndex];
           if (isThrownTimeout && thrownCurrent) {
-            // Política "504 repetido → rotaciona": o 1º timeout do candidato só
-            // registra telemetria (o frontend reduz concorrência e retenta no
-            // mesmo modelo); se o MESMO candidato já teve timeout, rotaciona.
-            const hadRecentTimeout = (thrownState.telemetry?.[thrownCurrent]?.timeoutCount ?? 0) > 0;
-            if (hadRecentTimeout && rotateRuntimeModel(provider, "timeout repetido (AbortError)")) {
+            const streak = noteSessionFailure(provider, thrownCurrent, "timeout");
+            recordTelemetry(provider, thrownCurrent, "timeout", 0);
+
+            if (streak >= 2 && rotateRuntimeModel(provider, "timeout consecutivo na sessão (AbortError)")) {
               return res.status(503).json({
-                error: "O modelo automático excedeu o tempo limite repetidamente. Rotacionei para outro candidato compatível e a página será tentada novamente.",
+                error: "O modelo automático excedeu o tempo limite repetidamente. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
                 retryAfter: "1s",
                 modelRotated: true,
                 retryable: true,
               });
             }
-            recordTelemetry(provider, thrownCurrent, "timeout", 0);
           } else if (shouldRotateThrown(aiErr)) {
             rotateRuntimeModel(provider, aiErr instanceof Error ? aiErr.message : String(aiErr));
           }
@@ -923,28 +972,27 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
          const errBody = await aiResponse.text();
          console.error("[AI API Error]:", aiResponse.status, errBody);
          
-         // Check rotation FIRST (before tracking failure) to avoid immediate rotation on first timeout/504
+         const state = runtimeModels[provider];
+         const current = state?.candidates?.[state.activeIndex];
+
+         if (state && current) {
+           state.failures[current] = `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`;
+
+           if ([408, 502, 503, 504, 529].includes(aiResponse.status)) {
+             noteSessionFailure(provider, current, "timeout");
+             recordTelemetry(provider, current, "timeout", 0);
+           }
+         }
+
          if (shouldRotateModel(aiResponse.status, errBody, provider) && rotateRuntimeModel(provider, `HTTP ${aiResponse.status}`)) {
            return res.status(503).json({
-             error: "O modelo automático deste provedor não respondeu corretamente. Rotacionei para outro modelo compatível e a página será tentada novamente.",
+             error: "O modelo automático realmente ficou indisponível ou repetiu a falha. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
              retryAfter: "1s",
              modelRotated: true,
              retryable: true,
            });
          }
-         
-         // Track failure reason for current candidate (only if NOT rotating)
-         // This enables rotation on REPEATED timeout/504 from the same candidate
-         const state = runtimeModels[provider];
-         if (state) {
-           const current = state.candidates[state.activeIndex];
-           state.failures[current] = `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`;
-           // Track timeout/504 in telemetry for rotation logic
-           if (aiResponse.status === 504 || aiResponse.status === 503) {
-             recordTelemetry(provider, current, "timeout", 0);
-           }
-         }
-         
+
          const { userMessage, retryAfter, retryable, modelRotated } = extractAIError(aiResponse.status, errBody);
          return res.status(aiResponse.status).json({ error: userMessage, retryAfter, retryable, modelRotated });
        }
@@ -966,14 +1014,28 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         console.log("[AI OCR] Resposta recebida:", responseText?.substring(0, 200));
 
       if (!responseText) {
-        if (rotateRuntimeModel(provider, "empty-response")) {
+        const invalidState = runtimeModels[provider];
+        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
+        const invalidStreak = invalidModel
+          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
+          : 1;
+
+        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
+
+        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "empty-response-repeated")) {
           return res.status(503).json({
-            error: "O modelo automático retornou uma resposta vazia. Rotacionei para outro candidato compatível e a página será tentada novamente.",
+            error: "O modelo respondeu vazio repetidamente. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
             retryAfter: "1s",
             modelRotated: true,
+            retryable: true,
           });
         }
-        throw new Error("O modelo automático retornou uma resposta vazia. Tente novamente.");
+
+        return res.status(503).json({
+          error: "O modelo respondeu vazio. Vou repetir nesta mesma página e manter a fila pausada antes de considerar troca de modelo.",
+          retryAfter: "1s",
+          retryable: true,
+        });
       }
 
       const cleaned = responseText
@@ -997,6 +1059,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       if (shouldTreatAsClassificationText(trimmed)) {
         await logUpload(originalName, pageIndex, "success", provider, "Resposta sem JSON; texto corrido usado como classificationText (fallback V3)");
         const routedTextData = await applyDocumentRoutingV3({ classificationText: trimmed }, v3Hint);
+        markCurrentModelSemanticSuccess(provider);
         await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", routedTextData);
         return res.json(routedTextData);
       }
@@ -1020,14 +1083,28 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         const jsonEnd = trimmed.lastIndexOf("}");
         if (jsonStart === -1 || jsonEnd === -1) {
           await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
-          if (rotateRuntimeModel(provider, "no-usable-json")) {
-            return res.status(503).json({
-              error: "O modelo automático respondeu em formato incompatível. Rotacionei para outro candidato compatível e a página será tentada novamente.",
-              retryAfter: "1s",
-              modelRotated: true,
-            });
-          }
-          throw new Error("O modelo automático respondeu em formato incompatível. Tente novamente.");
+        const invalidState = runtimeModels[provider];
+        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
+        const invalidStreak = invalidModel
+          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
+          : 1;
+
+        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
+
+        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "no-usable-json-repeated")) {
+          return res.status(503).json({
+            error: "O modelo repetiu a resposta incompatível. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
+            retryAfter: "1s",
+            modelRotated: true,
+            retryable: true,
+          });
+        }
+
+        return res.status(503).json({
+          error: "O modelo respondeu em formato incompatível. Vou repetir nesta mesma página sem avançar a fila.",
+          retryAfter: "1s",
+          retryable: true,
+        });
         }
         jsonStr = trimmed.substring(jsonStart, jsonEnd + 1);
       }
@@ -1057,24 +1134,40 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       }
       if (!parseSucceeded) {
         await logUpload(originalName, pageIndex, "error", provider, `JSON inválido: ${jsonStr.substring(0, 500)}`);
-        if (rotateRuntimeModel(provider, "invalid-json-output")) {
+        const invalidState = runtimeModels[provider];
+        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
+        const invalidStreak = invalidModel
+          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
+          : 1;
+
+        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
+
+        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "invalid-json-output-repeated")) {
           return res.status(503).json({
-            error: "O modelo automático retornou uma resposta incompatível. Rotacionei para outro candidato compatível e a página será tentada novamente.",
+            error: "O modelo repetiu a saída incompatível. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
             retryAfter: "1s",
             modelRotated: true,
+            retryable: true,
           });
         }
-        throw new Error("O modelo automático retornou uma resposta incompatível. Tente novamente.");
+
+        return res.status(503).json({
+          error: "O modelo retornou uma resposta incompatível. Vou repetir nesta mesma página sem avançar a fila.",
+          retryAfter: "1s",
+          retryable: true,
+        });
       }
 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
         const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
+        markCurrentModelSemanticSuccess(provider);
         await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V3)`, routedDocuments);
         return res.json({ _multiple: true, documents: routedDocuments });
       }
 
       const routedData = await applyDocumentRoutingV3(extractedData, v3Hint);
+      markCurrentModelSemanticSuccess(provider);
       await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", routedData);
       return res.json(routedData);
 
@@ -1135,6 +1228,7 @@ app.get("/api/models/runtime/status", (req, res) => {
 if (process.env.NODE_ENV === "test" || process.env.VITEST) {
   app.post("/api/test/clear-runtime", (_req, res) => {
     runtimeModels = {};
+    sessionFailureStreaks = {};
     try {
       if (fs.existsSync(MODEL_RUNTIME_FILE)) fs.unlinkSync(MODEL_RUNTIME_FILE);
     } catch {}

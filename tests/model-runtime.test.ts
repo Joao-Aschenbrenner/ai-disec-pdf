@@ -22,8 +22,9 @@ describe("Runtime model automation", () => {
     expect(server).toContain("activeIndex: 0");
     expect(server).toContain("rotateRuntimeModel(provider");
     expect(server).toContain("shouldRotateModel(aiResponse.status, errBody, provider)");
-    expect(server).toContain('rotateRuntimeModel(provider, "empty-response")');
-    expect(server).toContain('rotateRuntimeModel(provider, "invalid-json-output")');
+    // Resposta vazia/saída incompatível só rotaciona na 2ª ocorrência consecutiva.
+    expect(server).toContain('rotateRuntimeModel(provider, "empty-response-repeated")');
+    expect(server).toContain('rotateRuntimeModel(provider, "invalid-json-output-repeated")');
     expect(server).toContain("modelRotated: true");
   });
 
@@ -60,7 +61,9 @@ describe("Runtime model automation", () => {
     // envia o flag: credenciais (401/403) ficam fora da lista → sem retry.
     expect(app).toContain("[408, 429, 500, 502, 503, 504, 529].includes(response.status)");
     // A política de retry vive no módulo compartilhado (app + benchmark).
-    expect(pipeline).toContain('if (signal.retryable === false) return result;');
+    expect(pipeline).toContain("if (signal.retryable === false) {");
+    // 401/403 param a fila inteira no módulo compartilhado.
+    expect(pipeline).toContain("haltForProviderAuth");
     // A fila reseta o campo entre rodadas.
     expect(app).toContain("retryable: undefined,");
   });

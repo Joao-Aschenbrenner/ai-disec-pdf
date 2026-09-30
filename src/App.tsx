@@ -29,7 +29,8 @@ import {
   HardDrive,
   Zap,
   LogIn,
-  Cloud
+  Cloud,
+  Clock3
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -82,6 +83,7 @@ import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalText";
 import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
 import { AdaptivePipeline } from "./utils/adaptivePipeline";
+import { formatProcessingElapsed } from "./utils/processingTimer";
 import { version as appVersion } from "../package.json";
 
 const AUTO_PIPELINE_CONCURRENCY = 3;
@@ -579,10 +581,19 @@ export default function App() {
   const [finalSuccessCount, setFinalSuccessCount] = useState(0);
   const [finalErrorCount, setFinalErrorCount] = useState(0);
 
+  // Cronômetro total do processamento ativo do PDF atual.
+  // Pausa quando o pipeline para aguardando ação do usuário e retoma nos retries.
+  const [processingElapsedMs, setProcessingElapsedMs] = useState(0);
+  const [processingTimerRunning, setProcessingTimerRunning] = useState(false);
+  const processingTimerStartedAtRef = useRef<number | null>(null);
+  const processingTimerAccumulatedMsRef = useRef(0);
+
   // Concorrência adaptativa
   const [currentConcurrency, setCurrentConcurrency] = useState(3);
   const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
   const [isStabilizing, setIsStabilizing] = useState(false);
+  const [pipelineHalted, setPipelineHalted] = useState(false);
+  const [pipelineHaltReason, setPipelineHaltReason] = useState<"provider-unstable" | "provider-auth" | null>(null);
 
   // Sync ref for providerConcurrency function
   useEffect(() => {
@@ -622,6 +633,48 @@ export default function App() {
     }));
     return () => cleanups.forEach((fn) => fn());
   }, []);
+
+  const startProcessingTimer = (reset = false) => {
+    if (reset) {
+      processingTimerAccumulatedMsRef.current = 0;
+      setProcessingElapsedMs(0);
+    }
+    if (processingTimerStartedAtRef.current === null) {
+      processingTimerStartedAtRef.current = Date.now();
+      setProcessingTimerRunning(true);
+    }
+  };
+
+  const stopProcessingTimer = () => {
+    const startedAt = processingTimerStartedAtRef.current;
+    if (startedAt !== null) {
+      processingTimerAccumulatedMsRef.current += Date.now() - startedAt;
+      processingTimerStartedAtRef.current = null;
+      setProcessingElapsedMs(processingTimerAccumulatedMsRef.current);
+    }
+    setProcessingTimerRunning(false);
+  };
+
+  const resetProcessingTimer = () => {
+    processingTimerStartedAtRef.current = null;
+    processingTimerAccumulatedMsRef.current = 0;
+    setProcessingElapsedMs(0);
+    setProcessingTimerRunning(false);
+  };
+
+  useEffect(() => {
+    if (!processingTimerRunning) return;
+    const refresh = () => {
+      const startedAt = processingTimerStartedAtRef.current;
+      if (startedAt === null) return;
+      setProcessingElapsedMs(
+        processingTimerAccumulatedMsRef.current + (Date.now() - startedAt)
+      );
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 250);
+    return () => window.clearInterval(interval);
+  }, [processingTimerRunning]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blobUrlsRef = useRef<string[]>([]);
@@ -675,6 +728,7 @@ export default function App() {
   // Load PDF and split pages in the browser
   const selectPdfFile = async (file: File) => {
     revokeAllBlobUrls();
+    resetProcessingTimer();
     setSelectedFile(file);
     setIsSplitting(true);
     setSplitPages([]);
@@ -991,6 +1045,8 @@ export default function App() {
     setCurrentConcurrency(p.currentConcurrency);
     setConsecutiveSuccesses(p.consecutiveSuccesses);
     setIsStabilizing(p.stabilizing);
+    setPipelineHalted(p.halted);
+    setPipelineHaltReason(p.haltReason);
     setAttemptCount(p.attemptCount);
     setRetryCount(p.retryCount);
     setRotationCount(p.rotationCount);
@@ -1006,6 +1062,7 @@ export default function App() {
       async (p) => processSinglePage(p.id ?? page.id, page, correction),
       async (pageId, _attempt, delayMs) => {
         if (pageId) updatePageStage(pageId, "retrying", 48);
+        syncPipelineState();
         await new Promise(resolve => setTimeout(resolve, delayMs));
         syncPipelineState();
       }
@@ -1164,10 +1221,13 @@ export default function App() {
 
     // Inicializa métricas da execução (pipeline compartilhado + espelho React)
     pipelineRef.current.reset(3);
+    setPipelineHalted(false);
+    setPipelineHaltReason(null);
     setFinalSuccessCount(0);
     setFinalErrorCount(0);
     syncPipelineState();
 
+    startProcessingTimer(true);
     setIsProcessing(true);
     window.electronAPI?.startProcessing();
 
@@ -1189,10 +1249,31 @@ export default function App() {
       const finalPhysical = new Map<string, SplitPage>();
 
       while (queue.length > 0 || activePromises.length > 0) {
-        // Concorrência adaptativa: lê o estado atual do pipeline compartilhado
-        const currentLimit = pipelineRef.current.currentConcurrency;
-        while (queue.length > 0 && activePromises.length < currentLimit) {
+        const pipeline = pipelineRef.current;
+
+        // Circuit breaker: se uma página detectou instabilidade, nenhuma página
+        // NOVA entra no provider até a página atual estabilizar.
+        if (!pipeline.canLaunchNewPages()) {
+          syncPipelineState();
+
+          if (activePromises.length > 0) {
+            await Promise.race(activePromises);
+            continue;
+          }
+
+          // O dono da estabilização esgotou as tentativas. Não vamos transformar
+          // o restante do PDF em uma cascata de erros.
+          break;
+        }
+
+        const currentLimit = pipeline.currentConcurrency;
+        while (
+          queue.length > 0 &&
+          activePromises.length < currentLimit &&
+          pipeline.canLaunchNewPages()
+        ) {
           const page = queue.shift()!;
+          pipeline.notePageLaunched();
           setSplitPages(prev => prev.map(p =>
             p.id === page.id
               ? { ...p, status: "processing", processingStage: "extracting", processingProgress: 45 }
@@ -1204,6 +1285,7 @@ export default function App() {
             const result = await processWithRetry(page);
             replaceProcessedResult(page.id, result);
             finalPhysical.set(page.id, Array.isArray(result) ? result[0] : result);
+            syncPipelineState();
             const idx = activePromises.indexOf(promise);
             if (idx !== -1) activePromises.splice(idx, 1);
           };
@@ -1215,6 +1297,22 @@ export default function App() {
         if (activePromises.length > 0) {
           await Promise.race(activePromises);
         }
+      }
+
+      if (pipelineRef.current.halted && queue.length > 0) {
+        const waitingIds = new Set(queue.map(page => page.id));
+        setSplitPages(prev => prev.map(page =>
+          waitingIds.has(page.id)
+            ? {
+                ...page,
+                status: "pending",
+                processingStage: "waiting",
+                processingProgress: Math.min(page.processingProgress || 0, 44),
+                error: undefined,
+              }
+            : page
+        ));
+        syncPipelineState();
       }
 
       // PASSAGEM 3: reavalia a sequência já com classificationText vindo do VLM.
@@ -1318,7 +1416,8 @@ export default function App() {
       const failed = finalPages.filter(p => p.status === "failed").length;
       setFinalSuccessCount(success);
       setFinalErrorCount(failed);
-      
+
+      stopProcessingTimer();
       setIsProcessing(false);
       window.electronAPI?.endProcessing();
     }
@@ -1327,6 +1426,7 @@ export default function App() {
   // Clear / Reset App
   const resetApp = () => {
     revokeAllBlobUrls();
+    resetProcessingTimer();
     setSelectedFile(null);
     setSplitPages([]);
     setActivePreviewUrl(null);
@@ -1835,16 +1935,29 @@ export default function App() {
                   {failedCount > 0 && !isProcessing && (
                     <button
                       onClick={async () => {
+                        pipelineRef.current.reset(1);
+                        setPipelineHalted(false);
+                        setPipelineHaltReason(null);
+                        syncPipelineState();
+                        startProcessingTimer(false);
                         setIsProcessing(true);
                         window.electronAPI?.startProcessing();
-                        const failed = splitPages.filter(p => p.status === "failed");
-                        for (const page of failed) {
-                          setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
-                          const res = await processSinglePage(page.id, page);
-                          replaceProcessedResult(page.id, res);
+                        try {
+                          const failed = splitPages.filter(p => p.status === "failed");
+                          for (const page of failed) {
+                            if (!pipelineRef.current.canLaunchNewPages()) break;
+                            pipelineRef.current.notePageLaunched();
+                            setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
+                            const res = await processWithRetry(page);
+                            replaceProcessedResult(page.id, res);
+                            syncPipelineState();
+                            if (pipelineRef.current.halted) break;
+                          }
+                        } finally {
+                          stopProcessingTimer();
+                          setIsProcessing(false);
+                          window.electronAPI?.endProcessing();
                         }
-                        setIsProcessing(false);
-                        window.electronAPI?.endProcessing();
                       }}
                       className="py-3 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition-all shadow-lg active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
                     >
@@ -1854,14 +1967,25 @@ export default function App() {
                   )}
                 </div>
                 
-                {isProcessing && (
-                  <div className="mt-2 flex items-center gap-3 text-[11px]">
+                {(isProcessing || pipelineHalted || processingElapsedMs > 0) && (
+                  <div className="mt-2 flex items-center gap-3 text-[11px] flex-wrap">
                     <span className="px-2 py-1 bg-indigo-950/50 border border-indigo-800/30 rounded-full text-indigo-300 font-mono">
                       Concorrência: {currentConcurrency}
                     </span>
-                    {isStabilizing && (
+                    <span className="px-2 py-1 bg-slate-950/60 border border-slate-700/50 rounded-full text-slate-200 font-mono flex items-center gap-1.5">
+                      <Clock3 className="w-3.5 h-3.5 text-cyan-400" />
+                      Tempo total: {formatProcessingElapsed(processingElapsedMs)}
+                    </span>
+                    {isStabilizing && !pipelineHalted && (
                       <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300 animate-pulse">
-                        Estabilizando provedor...
+                        Fila pausada — estabilizando a página atual...
+                      </span>
+                    )}
+                    {pipelineHalted && (
+                      <span className="px-2 py-1 bg-rose-950/50 border border-rose-800/30 rounded-full text-rose-300">
+                        {pipelineHaltReason === "provider-auth"
+                          ? "Fila pausada — verifique a chave/permissão do provedor."
+                          : "Fila pausada — provedor não estabilizou. Re-tente para continuar."}
                       </span>
                     )}
                     <span className="px-2 py-1 bg-slate-950/50 border border-slate-800/30 rounded-full text-slate-400 font-mono">
@@ -2342,9 +2466,20 @@ export default function App() {
                               </div>
                               <button
                                 onClick={async () => {
+                                  pipelineRef.current.reset(1);
+                                  setPipelineHalted(false);
+                                  setPipelineHaltReason(null);
+                                  syncPipelineState();
+                                  startProcessingTimer(false);
+                                  pipelineRef.current.notePageLaunched();
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
-                                  const res = await processSinglePage(page.id, page);
-                                  replaceProcessedResult(page.id, res);
+                                  try {
+                                    const res = await processWithRetry(page);
+                                    replaceProcessedResult(page.id, res);
+                                    syncPipelineState();
+                                  } finally {
+                                    stopProcessingTimer();
+                                  }
                                 }}
                                 className="px-3 py-1 bg-rose-900 hover:bg-rose-800 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                               >
@@ -2822,10 +2957,21 @@ export default function App() {
                   setShowCorrection(false);
                   const page = splitPages.find(p => p.id === correctionPageId);
                   if (!page) return;
+                  pipelineRef.current.reset(1);
+                  setPipelineHalted(false);
+                  setPipelineHaltReason(null);
+                  syncPipelineState();
+                  startProcessingTimer(false);
+                  pipelineRef.current.notePageLaunched();
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
-                  const res = await processSinglePage(page.id, page, correctionMsg);
-                  replaceProcessedResult(correctionPageId, res);
+                  try {
+                    const res = await processWithRetry(page, correctionMsg);
+                    replaceProcessedResult(correctionPageId, res);
+                    syncPipelineState();
+                  } finally {
+                    stopProcessingTimer();
+                  }
                 }}
                 className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-all cursor-pointer"
               >

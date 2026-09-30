@@ -20,7 +20,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 
 const API_URL = "http://127.0.0.1:3001";
-const PDF_PATH = path.join(ROOT, "benchmark-9pages.pdf");
+// PDF real de entrada: 1º argumento CLI ou fallback benchmark-9pages.pdf.
+// Path.resolve sem escopo explícito pode atravessar fora da árvore do repo;
+// limito a raiz do projeto (o PDF de entrada vivo fora da árvore, então
+// apenas normalizo — arquivo é lido, nunca executado).
+const DEFAULT_PDF = path.join(ROOT, "benchmark-9pages.pdf");
+const requestedPdf = process.argv[2] ? path.resolve(process.argv[2]) : path.resolve(DEFAULT_PDF);
+const PDF_PATH = requestedPdf;
+// Limite opcional de páginas para smoke (2º argumento). 0 = todas.
+const PAGE_LIMIT = Number(process.argv[3] || "0");
 
 interface PageResult {
   pageIndex: number;
@@ -35,7 +43,8 @@ interface PageResult {
 }
 
 async function main() {
-  console.log("=== BENCHMARK ADAPTIVO — 9 páginas (mecanismo real do app) ===\n");
+  const pdfName = path.basename(PDF_PATH);
+  console.log(`=== BENCHMARK ADAPTIVO — ${pdfName} (mecanismo real do app) ===\n`);
 
   // 0. Health: Laya obrigatório
   const healthStart = Date.now();
@@ -46,29 +55,29 @@ async function main() {
     console.error("FATAL: Laya não está saudável. Inicie o Laya antes do benchmark.");
     process.exit(2);
   }
-  console.log(`[health] Laya OK (${layaTime}ms) | provider: ${health?.provider ?? "n/a"}`);
+  console.log(`[health] Laya OK (${layaTime}ms)`);
 
-  // 1. RENDER: converte as 9 páginas reais para JPEG (mesmo formato que o app
+  // 1. RENDER: converte as páginas reais para JPEG (mesmo formato que o app
   // envia ao server) — PNG intermediário é reduzido via sharp para cortar memória.
-  const wallStart = Date.now(); // TOTAL_TIME = ponta a ponta (render → sequência final)
+  const wallStart = Date.now(); // TOTAL_TIME = ponta a ponta
   const renderStart = Date.now();
   const pdfBuffer = fs.readFileSync(PDF_PATH);
   const pngPages = await pdfBufferToPngBase64(pdfBuffer);
   const sharp = (await import("sharp")).default;
+  const totalRealPages = pngPages.length;
+  const wanted = PAGE_LIMIT > 0 ? Math.min(PAGE_LIMIT, totalRealPages) : totalRealPages;
+  const pngSlice = pngPages.slice(0, wanted);
+  pngPages.length = 0;
   const pageImages = new Map<number, string>();
-  for (let i = 0; i < pngPages.length; i++) {
-    const jpeg = await sharp(Buffer.from(pngPages[i], "base64"))
+  for (let i = 0; i < pngSlice.length; i++) {
+    const jpeg = await sharp(Buffer.from(pngSlice[i], "base64"))
       .jpeg({ quality: 95 })
       .toBuffer();
     pageImages.set(i, jpeg.toString("base64"));
+    pngSlice[i] = ""; // libera cedo
   }
-  pngPages.length = 0; // libera os PNGs grandes
   const renderTime = Date.now() - renderStart;
-  console.log(`[render] ${pageImages.size} páginas convertidas (JPEG) em ${renderTime}ms`);
-  if (pageImages.size !== 9) {
-    console.error(`FATAL: esperado 9 páginas, obtido ${pageImages.size}.`);
-    process.exit(2);
-  }
+  console.log(`[render] ${pageImages.size}/${totalRealPages} páginas convertidas (JPEG) em ${renderTime}ms`);
 
   // 2. LOCAL TEXT: passagem 1A (extração de texto embutido, igual ao App).
   // O benchmark não tem o PDF fatiado por página em texto; o ground truth
@@ -108,13 +117,15 @@ async function main() {
     }
   }
 
-  // 4. Fila de visão com a CLASSE COMPARTILHADA (mesmo mecanismo do Electron)
+  // 4. Fila de visão com a CLASSE COMPARTILHADA (mesmo mecanismo do Electron).
+  // Mesmo circuit breaker do app: canLaunchNewPages + notePageLaunched.
   const pipeline = new AdaptivePipeline(3);
-  const queue = [...pageImages.keys()].sort((a, b) => a - b).map(i => ({ index: i }));
+  const queue = [...pageImages.keys()].sort((a, b) => a - b).map(i => ({ index: i, id: `index:${i}` }));
   const activePromises: Promise<void>[] = [];
   const results: PageResult[] = [];
   const attemptTracker = new Map<number, number>();
   const concurrencyTimeline: Array<{ t: number; c: number }> = [{ t: 0, c: pipeline.currentConcurrency }];
+  let pausedLog = false;
 
   const queueStart = Date.now();
 
@@ -124,8 +135,23 @@ async function main() {
       concurrencyTimeline.push({ t: Date.now() - queueStart, c: pipeline.currentConcurrency });
       console.log(`[concurrency] t+${concurrencyTimeline[concurrencyTimeline.length - 1].t}ms → ${pipeline.currentConcurrency}`);
     }
-    while (queue.length > 0 && activePromises.length < currentLimit) {
+    // Espelha a UI: quando pausado, nenhuma página nova é iniciada.
+    if (!pipeline.canLaunchNewPages()) {
+      if (!pausedLog) {
+        pausedLog = true;
+        console.log(`[queue] Fila pausada — estabilizando a página atual... (concurrency=${pipeline.currentConcurrency}, owner=${pipeline.stabilizingPageId ?? "-"})`);
+      }
+      if (activePromises.length > 0) {
+        await Promise.race(activePromises);
+        continue;
+      }
+      console.log("[queue] Fila pausada — provedor não estabilizou. Re-tente para continuar.");
+      break;
+    }
+    pausedLog = false;
+    while (queue.length > 0 && activePromises.length < currentLimit && pipeline.canLaunchNewPages()) {
       const page = queue.shift()!;
+      pipeline.notePageLaunched();
       attemptTracker.set(page.index, 0);
 
       const processOnce = async (p: { index: number }, _attempt: number) => {
@@ -259,13 +285,16 @@ async function main() {
     console.log(`  Page ${r.pageIndex + 1}: ${mark} attempts=${r.attempts ?? "?"}${r.statusCode ? ` http=${r.statusCode}` : ""}${r.documentClass ? ` class=${r.documentClass}` : ""}${r.error ? ` (${r.error.substring(0, 80)})` : ""}`);
   }
 
-  console.log(`\nPHYSICAL_PAGES=9`);
+  console.log(`\nPHYSICAL_PAGES=${pageImages.size + queue.length > 0 ? (results.length + queue.length + activePromises.length) : 9}`);
+  console.log(`TOTAL_PAGES_IN_PDF=${totalRealPages}`);
   console.log(`TOTAL_TIME=${(totalTime / 1000).toFixed(2)}`);
   console.log(`ATTEMPT_COUNT=${pipeline.attemptCount}`);
   console.log(`RETRY_COUNT=${pipeline.retryCount}`);
   console.log(`ROTATION_COUNT=${pipeline.rotationCount}`);
   console.log(`FINAL_SUCCESS_COUNT=${successCount}`);
   console.log(`FINAL_ERROR_COUNT=${errorCount}`);
+  console.log(`NEW_PAGES_STARTED_DURING_STABILIZATION=${pipeline.newPagesStartedDuringStabilization}`);
+  console.log(`PIPELINE_HALTED=${pipeline.halted}`);
   console.log(`CONCURRENCY_START=${pipeline.concurrencyStart}`);
   console.log(`CONCURRENCY_MIN=${concurrencyMinSeen}`);
   console.log(`CONCURRENCY_END=${concurrencyEnd}`);
@@ -306,14 +335,18 @@ async function main() {
   fs.writeFileSync(
     path.join(ROOT, "benchmark-adaptive-result.json"),
     JSON.stringify({
-      timestamp: new Date().toISOString(),
-      physicalPages: 9,
+      source: pdfName,
+      totalRealPages,
+      physicalPages: results.length,
       totalTimeSec: Number((totalTime / 1000).toFixed(2)),
       attemptCount: pipeline.attemptCount,
       retryCount: pipeline.retryCount,
       rotationCount: pipeline.rotationCount,
       finalSuccessCount: successCount,
       finalErrorCount: errorCount,
+      newPagesStartedDuringStabilization: pipeline.newPagesStartedDuringStabilization,
+      pipelineHalted: pipeline.halted,
+      haltReason: pipeline.haltReason ?? null,
       concurrencyStart: pipeline.concurrencyStart,
       concurrencyMin: concurrencyMinSeen,
       concurrencyEnd,
