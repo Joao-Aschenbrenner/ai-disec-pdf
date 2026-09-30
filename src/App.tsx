@@ -1876,13 +1876,19 @@ export default function App() {
                   {failedCount > 0 && !isProcessing && (
                     <button
                       onClick={async () => {
+                        pipelineRef.current.reset(1);
+                        setPipelineHalted(false);
+                        syncPipelineState();
                         setIsProcessing(true);
                         window.electronAPI?.startProcessing();
                         const failed = splitPages.filter(p => p.status === "failed");
                         for (const page of failed) {
+                          if (!pipelineRef.current.canLaunchNewPages()) break;
                           setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
-                          const res = await processSinglePage(page.id, page);
+                          const res = await processWithRetry(page);
                           replaceProcessedResult(page.id, res);
+                          syncPipelineState();
+                          if (pipelineRef.current.halted) break;
                         }
                         setIsProcessing(false);
                         window.electronAPI?.endProcessing();
@@ -2388,9 +2394,13 @@ export default function App() {
                               </div>
                               <button
                                 onClick={async () => {
+                                  pipelineRef.current.reset(1);
+                                  setPipelineHalted(false);
+                                  syncPipelineState();
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
-                                  const res = await processSinglePage(page.id, page);
+                                  const res = await processWithRetry(page);
                                   replaceProcessedResult(page.id, res);
+                                  syncPipelineState();
                                 }}
                                 className="px-3 py-1 bg-rose-900 hover:bg-rose-800 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                               >
@@ -2868,10 +2878,14 @@ export default function App() {
                   setShowCorrection(false);
                   const page = splitPages.find(p => p.id === correctionPageId);
                   if (!page) return;
+                  pipelineRef.current.reset(1);
+                  setPipelineHalted(false);
+                  syncPipelineState();
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";
-                  const res = await processSinglePage(page.id, page, correctionMsg);
+                  const res = await processWithRetry(page, correctionMsg);
                   replaceProcessedResult(correctionPageId, res);
+                  syncPipelineState();
                 }}
                 className="flex-1 px-4 py-2.5 text-sm font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition-all cursor-pointer"
               >
