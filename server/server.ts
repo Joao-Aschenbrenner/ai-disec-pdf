@@ -558,7 +558,8 @@ function extractAIError(status: number, body: string): { userMessage: string; re
     }
     const msgStr = String(msg);
     // Check for retryable/retryAfter in parsed object (when error is a string but body has extra fields)
-    const explicitRetryable = parsed.retryable === true;
+    const hasExplicitRetryable = typeof parsed.retryable === "boolean";
+    const explicitRetryable = hasExplicitRetryable ? parsed.retryable : undefined;
     const explicitRetryAfter = typeof parsed.retryAfter === "string" ? parsed.retryAfter : undefined;
     
     if (status === 429 || msgStr.includes("quota") || msgStr.includes("rate limit")) {
@@ -576,8 +577,14 @@ function extractAIError(status: number, body: string): { userMessage: string; re
       // 401/403: NÃO retryable, SEM retryAfter, SEM modelRotated
       return { userMessage: "Chave de API inválida ou sem acesso ao modelo. Verifique suas configurações.", retryable: false };
     }
-    // Pass through explicit retryable/retryAfter if present
-    return { userMessage: msgStr.length > 200 ? msgStr.slice(0, 200) + "…" : msgStr, retryable: explicitRetryable, retryAfter: explicitRetryAfter };
+    // Falhas temporárias do provider são retryable por padrão, mesmo quando
+    // a API externa não envia um campo "retryable" explícito.
+    const defaultRetryable = status === 408 || status >= 500;
+    return {
+      userMessage: msgStr.length > 200 ? msgStr.slice(0, 200) + "…" : msgStr,
+      retryable: explicitRetryable ?? defaultRetryable,
+      retryAfter: explicitRetryAfter,
+    };
   } catch {}
   if (status === 429) {
     return { userMessage: "Muitas requisições. Aguarde um momento e tente novamente.", retryAfter: "60s", retryable: true };
