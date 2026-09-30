@@ -730,8 +730,14 @@ function buildModelFailoverResponse(
 }
 
 function shouldExhaustiveFailover(status: number, body: string): boolean {
-  if ([404, 408, 410, 422, 500, 502, 503, 504, 529].includes(status)) return true;
-  return /model.{0,40}(not found|unavailable|retired|deprecated|unsupported)|does not support image|not support image input|no workers?|resource.?exhausted|capacity|overloaded|gateway timeout|time.?out|timed out/i.test(body);
+  if ([403, 404, 408, 410, 422, 500, 502, 503, 504, 529].includes(status)) return true;
+  return /model.{0,40}(not found|unavailable|retired|deprecated|unsupported|invalid|forbidden|access denied)|invalid.{0,20}model|does not support image|not support image input|no workers?|resource.?exhausted|capacity|overloaded|gateway timeout|time.?out|timed out/i.test(body);
+}
+
+function isDefinitiveCredentialError(status: number, body: string): boolean {
+  if (status === 401) return true;
+  if (status !== 403) return false;
+  return /invalid api key|invalid key|unauthorized|authentication failed|expired token|invalid token|bad credentials/i.test(body);
 }
 
 function extractAIError(status: number, body: string): { userMessage: string; retryAfter?: string; retryable?: boolean; modelRotated?: boolean } {
@@ -887,8 +893,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const providerSetting = (settings.provider || "NVIDIA").toUpperCase();
       // LOCAL_OLLAMA e CODEX (com OAuth) não precisam de apiKey das settings
       if (!apiKey && providerSetting !== "LOCAL_OLLAMA" && providerSetting !== "CODEX") {
-        return res.status(500).json({
-          error: "Nenhuma chave de API configurada. Vá em Configurações e adicione sua chave."
+        return res.status(401).json({
+          error: "Nenhuma chave de API configurada. Vá em Configurações e adicione sua chave.",
+          retryable: false,
+          providerAuthError: true,
         });
       }
 
@@ -1140,7 +1148,15 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           const isCredentialProblem =
             /api key|unauthorized|forbidden|permission|login .*necess/i.test(message);
 
-          if (!isCredentialProblem && requestModel) {
+          if (isCredentialProblem) {
+            return res.status(401).json({
+              error: "Chave/token ausente ou inválido para este provedor. Verifique as Configurações.",
+              retryable: false,
+              providerAuthError: true,
+            });
+          }
+
+          if (requestModel) {
             recordTelemetry(provider, requestModel, /abort|time.?out/i.test(message) ? "timeout" : "failure", 0);
             const failover = buildModelFailoverResponse(
               provider,
@@ -1160,8 +1176,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
          const parsedError = extractAIError(aiResponse.status, errBody);
 
-         // Chave/permissão é global ao provider: trocar modelo não resolve.
-         if (aiResponse.status === 401 || aiResponse.status === 403) {
+         // 401 e 403 com evidência explícita de credencial inválida são globais:
+         // trocar modelo não resolve. Já um 403 de acesso a MODELO entra no sweep.
+         if (isDefinitiveCredentialError(aiResponse.status, errBody)) {
            return res.status(aiResponse.status).json({
              error: parsedError.userMessage,
              retryable: false,
