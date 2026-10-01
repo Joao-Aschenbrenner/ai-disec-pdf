@@ -405,7 +405,19 @@ function catalogCandidates(provider: string): string[] {
   return Array.from(new Set(ordered.filter(Boolean)));
 }
 
+/**
+ * Modelos que podem aceitar imagem mas NÃO são modelos generativos de chat.
+ * Eles nunca devem entrar no sweep de classificação/extracao.
+ */
+function modelIsObviouslyNonGenerative(model: string): boolean {
+  const lower = model.toLowerCase();
+  return /(?:^|[\/_-])(embed|embedding|retriever|retrieval|rerank|reranker)(?:[\/_-]|$)/i.test(lower)
+    || /(?:^|[\/_-])(clip|siglip)(?:[\/_-]|$)/i.test(lower);
+}
+
 function modelLooksCompatible(provider: string, model: string): boolean {
+  if (modelIsObviouslyNonGenerative(model)) return false;
+
   const entry = loadModelsCatalog().providers[provider];
   if (!entry) return true;
   if (entry.ocrOnly) return true;
@@ -532,6 +544,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
 
     rows = rows.filter(row =>
       row.id &&
+      !modelIsObviouslyNonGenerative(row.id) &&
       (row.hasModalityMetadata ? row.explicitVision : modelLooksCompatible(provider, row.id))
     );
     // Mais recente primeiro; empate de created (alguns providers devolvem o
