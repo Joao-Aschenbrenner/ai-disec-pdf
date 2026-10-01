@@ -87,6 +87,15 @@ describe("Classification V3 wiring", () => {
     expect(app.match(/runPageWithRetry\(/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("render e fetch têm watchdog: hang não pode congelar o dono do circuito", () => {
+    const app = read("src/App.tsx");
+    // Render preso (pdf.js girando em CPU) travava o retry do dono da
+    // estabilização e congelava a fila inteira. O watchdog converte hang em
+    // falha retryable e o loop segue a lista de modelos.
+    expect(app).toContain("Render da página excedeu 60s (watchdog do pipeline).");
+    expect(app).toContain("AbortSignal.timeout(150_000)");
+  });
+
   it("Electron não desacelera o processamento em background", () => {
     const main = read("electron/main.cjs");
     expect(main).toContain("backgroundThrottling: false");

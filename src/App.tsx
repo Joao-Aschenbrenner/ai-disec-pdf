@@ -840,6 +840,9 @@ export default function App() {
     const response = await fetch("/api/extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // Watchdog de rede: o provider tem timeout próprio (75-120s) no server;
+      // 150s aqui cobre fila do server + provider e impede fetch eterno.
+      signal: AbortSignal.timeout(150_000),
       body: JSON.stringify({
         pdfBase64: imageBase64,
         originalName: page.originalFileName,
@@ -975,7 +978,27 @@ export default function App() {
         page.segmentIndex === undefined
           ? "fast"
           : "detail";
-      const imageBase64 = await pdfBase64ToJpeg(page.base64, { mode: visualMode });
+      // Watchdog: render preso (pdf.js girando em CPU) não pode congelar o
+      // pipeline — o dono do circuito travaria a fila inteira para sempre.
+      // 60s é folgado: render normal leva 2-5s. Timeout vira falha retryable
+      // e o loop de retry do pipeline segue a lista de modelos normalmente.
+      const renderWithWatchdog = async (): Promise<string> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            pdfBase64ToJpeg(page.base64, { mode: visualMode }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error("Render da página excedeu 60s (watchdog do pipeline).")),
+                60_000
+              );
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
+      const imageBase64 = await renderWithWatchdog();
 
       // V3: se a primeira/segunda passagem já indicou holerite, detecta layout ANTES
       // de mandar a página física inteira ao VLM.
