@@ -123,6 +123,16 @@ describe("Classification V3 wiring", () => {
     expect(pipeline).toContain("localFailure?: boolean");
   });
 
+  it("primário dinâmico por latência da sessão (modelo funcional mais rápido primeiro)", () => {
+    const server = read("server/server.ts");
+    // Otimização: o primário de novas páginas é escolhido pela telemetria real
+    // (score = latência média / taxa de sucesso; >= 2 sucessos e >= 50%).
+    expect(server).toContain("function refreshActiveIndexByLatency");
+    expect(server).toContain("t.successCount < 2) return null");
+    expect(server).toContain("rate < 0.5) return null");
+    expect(server).toContain("refreshActiveIndexByLatency(provider)");
+  });
+
   it("Electron não desacelera o processamento em background", () => {
     const main = read("electron/main.cjs");
     expect(main).toContain("backgroundThrottling: false");

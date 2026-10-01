@@ -712,6 +712,40 @@ function recordTelemetry(provider: string, model: string, outcome: "success" | "
   }
   runtimeModels[provider] = state;
   saveRuntimeModels();
+  if (outcome === "success") refreshActiveIndexByLatency(provider);
+}
+
+/**
+ * Otimização de velocidade: o primário (primeiro candidato usado por toda
+ * página NOVA) passa a ser o modelo funcional MAIS RÁPIDO da sessão, medido
+ * pela telemetria real. Score = latência média / taxa de sucesso; só modelos
+ * com >= 2 sucessos e >= 50% de sucesso concorrem. Sem telemetria, nada muda
+ * (a ordem do refresh — created desc + curado — continua valendo).
+ */
+function refreshActiveIndexByLatency(provider: string): void {
+  const state = runtimeModels[provider];
+  if (!state || state.candidates.length < 2) return;
+  const score = (model: string): number | null => {
+    const t = state.telemetry[model];
+    if (!t || t.successCount < 2) return null;
+    const attempts = t.successCount + t.failureCount + t.timeoutCount;
+    const rate = t.successCount / Math.max(1, attempts);
+    if (rate < 0.5) return null;
+    return t.avgLatencyMs / rate;
+  };
+  let bestIndex = -1;
+  let bestScore = Infinity;
+  state.candidates.forEach((model, i) => {
+    const s = score(model);
+    if (s !== null && s < bestScore) {
+      bestScore = s;
+      bestIndex = i;
+    }
+  });
+  if (bestIndex >= 0 && bestIndex !== state.activeIndex) {
+    state.activeIndex = bestIndex;
+    console.log(`[models-runtime] ${provider}: primário agora é #${bestIndex + 1} (${state.candidates[bestIndex]}) por latência da sessão`);
+  }
 }
 
 function markModelSemanticSuccess(provider: string, model: string): void {
