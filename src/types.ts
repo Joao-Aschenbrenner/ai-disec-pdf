@@ -50,8 +50,15 @@ export interface SplitPage {
   retryAfter?: string;
   /** Se false, o erro é definitivo para a requisição atual (ex.: 401/403). */
   retryable?: boolean;
-  /** Se true, o backend rotacionou o modelo e a página deve ser retentada. */
+  /** Se true, o backend mudou para outro candidato Vision e a página deve continuar. */
   modelRotated?: boolean;
+  /** Só vira true depois que TODOS os candidatos Vision desta página falharem. */
+  modelExhausted?: boolean;
+  /** Falha LOCAL do cliente (ex.: render watchdog) — não pausa nem halta a fila. */
+  localFailure?: boolean;
+  candidateCount?: number;
+  modelsTried?: number;
+  modelsRemaining?: number;
   /** Código de status HTTP do erro (ex.: 504, 429, 401). */
   statusCode?: number;
   metadata?: ExtractedMetadata;

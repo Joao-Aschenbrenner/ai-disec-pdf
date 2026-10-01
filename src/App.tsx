@@ -86,7 +86,7 @@ import { AdaptivePipeline } from "./utils/adaptivePipeline";
 import { formatProcessingElapsed } from "./utils/processingTimer";
 import { version as appVersion } from "../package.json";
 
-const AUTO_PIPELINE_CONCURRENCY = 3;
+const AUTO_PIPELINE_CONCURRENCY = 4;
 const VISIBLE_PROVIDERS = new Set([
   "NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC",
   "OPENROUTER", "GROQ", "OLLAMA_CLOUD", "CODEX", "LOCAL_OLLAMA",
@@ -589,11 +589,13 @@ export default function App() {
   const processingTimerAccumulatedMsRef = useRef(0);
 
   // Concorrência adaptativa
-  const [currentConcurrency, setCurrentConcurrency] = useState(3);
+  const [currentConcurrency, setCurrentConcurrency] = useState(4);
   const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
   const [isStabilizing, setIsStabilizing] = useState(false);
   const [pipelineHalted, setPipelineHalted] = useState(false);
-  const [pipelineHaltReason, setPipelineHaltReason] = useState<"provider-unstable" | "provider-auth" | null>(null);
+  const [pipelineHaltReason, setPipelineHaltReason] = useState<"provider-unstable" | "provider-auth" | "models-exhausted" | null>(null);
+  const [modelFailoverProgress, setModelFailoverProgress] = useState<{ tried: number; total: number } | null>(null);
+  const [autoRetryStatus, setAutoRetryStatus] = useState<string | null>(null);
 
   // Sync ref for providerConcurrency function
   useEffect(() => {
@@ -839,10 +841,14 @@ export default function App() {
     const response = await fetch("/api/extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // Watchdog de rede: o provider tem timeout próprio (75-120s) no server;
+      // 150s aqui cobre fila do server + provider e impede fetch eterno.
+      signal: AbortSignal.timeout(150_000),
       body: JSON.stringify({
         pdfBase64: imageBase64,
         originalName: page.originalFileName,
         pageIndex: page.sourcePageIndex ?? page.index,
+        runtimePageId: page.id,
         v3Hint: page.v3Hint,
         ...(correction ? { correction } : {}),
       }),
@@ -857,8 +863,13 @@ export default function App() {
         typeof errJson.retryable === "boolean"
           ? errJson.retryable
           : [408, 429, 500, 502, 503, 504, 529].includes(response.status);
-      // Propaga modelRotated para o frontend poder reagir
+      // Propaga estado do failover Vision para o pipeline.
       err.modelRotated = errJson.modelRotated === true;
+      err.modelExhausted = errJson.modelExhausted === true;
+      err.candidateCount = Number(errJson.candidateCount || 0);
+      err.modelsTried = Number(errJson.modelsTried || 0);
+      err.modelsRemaining = Number(errJson.modelsRemaining || 0);
+      err.providerAuthError = errJson.providerAuthError === true;
       throw err;
     }
     
@@ -921,7 +932,25 @@ export default function App() {
         processingStage: "extracting",
         processingProgress: 55,
       };
-      const segmentResult = await processSinglePage(segmentPage.id, segmentPage, correction);
+      // Segmento usa o MESMO mecanismo de retry da fila (runPageWithRetry):
+      // falha com modelRotated=true é re-tentada na MESMA página, nunca engolida
+      // como sucesso de array.
+      const segmentResult = await pipelineRef.current.runPageWithRetry(
+        segmentPage,
+        async (p) => processSinglePage(p.id ?? segmentPage.id, segmentPage, correction),
+        async (pageId, _attempt, delayMs, signal) => {
+          if (pageId) updatePageStage(pageId, "retrying", 48);
+          if (signal?.candidateCount) {
+            setModelFailoverProgress({
+              tried: Number(signal.modelsTried || 0),
+              total: Number(signal.candidateCount || 0),
+            });
+          }
+          syncPipelineState();
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          syncPipelineState();
+        }
+      );
       if (Array.isArray(segmentResult)) {
         results.push(...segmentResult);
       } else {
@@ -950,7 +979,36 @@ export default function App() {
         page.segmentIndex === undefined
           ? "fast"
           : "detail";
-      const imageBase64 = await pdfBase64ToJpeg(page.base64, { mode: visualMode });
+      // Watchdog: render preso (pdf.js girando em CPU) não pode congelar o
+      // pipeline — o dono do circuito travaria a fila inteira para sempre.
+      // 60s é folgado: render normal leva 2-5s. Timeout vira falha retryable
+      // e o loop de retry do pipeline segue a lista de modelos normalmente.
+      const renderWithWatchdog = async (): Promise<string> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            pdfBase64ToJpeg(page.base64, { mode: visualMode }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error("Render da página excedeu 60s (watchdog do pipeline).")),
+                60_000
+              );
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
+      // Falha no render é problema LOCAL do cliente, não do provider: marcada
+      // como localFailure, o pipeline NÃO pausa/halta por ela — a folha sai
+      // falhada e entra no ciclo automático de re-tentativa.
+      let imageBase64: string;
+      try {
+        imageBase64 = await renderWithWatchdog();
+      } catch (renderErr: any) {
+        renderErr.localFailure = true;
+        throw renderErr;
+      }
 
       // V3: se a primeira/segunda passagem já indicou holerite, detecta layout ANTES
       // de mandar a página física inteira ao VLM.
@@ -1033,8 +1091,13 @@ export default function App() {
         error: message,
         retryAfter: err?.retryAfter,
         retryable: err?.retryable !== false,
-        // Propaga info de rotação/429 para retry inteligente
+        // Propaga info do failover Vision para retry inteligente.
         modelRotated: err?.modelRotated === true,
+        modelExhausted: err?.modelExhausted === true,
+        localFailure: err?.localFailure === true,
+        candidateCount: Number(err?.candidateCount || 0),
+        modelsTried: Number(err?.modelsTried || 0),
+        modelsRemaining: Number(err?.modelsRemaining || 0),
         statusCode: err?.status,
       };
     }
@@ -1052,21 +1115,46 @@ export default function App() {
     setRotationCount(p.rotationCount);
   };
 
-  const processWithRetry = async (
+  const resetPageModelFailover = async (page: SplitPage) => {
+    try {
+      await fetch("/api/models/runtime/reset-page-failover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: currentProvider,
+          runtimePageId: page.id,
+        }),
+      });
+    } catch {
+      // Se o reset administrativo falhar, a chamada real ainda devolve o erro correto.
+    }
+  };
+
+    const processWithRetry = async (
     page: SplitPage,
     correction?: string
   ): Promise<ProcessedPageResult> => {
     // Delega ao módulo compartilhado — o MESMO mecanismo usado pelo benchmark.
-    return pipelineRef.current.runPageWithRetry(
-      page,
-      async (p) => processSinglePage(p.id ?? page.id, page, correction),
-      async (pageId, _attempt, delayMs) => {
-        if (pageId) updatePageStage(pageId, "retrying", 48);
-        syncPipelineState();
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-        syncPipelineState();
-      }
-    );
+    try {
+      return await pipelineRef.current.runPageWithRetry(
+        page,
+        async (p) => processSinglePage(p.id ?? page.id, page, correction),
+        async (pageId, _attempt, delayMs, signal) => {
+          if (pageId) updatePageStage(pageId, "retrying", 48);
+          if (signal?.candidateCount) {
+            setModelFailoverProgress({
+              tried: Number(signal.modelsTried || 0),
+              total: Number(signal.candidateCount || 0),
+            });
+          }
+          syncPipelineState();
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          syncPipelineState();
+        }
+      );
+    } finally {
+      setModelFailoverProgress(null);
+    }
   };
 
   const replaceProcessedResult = (targetId: string, result: ProcessedPageResult) => {
@@ -1220,8 +1308,9 @@ export default function App() {
     }
 
     // Inicializa métricas da execução (pipeline compartilhado + espelho React)
-    pipelineRef.current.reset(3);
+    pipelineRef.current.reset(4);
     setPipelineHalted(false);
+    setModelFailoverProgress(null);
     setPipelineHaltReason(null);
     setFinalSuccessCount(0);
     setFinalErrorCount(0);
@@ -1313,6 +1402,52 @@ export default function App() {
             : page
         ));
         syncPipelineState();
+      }
+
+      // CICLOS AUTOMÁTICOS: exaustão de modelos Vision NÃO para o lote. Depois
+      // da primeira passagem, as páginas que falharam são re-tentadas em ciclos
+      // com cooldown — cada ciclo reseta o sweep da página (modelos 1,2,3,4...
+      // de novo). O usuário só precisa clicar Re-tentar se TODOS os ciclos
+      // esgotarem (ex.: chave inválida ou provider fora por horas).
+      const AUTO_RETRY_CYCLES = 5;
+      const AUTO_RETRY_COOLDOWN_MS = 30_000;
+      try {
+        for (let cycle = 1; cycle <= AUTO_RETRY_CYCLES; cycle++) {
+          const failedNow = workingPages
+            .map(p => finalPhysical.get(p.id))
+            .filter((r): r is SplitPage => Boolean(r) && !Array.isArray(r) && r.status === "failed");
+          if (failedNow.length === 0) break;
+
+          setAutoRetryStatus(
+            `Ciclo automático ${cycle}/${AUTO_RETRY_CYCLES}: re-tentando ${failedNow.length} página(s) em 30s (a fila não para).`
+          );
+          await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_COOLDOWN_MS));
+
+          let recovered = 0;
+          for (const failedPage of failedNow) {
+            if (!pipelineRef.current.canLaunchNewPages()) break;
+            await resetPageModelFailover(failedPage);
+            setSplitPages(prev => prev.map(p =>
+              p.id === failedPage.id
+                ? { ...p, status: "processing", processingStage: "extracting", processingProgress: 45, error: undefined }
+                : p
+            ));
+            const result = await processWithRetry(failedPage);
+            replaceProcessedResult(failedPage.id, result);
+            if (Array.isArray(result)) {
+              finalPhysical.set(failedPage.id, result[0]);
+              recovered += 1;
+            } else if (result.status !== "failed") {
+              finalPhysical.set(failedPage.id, result);
+              recovered += 1;
+            }
+            syncPipelineState();
+          }
+          setAutoRetryStatus(null);
+          if (recovered === 0 && cycle === AUTO_RETRY_CYCLES) break;
+        }
+      } finally {
+        setAutoRetryStatus(null);
       }
 
       // PASSAGEM 3: reavalia a sequência já com classificationText vindo do VLM.
@@ -1946,6 +2081,7 @@ export default function App() {
                           const failed = splitPages.filter(p => p.status === "failed");
                           for (const page of failed) {
                             if (!pipelineRef.current.canLaunchNewPages()) break;
+                            await resetPageModelFailover(page);
                             pipelineRef.current.notePageLaunched();
                             setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                             const res = await processWithRetry(page);
@@ -1978,14 +2114,23 @@ export default function App() {
                     </span>
                     {isStabilizing && !pipelineHalted && (
                       <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300 animate-pulse">
-                        Fila pausada — estabilizando a página atual...
+                        {modelFailoverProgress?.total
+                          ? `Estabilizando esta página — testando modelos Vision ${Math.min(modelFailoverProgress.tried + 1, modelFailoverProgress.total)}/${modelFailoverProgress.total}...`
+                          : "Estabilizando esta página — testando outro modelo Vision..."}
                       </span>
                     )}
                     {pipelineHalted && (
                       <span className="px-2 py-1 bg-rose-950/50 border border-rose-800/30 rounded-full text-rose-300">
                         {pipelineHaltReason === "provider-auth"
-                          ? "Fila pausada — verifique a chave/permissão do provedor."
-                          : "Fila pausada — provedor não estabilizou. Re-tente para continuar."}
+                          ? "Processamento parado — verifique a chave/permissão do provedor."
+                          : pipelineHaltReason === "models-exhausted"
+                            ? "Páginas com todos os modelos falhados entraram na re-tentativa automática; a fila continua."
+                            : "O provedor não estabilizou. Re-tente para continuar."}
+                      </span>
+                    )}
+                    {autoRetryStatus && (
+                      <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300">
+                        {autoRetryStatus}
                       </span>
                     )}
                     <span className="px-2 py-1 bg-slate-950/50 border border-slate-800/30 rounded-full text-slate-400 font-mono">
@@ -2471,6 +2616,7 @@ export default function App() {
                                   setPipelineHaltReason(null);
                                   syncPipelineState();
                                   startProcessingTimer(false);
+                                  await resetPageModelFailover(page);
                                   pipelineRef.current.notePageLaunched();
                                   setSplitPages(prev => prev.map(p => p.id === page.id ? { ...p, status: "processing" } : p));
                                   try {
@@ -2962,6 +3108,7 @@ export default function App() {
                   setPipelineHaltReason(null);
                   syncPipelineState();
                   startProcessingTimer(false);
+                  await resetPageModelFailover(page);
                   pipelineRef.current.notePageLaunched();
                   setSplitPages(prev => prev.map(p => p.id === correctionPageId ? { ...p, status: "processing" } : p));
                   const correctionMsg = "O usuário indicou que o(s) seguinte(s) campo(s) pode(m) estar incorreto(s): " + selected.join(", ") + ". Reavalie com atenção especial.";

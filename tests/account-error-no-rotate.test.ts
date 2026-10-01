@@ -12,8 +12,10 @@ const savedSettings = fs.existsSync(SETTINGS_FILE)
   ? fs.readFileSync(SETTINGS_FILE, "utf8")
   : null;
 
-// Erros de conta/cota NÃO devem trocar o modelo: 401/403/429 são
-// problema de credencial/quota do provider, não do candidato.
+// Erros globais de conta/cota NÃO devem trocar o modelo.
+// 401 ou mensagem explícita "invalid API key" (mesmo se vier como 400) = credencial inválida.
+// 429 = quota/rate-limit.
+// 403 genérico de acesso a MODELO é coberto pelo failover exaustivo.
 describe("Erros de conta NÃO rotacionam modelo", () => {
   let originalFetch: typeof globalThis.fetch;
   let testImageBase64 = "";
@@ -75,8 +77,8 @@ describe("Erros de conta NÃO rotacionam modelo", () => {
   });
 
   const accountScenarios = [
-    { status: 401, message: "Credencial inválida", expected: /Chave de API|configurações/i },
-    { status: 403, message: "Forbidden", expected: /Chave de API|configurações/i },
+    { status: 401, message: "Invalid API key", expected: /Chave de API|configurações|chave/i },
+    { status: 400, message: "Invalid API key", expected: /Chave de API|configurações|chave/i },
     { status: 429, message: "rate limit exceeded", expected: /Cota|Muitas requisições|rate/i },
   ];
 
@@ -134,7 +136,9 @@ describe("Erros de conta NÃO rotacionam modelo", () => {
 
       expect(res.status).toBe(scenario.status);
       const body = await res.json();
-      expect(body.modelRotated).toBeUndefined();
+      // Contrato: nenhuma rotação. O 429 pode devolver modelRotated=false explícito;
+      // o 401 devolve providerAuthError sem o campo.
+      expect(body.modelRotated ?? false).toBe(false);
       expect(body.error).toMatch(scenario.expected);
       expect(modelsUsed.every(m => m === "fixture-vision-a")).toBe(true);
       expect(chatCalls).toBe(1);
