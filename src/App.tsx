@@ -999,7 +999,16 @@ export default function App() {
           if (timer) clearTimeout(timer);
         }
       };
-      const imageBase64 = await renderWithWatchdog();
+      // Falha no render é problema LOCAL do cliente, não do provider: marcada
+      // como localFailure, o pipeline NÃO pausa/halta por ela — a folha sai
+      // falhada e entra no ciclo automático de re-tentativa.
+      let imageBase64: string;
+      try {
+        imageBase64 = await renderWithWatchdog();
+      } catch (renderErr: any) {
+        renderErr.localFailure = true;
+        throw renderErr;
+      }
 
       // V3: se a primeira/segunda passagem já indicou holerite, detecta layout ANTES
       // de mandar a página física inteira ao VLM.
@@ -1085,6 +1094,7 @@ export default function App() {
         // Propaga info do failover Vision para retry inteligente.
         modelRotated: err?.modelRotated === true,
         modelExhausted: err?.modelExhausted === true,
+        localFailure: err?.localFailure === true,
         candidateCount: Number(err?.candidateCount || 0),
         modelsTried: Number(err?.modelsTried || 0),
         modelsRemaining: Number(err?.modelsRemaining || 0),

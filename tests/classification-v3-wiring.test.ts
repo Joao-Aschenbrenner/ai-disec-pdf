@@ -112,6 +112,17 @@ describe("Classification V3 wiring", () => {
     expect(pipeline).toContain("haltForProviderAuth()");
   });
 
+  it("falha LOCAL de render não para a fila (sai falhada e vai para o ciclo)", () => {
+    const app = read("src/App.tsx");
+    const pipeline = read("src/utils/adaptivePipeline.ts");
+    // Render/watchdog é problema do cliente: sem localFailure o halt de
+    // estabilidade abandonava silenciosamente as folhas restantes do lote.
+    expect(app).toContain("renderErr.localFailure = true");
+    expect(app).toContain("localFailure: err?.localFailure === true");
+    expect(pipeline).toContain("if (signal.localFailure)");
+    expect(pipeline).toContain("localFailure?: boolean");
+  });
+
   it("Electron não desacelera o processamento em background", () => {
     const main = read("electron/main.cjs");
     expect(main).toContain("backgroundThrottling: false");

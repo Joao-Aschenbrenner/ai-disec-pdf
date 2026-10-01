@@ -31,6 +31,8 @@ export interface PageFailureSignal {
   modelsTried?: number;
   modelsRemaining?: number;
   statusCode?: number;
+  /** Falha LOCAL do cliente (ex.: render watchdog) — não é instabilidade do provider. */
+  localFailure?: boolean;
 }
 
 export interface PipelineOutcomeLike {
@@ -322,6 +324,14 @@ export class AdaptivePipeline {
       if (signal.modelExhausted) {
         // Exaustão NÃO para mais a fila: libera o circuito e devolve a falha
         // para o App agendar o ciclo automático de re-tentativa.
+        this.resumeAfterModelsExhausted(pageKey);
+        return result;
+      }
+
+      if (signal.localFailure) {
+        // Falha LOCAL (render/watchdog): o provider não foi culpado — parar a
+        // fila por isso abandonava o restante do lote. A folha sai falhada e
+        // entra no ciclo automático; a fila segue imediatamente.
         this.resumeAfterModelsExhausted(pageKey);
         return result;
       }

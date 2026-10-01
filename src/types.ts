@@ -54,6 +54,8 @@ export interface SplitPage {
   modelRotated?: boolean;
   /** Só vira true depois que TODOS os candidatos Vision desta página falharem. */
   modelExhausted?: boolean;
+  /** Falha LOCAL do cliente (ex.: render watchdog) — não pausa nem halta a fila. */
+  localFailure?: boolean;
   candidateCount?: number;
   modelsTried?: number;
   modelsRemaining?: number;
