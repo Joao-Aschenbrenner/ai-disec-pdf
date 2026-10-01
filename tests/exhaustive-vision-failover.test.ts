@@ -482,6 +482,57 @@ describe("Exhaustive Vision failover", () => {
     expect(usedModels.length).toBeGreaterThan(usedBeforeReset);
   });
 
+  it("exclui modelos embed/retriever/rerank do sweep mesmo quando anunciam modalidade image", async () => {
+    vi.mocked(globalThis.fetch as any).mockImplementation(
+      (url: string | URL, init?: any) => {
+        const urlStr = url.toString();
+        if (urlStr.includes(`127.0.0.1:${PORT}`) || urlStr.includes(`localhost:${PORT}`)) {
+          return originalFetch(url, init);
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
+          return Promise.resolve(new Response(JSON.stringify({
+            data: [
+              { id: "nvidia/llama-3.2-nemoretriever-1b-vlm-embed-v1", created: 500, modalities: ["text", "image"] },
+              { id: "nvidia/llama-nemotron-embed-vl-1b-v2", created: 400, modalities: ["text", "image"] },
+              { id: "vendor/vision-rerank-v1", created: 300, modalities: ["text", "image"] },
+              { id: "fixture-vision-chat-a", created: 200, modalities: ["text", "image"] },
+              { id: "fixture-vision-chat-b", created: 100, modalities: ["text", "image"] },
+            ],
+          }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/chat/completions")) {
+          const body = init?.body ? JSON.parse(init.body) : {};
+          usedModels.push(body.model);
+          return Promise.resolve(new Response(JSON.stringify({
+            error: { message: "provider timeout for this model" },
+          }), { status: 504, headers: { "Content-Type": "application/json" } }));
+        }
+        return originalFetch(url, init);
+      }
+    );
+
+    const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "NVIDIA" }),
+    });
+    expect(refresh.status).toBe(200);
+    const refreshBody = await refresh.json();
+    expect(Number(refreshBody.candidateCount)).toBe(2);
+
+    const runtimePageId = "non-generative-filter";
+    for (let i = 0; i < 2; i++) {
+      await fetch(`${BASE_URL}/api/extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 0, runtimePageId }),
+      });
+    }
+
+    expect(usedModels).toEqual(["fixture-vision-chat-a", "fixture-vision-chat-b"]);
+    expect(usedModels.some(m => /embed|retriev|rerank/i.test(m))).toBe(false);
+  });
+
   // Seção 5: candidatos live exclusivos + text-only excluído.
   it("usa SOMENTE candidatos Vision live (sem catálogo) e exclui text-only", async () => {
     vi.mocked(globalThis.fetch as any).mockImplementation(
