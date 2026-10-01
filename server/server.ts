@@ -185,9 +185,31 @@ let runtimeModels: Record<string, RuntimeModelState> = {};
 type PageFailoverCycle = {
   tried: Set<string>;
   designated?: string;
+  /** Candidatos já comprovadamente indisponíveis antes desta página começar. */
+  excluded: Set<string>;
 };
 
 let pageFailoverCycles = new Map<string, PageFailoverCycle>();
+let sessionUnavailableModels: Record<string, Set<string>> = {};
+
+function getSessionUnavailableModels(provider: string): Set<string> {
+  if (!sessionUnavailableModels[provider]) {
+    sessionUnavailableModels[provider] = new Set<string>();
+  }
+  return sessionUnavailableModels[provider];
+}
+
+function markModelUnavailableForSession(provider: string, model: string, reason: string): void {
+  if (!model) return;
+  getSessionUnavailableModels(provider).add(model);
+  const state = runtimeModels[provider];
+  if (state) {
+    state.failures[model] = `SESSION_UNAVAILABLE: ${reason.slice(0, 160)}`;
+    runtimeModels[provider] = state;
+    saveRuntimeModels();
+  }
+  console.warn(`[models-runtime] ${provider}: candidato removido dos próximos sweeps desta sessão após indisponibilidade explícita`);
+}
 
 function pageFailoverCycleKey(provider: string, pageKey: string): string {
   return `${provider}::${pageKey}`;
@@ -208,7 +230,10 @@ function getPageFailoverCycle(provider: string, pageKey: string): PageFailoverCy
   const key = pageFailoverCycleKey(provider, pageKey);
   let cycle = pageFailoverCycles.get(key);
   if (!cycle) {
-    cycle = { tried: new Set<string>() };
+    cycle = {
+      tried: new Set<string>(),
+      excluded: new Set(getSessionUnavailableModels(provider)),
+    };
     pageFailoverCycles.set(key, cycle);
   }
   return cycle;
@@ -219,14 +244,27 @@ function getPageFailoverCycle(provider: string, pageKey: string): PageFailoverCy
  * houver e ainda existir no catálogo; senão o candidato ativo global.
  */
 async function getRequestModel(provider: string, apiKey: string, pageKey: string): Promise<string> {
-  const cycle = pageFailoverCycles.get(pageFailoverCycleKey(provider, pageKey));
-  const designated = cycle?.designated;
-  if (designated) {
-    const state = runtimeModels[provider];
-    if (state?.candidates.includes(designated)) {
-      return designated;
-    }
+  // Garante que a página congele a lista de candidatos já indisponíveis no
+  // momento em que começa. Um modelo que falhar NESTA página ainda conta como
+  // tentativa real dela; páginas futuras já o excluem.
+  const cycle = getPageFailoverCycle(provider, pageKey);
+  const state = runtimeModels[provider];
+
+  const designated = cycle.designated;
+  if (designated && state?.candidates.includes(designated) && !cycle.excluded.has(designated)) {
+    return designated;
   }
+
+  const active = state?.candidates?.[state.activeIndex];
+  if (active && !cycle.excluded.has(active)) return active;
+
+  const firstEligible = state?.candidates?.find(candidate => !cycle.excluded.has(candidate));
+  if (firstEligible && state) {
+    state.activeIndex = state.candidates.indexOf(firstEligible);
+    runtimeModels[provider] = state;
+    return firstEligible;
+  }
+
   return getRuntimeModel(provider, apiKey);
 }
 
@@ -266,8 +304,9 @@ function failoverRuntimeModel(
     resetSessionFailures(provider, failedModel);
   }
 
-  const candidateCount = state.candidates.length;
-  const modelsTried = cycle.tried.size;
+  const eligibleCandidates = state.candidates.filter(candidate => !cycle.excluded.has(candidate));
+  const candidateCount = eligibleCandidates.length;
+  const modelsTried = [...cycle.tried].filter(candidate => eligibleCandidates.includes(candidate)).length;
 
   if (modelsTried >= candidateCount) {
     runtimeModels[provider] = state;
@@ -284,7 +323,12 @@ function failoverRuntimeModel(
   // Se outro request em voo já moveu o provider para um candidato que ESTA
   // página ainda não tentou, apenas designa esse candidato; não pula mais um.
   const activeModel = state.candidates[state.activeIndex];
-  if (activeModel && !cycle.tried.has(activeModel) && activeModel !== failedModel) {
+  if (
+    activeModel &&
+    eligibleCandidates.includes(activeModel) &&
+    !cycle.tried.has(activeModel) &&
+    activeModel !== failedModel
+  ) {
     cycle.designated = activeModel;
     runtimeModels[provider] = state;
     saveRuntimeModels();
@@ -297,18 +341,18 @@ function failoverRuntimeModel(
     };
   }
 
-  const startIndex = Math.max(0, state.candidates.indexOf(failedModel));
-  let nextIndex = -1;
+  const startIndex = Math.max(0, eligibleCandidates.indexOf(failedModel));
+  let nextModel = "";
   for (let step = 1; step <= candidateCount; step++) {
     const idx = (startIndex + step) % candidateCount;
-    const candidate = state.candidates[idx];
+    const candidate = eligibleCandidates[idx];
     if (!cycle.tried.has(candidate)) {
-      nextIndex = idx;
+      nextModel = candidate;
       break;
     }
   }
 
-  if (nextIndex < 0) {
+  if (!nextModel) {
     runtimeModels[provider] = state;
     saveRuntimeModels();
     return {
@@ -320,8 +364,7 @@ function failoverRuntimeModel(
     };
   }
 
-  state.activeIndex = nextIndex;
-  const nextModel = state.candidates[nextIndex];
+  state.activeIndex = state.candidates.indexOf(nextModel);
   // Designa para ESTA página: a próxima tentativa DELA usa este candidato,
   // imune ao activeIndex global movido por outras páginas em voo.
   cycle.designated = nextModel;
@@ -329,7 +372,7 @@ function failoverRuntimeModel(
   runtimeModels[provider] = state;
   saveRuntimeModels();
   console.warn(
-    `[models-runtime] ${provider}: página ${pageKey} falhou no candidato atual; avançando para candidato #${nextIndex + 1} (${modelsTried}/${candidateCount} já tentados)`
+    `[models-runtime] ${provider}: página ${pageKey} falhou no candidato atual; avançando para outro candidato (${modelsTried}/${candidateCount} já tentados)`
   );
 
   return {
@@ -614,6 +657,7 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
     }
   }
   runtimeModels[provider] = next;
+  sessionUnavailableModels[provider] = new Set<string>();
   resetProviderFailoverCycles(provider);
   saveRuntimeModels();
   console.log(`[models-runtime] ${provider}: ${next.candidates.length} candidatos atualizados; ativo #${next.activeIndex + 1}`);
@@ -785,6 +829,12 @@ function buildModelFailoverResponse(
       modelsRemaining: result.modelsRemaining,
     },
   };
+}
+
+function shouldQuarantineModelForSession(status: number, body: string): boolean {
+  if ([404, 410].includes(status)) return true;
+  if (status === 403 && !isDefinitiveCredentialError(status, body)) return true;
+  return /model.{0,40}(not found|unavailable|retired|deprecated|unsupported|access denied)|does not support image|not support image input/i.test(body);
 }
 
 function shouldExhaustiveFailover(status: number, body: string): boolean {
@@ -1318,6 +1368,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
          }
 
          if (requestModel && shouldExhaustiveFailover(aiResponse.status, errBody)) {
+           if (shouldQuarantineModelForSession(aiResponse.status, errBody)) {
+             markModelUnavailableForSession(
+               provider,
+               requestModel,
+               `HTTP ${aiResponse.status}: ${errBody.slice(0, 120)}`
+             );
+           }
+
            if ([408, 502, 503, 504, 529].includes(aiResponse.status)) {
              recordTelemetry(provider, requestModel, "timeout", 0);
            } else {
@@ -1522,6 +1580,7 @@ if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     runtimeModels = {};
     sessionFailureStreaks = {};
     pageFailoverCycles.clear();
+    sessionUnavailableModels = {};
     try {
       if (fs.existsSync(MODEL_RUNTIME_FILE)) fs.unlinkSync(MODEL_RUNTIME_FILE);
     } catch {}
