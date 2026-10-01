@@ -76,6 +76,17 @@ describe("Classification V3 wiring", () => {
     expect(app).toContain("runtimePageId: page.id");
   });
 
+  it("segmentos empilhados usam o MESMO runPageWithRetry da fila (falha não é engolida)", () => {
+    const app = read("src/App.tsx");
+    // splitAndProcessStackedPage processa cada segmento via runPageWithRetry —
+    // um segmento com modelRotated=true é re-tentado na mesma página, e o array
+    // resultante nunca mascara falha como sucesso.
+    expect(app).toContain("const segmentResult = await pipelineRef.current.runPageWithRetry(");
+    // Nenhum call-site de segmento pode chamar processSinglePage diretamente.
+    expect(app).not.toMatch(/const segmentResult = await processSinglePage\(/);
+    expect(app.match(/runPageWithRetry\(/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("Electron não desacelera o processamento em background", () => {
     const main = read("electron/main.cjs");
     expect(main).toContain("backgroundThrottling: false");

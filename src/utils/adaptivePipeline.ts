@@ -196,6 +196,10 @@ export class AdaptivePipeline {
   }
 
   recordSuccess(pageId?: string): void {
+    // Um halt (exaustão de modelos / credencial) só é liberado por Re-tentar
+    // manual — nenhum sucesso posterior o desfaz. Sem isto, o array de uma
+    // página com segmento falhado limpava o halt e a fila seguia sem o retry.
+    if (this.halted) return;
     if (this.queuePaused && (!this.stabilizingPageId || this.stabilizingPageId === pageId)) {
       this.closeCircuit(pageId);
       return;

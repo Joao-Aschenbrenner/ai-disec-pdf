@@ -928,7 +928,25 @@ export default function App() {
         processingStage: "extracting",
         processingProgress: 55,
       };
-      const segmentResult = await processSinglePage(segmentPage.id, segmentPage, correction);
+      // Segmento usa o MESMO mecanismo de retry da fila (runPageWithRetry):
+      // falha com modelRotated=true é re-tentada na MESMA página, nunca engolida
+      // como sucesso de array.
+      const segmentResult = await pipelineRef.current.runPageWithRetry(
+        segmentPage,
+        async (p) => processSinglePage(p.id ?? segmentPage.id, segmentPage, correction),
+        async (pageId, _attempt, delayMs, signal) => {
+          if (pageId) updatePageStage(pageId, "retrying", 48);
+          if (signal?.candidateCount) {
+            setModelFailoverProgress({
+              tried: Number(signal.modelsTried || 0),
+              total: Number(signal.candidateCount || 0),
+            });
+          }
+          syncPipelineState();
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          syncPipelineState();
+        }
+      );
       if (Array.isArray(segmentResult)) {
         results.push(...segmentResult);
       } else {

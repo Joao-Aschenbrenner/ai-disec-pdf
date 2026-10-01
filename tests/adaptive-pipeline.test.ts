@@ -232,6 +232,43 @@ describe("Adaptive Pipeline — exhaustive Vision failover", () => {
     expect(pipeline.newPagesStartedDuringStabilization).toBe(0);
   });
 
+  it("array com segmento falhado pós-exaustão NÃO limpa o halt (fica para Re-tentar)", async () => {
+    const pipeline = new AdaptivePipeline(3);
+
+    // Fase 1 — fluxo real: o segmento esgota os candidatos no PRÓPRIO
+    // runPageWithRetry (wiring do splitAndProcessStackedPage) → halt com o
+    // segmento como dono da estabilização.
+    const segmentResult = await pipeline.runPageWithRetry(
+      { index: 0, id: "page-a-s2" },
+      async () => ({
+        status: "failed" as const,
+        retryable: false,
+        modelRotated: false,
+        modelExhausted: true,
+        candidateCount: 2,
+        modelsTried: 2,
+        modelsRemaining: 0,
+      }),
+      async () => {}
+    );
+    expect(segmentResult.status).toBe("failed");
+    expect(pipeline.halted).toBe(true);
+    expect(pipeline.haltReason).toBe("models-exhausted");
+
+    // Fase 2 — a página pai recebe o array contendo o segmento falhado e NÃO
+    // pode limpar o halt: o dono da estabilização é o segmento, não a página.
+    const parentResult = await pipeline.runPageWithRetry(
+      { index: 0, id: "page-a" },
+      async () => [segmentResult] as any,
+      async () => {}
+    );
+
+    expect(Array.isArray(parentResult)).toBe(true);
+    expect(pipeline.halted).toBe(true);
+    expect(pipeline.haltReason).toBe("models-exhausted");
+    expect(pipeline.queuePaused).toBe(true);
+  });
+
   it("recupera gradualmente 1→2→3 após estabilizar", async () => {
     const pipeline = new AdaptivePipeline(3);
     let calls = 0;
