@@ -86,7 +86,7 @@ import { AdaptivePipeline } from "./utils/adaptivePipeline";
 import { formatProcessingElapsed } from "./utils/processingTimer";
 import { version as appVersion } from "../package.json";
 
-const AUTO_PIPELINE_CONCURRENCY = 3;
+const AUTO_PIPELINE_CONCURRENCY = 4;
 const VISIBLE_PROVIDERS = new Set([
   "NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC",
   "OPENROUTER", "GROQ", "OLLAMA_CLOUD", "CODEX", "LOCAL_OLLAMA",
@@ -589,12 +589,13 @@ export default function App() {
   const processingTimerAccumulatedMsRef = useRef(0);
 
   // Concorrência adaptativa
-  const [currentConcurrency, setCurrentConcurrency] = useState(3);
+  const [currentConcurrency, setCurrentConcurrency] = useState(4);
   const [consecutiveSuccesses, setConsecutiveSuccesses] = useState(0);
   const [isStabilizing, setIsStabilizing] = useState(false);
   const [pipelineHalted, setPipelineHalted] = useState(false);
   const [pipelineHaltReason, setPipelineHaltReason] = useState<"provider-unstable" | "provider-auth" | "models-exhausted" | null>(null);
   const [modelFailoverProgress, setModelFailoverProgress] = useState<{ tried: number; total: number } | null>(null);
+  const [autoRetryStatus, setAutoRetryStatus] = useState<string | null>(null);
 
   // Sync ref for providerConcurrency function
   useEffect(() => {
@@ -1297,7 +1298,7 @@ export default function App() {
     }
 
     // Inicializa métricas da execução (pipeline compartilhado + espelho React)
-    pipelineRef.current.reset(3);
+    pipelineRef.current.reset(4);
     setPipelineHalted(false);
     setModelFailoverProgress(null);
     setPipelineHaltReason(null);
@@ -1391,6 +1392,52 @@ export default function App() {
             : page
         ));
         syncPipelineState();
+      }
+
+      // CICLOS AUTOMÁTICOS: exaustão de modelos Vision NÃO para o lote. Depois
+      // da primeira passagem, as páginas que falharam são re-tentadas em ciclos
+      // com cooldown — cada ciclo reseta o sweep da página (modelos 1,2,3,4...
+      // de novo). O usuário só precisa clicar Re-tentar se TODOS os ciclos
+      // esgotarem (ex.: chave inválida ou provider fora por horas).
+      const AUTO_RETRY_CYCLES = 5;
+      const AUTO_RETRY_COOLDOWN_MS = 30_000;
+      try {
+        for (let cycle = 1; cycle <= AUTO_RETRY_CYCLES; cycle++) {
+          const failedNow = workingPages
+            .map(p => finalPhysical.get(p.id))
+            .filter((r): r is SplitPage => Boolean(r) && !Array.isArray(r) && r.status === "failed");
+          if (failedNow.length === 0) break;
+
+          setAutoRetryStatus(
+            `Ciclo automático ${cycle}/${AUTO_RETRY_CYCLES}: re-tentando ${failedNow.length} página(s) em 30s (a fila não para).`
+          );
+          await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_COOLDOWN_MS));
+
+          let recovered = 0;
+          for (const failedPage of failedNow) {
+            if (!pipelineRef.current.canLaunchNewPages()) break;
+            await resetPageModelFailover(failedPage);
+            setSplitPages(prev => prev.map(p =>
+              p.id === failedPage.id
+                ? { ...p, status: "processing", processingStage: "extracting", processingProgress: 45, error: undefined }
+                : p
+            ));
+            const result = await processWithRetry(failedPage);
+            replaceProcessedResult(failedPage.id, result);
+            if (Array.isArray(result)) {
+              finalPhysical.set(failedPage.id, result[0]);
+              recovered += 1;
+            } else if (result.status !== "failed") {
+              finalPhysical.set(failedPage.id, result);
+              recovered += 1;
+            }
+            syncPipelineState();
+          }
+          setAutoRetryStatus(null);
+          if (recovered === 0 && cycle === AUTO_RETRY_CYCLES) break;
+        }
+      } finally {
+        setAutoRetryStatus(null);
       }
 
       // PASSAGEM 3: reavalia a sequência já com classificationText vindo do VLM.
@@ -2067,8 +2114,13 @@ export default function App() {
                         {pipelineHaltReason === "provider-auth"
                           ? "Processamento parado — verifique a chave/permissão do provedor."
                           : pipelineHaltReason === "models-exhausted"
-                            ? "Todos os modelos Vision deste provedor falharam nesta página. Re-tente ou troque o provedor."
+                            ? "Páginas com todos os modelos falhados entraram na re-tentativa automática; a fila continua."
                             : "O provedor não estabilizou. Re-tente para continuar."}
+                      </span>
+                    )}
+                    {autoRetryStatus && (
+                      <span className="px-2 py-1 bg-amber-950/50 border border-amber-800/30 rounded-full text-amber-300">
+                        {autoRetryStatus}
                       </span>
                     )}
                     <span className="px-2 py-1 bg-slate-950/50 border border-slate-800/30 rounded-full text-slate-400 font-mono">

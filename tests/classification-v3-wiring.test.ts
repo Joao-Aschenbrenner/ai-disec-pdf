@@ -28,13 +28,13 @@ describe("Classification V3 wiring", () => {
   it("renderer usa pipeline de 3 páginas e failover exaustivo de modelos", () => {
     const app = read("src/App.tsx");
     const pipeline = read("src/utils/adaptivePipeline.ts");
-    expect(app).toContain("const AUTO_PIPELINE_CONCURRENCY = 3");
+    expect(app).toContain("const AUTO_PIPELINE_CONCURRENCY = 4");
     expect(app).toContain("AdaptivePipeline"); // mecanismo compartilhado app/benchmark
     // Três tentativas valem só para o MESMO candidato; rotações Vision
     // continuam até modelExhausted, com safety ceiling alto.
     expect(pipeline).toContain("AUTO_PIPELINE_MAX_SAME_MODEL_ATTEMPTS = 3");
     expect(pipeline).toContain("AUTO_PIPELINE_SAFETY_ATTEMPTS = 64");
-    expect(pipeline).toContain("AUTO_PIPELINE_MAX_CONCURRENCY = 3");
+    expect(pipeline).toContain("AUTO_PIPELINE_MAX_CONCURRENCY = 4");
     expect(pipeline).toContain("signal.modelExhausted");
     expect(pipeline).toContain("signal.modelRotated");
     expect(pipeline).toContain("runPageWithRetry");
@@ -68,11 +68,12 @@ describe("Classification V3 wiring", () => {
     expect(app).toContain("window.setInterval(refresh, 250)");
   });
 
-  it("os três retrys manuais resetam o sweep de failover da página", () => {
+  it("os três retrys manuais + o ciclo automático resetam o sweep de failover da página", () => {
     const app = read("src/App.tsx");
-    // Re-tentar N, Re-tentar individual e correção manual chamam
-    // resetPageModelFailover antes de reprocessar — nenhum bypassa o sweep.
-    expect(app.match(/await resetPageModelFailover\(/g)?.length).toBe(3);
+    // Re-tentar N, Re-tentar individual, correção manual e o CICLO AUTOMÁTICO
+    // chamam resetPageModelFailover antes de reprocessar — nenhum bypassa o
+    // sweep (cada re-tentativa recomeça dos modelos 1,2,3,4...).
+    expect(app.match(/await resetPageModelFailover\(/g)?.length).toBe(4);
     expect(app).toContain("runtimePageId: page.id");
   });
 
@@ -94,6 +95,21 @@ describe("Classification V3 wiring", () => {
     // falha retryable e o loop segue a lista de modelos.
     expect(app).toContain("Render da página excedeu 60s (watchdog do pipeline).");
     expect(app).toContain("AbortSignal.timeout(150_000)");
+  });
+
+  it("exaustão de modelos NÃO para o lote: ciclos automáticos de re-tentativa", () => {
+    const app = read("src/App.tsx");
+    const pipeline = read("src/utils/adaptivePipeline.ts");
+    // Novo contrato do produto: modelExhausted libera o circuito (fila segue)
+    // e o App roda ciclos automáticos com cooldown sobre as páginas falhas.
+    expect(pipeline).toContain("resumeAfterModelsExhausted");
+    expect(pipeline).not.toContain("this.haltForModelsExhausted(pageKey)");
+    expect(app).toContain("AUTO_RETRY_CYCLES = 5");
+    expect(app).toContain("AUTO_RETRY_COOLDOWN_MS = 30_000");
+    expect(app).toContain("Ciclo automático");
+    expect(app).toContain("autoRetryStatus");
+    // 401/403 (credencial) continua parando — trocar modelo não resolve chave.
+    expect(pipeline).toContain("haltForProviderAuth()");
   });
 
   it("Electron não desacelera o processamento em background", () => {

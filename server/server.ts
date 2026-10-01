@@ -806,7 +806,7 @@ function buildModelFailoverResponse(
     return {
       status: 503,
       body: {
-        error: `Todos os ${result.candidateCount} modelos Vision disponíveis deste provedor falharam nesta página. A fila foi preservada para você re-tentar depois ou trocar a chave/provedor.`,
+        error: `Todos os ${result.candidateCount} modelos Vision disponíveis deste provedor falharam nesta página. A fila continua; esta página entra na re-tentativa automática (ou use Re-tentar).`,
         retryable: false,
         modelExhausted: true,
         candidateCount: result.candidateCount,

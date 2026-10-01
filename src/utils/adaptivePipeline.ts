@@ -14,7 +14,7 @@
  */
 
 export const AUTO_PIPELINE_MAX_SAME_MODEL_ATTEMPTS = 3;
-export const AUTO_PIPELINE_MAX_CONCURRENCY = 3;
+export const AUTO_PIPELINE_MAX_CONCURRENCY = 4;
 export const AUTO_PIPELINE_SUCCESS_STREAK = 6;
 /** Apenas proteção contra bug/loop; o limite real do failover é modelsExhausted do backend. */
 export const AUTO_PIPELINE_SAFETY_ATTEMPTS = 64;
@@ -185,6 +185,24 @@ export class AdaptivePipeline {
     this.releaseWaiters(false);
   }
 
+  /**
+   * Nova regra do produto: exaustão de modelos NÃO para o processamento.
+   * A página sai com falha (Re-tentar manual / ciclo automático do App) e a
+   * fila segue imediatamente. Só o DONO da estabilização libera o circuito —
+   * a página não-dona não pode fechar o sweep de outra.
+   */
+  private resumeAfterModelsExhausted(pageId: string | undefined): void {
+    if (this.stabilizingPageId && pageId && this.stabilizingPageId !== pageId) return;
+    this.queuePaused = false;
+    this.stabilizing = false;
+    this.stabilizingPageId = undefined;
+    this.halted = false;
+    this.haltReason = null;
+    this.currentConcurrency = 1;
+    this.consecutiveSuccesses = 0;
+    this.releaseWaiters(true);
+  }
+
   private async waitForCircuit(pageId: string | undefined): Promise<boolean> {
     if (this.halted) return false;
     if (!this.queuePaused) return true;
@@ -221,7 +239,7 @@ export class AdaptivePipeline {
 
   recordFailure(result: PageFailureSignal, pageId?: string): void {
     if (result.modelExhausted) {
-      this.haltForModelsExhausted(pageId);
+      this.resumeAfterModelsExhausted(pageId);
       return;
     }
 
@@ -302,7 +320,9 @@ export class AdaptivePipeline {
       const signal = result as PageFailureSignal;
 
       if (signal.modelExhausted) {
-        this.haltForModelsExhausted(pageKey);
+        // Exaustão NÃO para mais a fila: libera o circuito e devolve a falha
+        // para o App agendar o ciclo automático de re-tentativa.
+        this.resumeAfterModelsExhausted(pageKey);
         return result;
       }
 
