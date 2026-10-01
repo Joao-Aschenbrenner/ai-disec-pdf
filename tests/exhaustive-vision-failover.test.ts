@@ -482,6 +482,113 @@ describe("Exhaustive Vision failover", () => {
     expect(usedModels.length).toBeGreaterThan(usedBeforeReset);
   });
 
+  it("quarentena 404 da sessão impede páginas seguintes de desperdiçarem chamada no mesmo candidato", async () => {
+    const perModelCalls = new Map<string, number>();
+    const sequence: string[] = [];
+
+    vi.mocked(globalThis.fetch as any).mockImplementation(
+      (url: string | URL, init?: any) => {
+        const urlStr = url.toString();
+        if (urlStr.includes(`127.0.0.1:${PORT}`) || urlStr.includes(`localhost:${PORT}`)) {
+          return originalFetch(url, init);
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
+          return Promise.resolve(new Response(JSON.stringify({
+            data: [
+              { id: "fixture-vision-stale-404", created: 300, modalities: ["text", "image"] },
+              { id: "fixture-vision-good-a", created: 200, modalities: ["text", "image"] },
+              { id: "fixture-vision-good-b", created: 100, modalities: ["text", "image"] },
+            ],
+          }), { status: 200, headers: { "Content-Type": "application/json" } }));
+        }
+        if (urlStr.includes("integrate.api.nvidia.com/v1/chat/completions")) {
+          const body = init?.body ? JSON.parse(init.body) : {};
+          const model = String(body.model);
+          sequence.push(model);
+          const count = (perModelCalls.get(model) || 0) + 1;
+          perModelCalls.set(model, count);
+
+          if (model === "fixture-vision-stale-404") {
+            return Promise.resolve(new Response(JSON.stringify({
+              error: { message: "model not found" },
+            }), { status: 404, headers: { "Content-Type": "application/json" } }));
+          }
+
+          if (model === "fixture-vision-good-a") {
+            return Promise.resolve(new Response(JSON.stringify({
+              error: { message: "temporary timeout" },
+            }), { status: 504, headers: { "Content-Type": "application/json" } }));
+          }
+
+          // good-b estabiliza a primeira página; na página seguinte falha uma vez
+          // para obrigar o seletor a procurar outro candidato.
+          if (count === 1) {
+            return Promise.resolve(new Response(JSON.stringify({
+              choices: [{ message: { content: JSON.stringify({
+                classificationText: "DOCUMENTO ADMINISTRATIVO TESTE",
+                companyName: "Mock",
+                valor: 10,
+              }) } }],
+            }), { status: 200, headers: { "Content-Type": "application/json" } }));
+          }
+
+          return Promise.resolve(new Response(JSON.stringify({
+            error: { message: "temporary timeout" },
+          }), { status: 504, headers: { "Content-Type": "application/json" } }));
+        }
+        return originalFetch(url, init);
+      }
+    );
+
+    const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "NVIDIA" }),
+    });
+    expect(refresh.status).toBe(200);
+
+    // Página 1: stale404 -> good-a -> good-b(success).
+    const page1 = "quarantine-page-1";
+    for (let i = 0; i < 3; i++) {
+      const res = await fetch(`${BASE_URL}/api/extract`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 0, runtimePageId: page1 }),
+      });
+      if (res.ok) break;
+    }
+    expect(sequence.slice(0, 3)).toEqual([
+      "fixture-vision-stale-404",
+      "fixture-vision-good-a",
+      "fixture-vision-good-b",
+    ]);
+
+    // Página 2 começa em good-b. Ao falhar, o próximo elegível deve ser good-a;
+    // stale-404 ficou em quarentena da sessão e NÃO pode reaparecer.
+    const page2 = "quarantine-page-2";
+    const first = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 1, runtimePageId: page2 }),
+    });
+    expect(first.status).toBe(503);
+    const firstBody = await first.json();
+    expect(firstBody.candidateCount).toBe(2);
+
+    const second = await fetch(`${BASE_URL}/api/extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pdfBase64: image, originalName: "fixture.pdf", pageIndex: 1, runtimePageId: page2 }),
+    });
+    expect(second.status).toBe(503);
+
+    expect(sequence.slice(-2)).toEqual([
+      "fixture-vision-good-b",
+      "fixture-vision-good-a",
+    ]);
+    expect(sequence.slice(3)).not.toContain("fixture-vision-stale-404");
+  });
+
   it("exclui modelos embed/retriever/rerank do sweep mesmo quando anunciam modalidade image", async () => {
     vi.mocked(globalThis.fetch as any).mockImplementation(
       (url: string | URL, init?: any) => {
