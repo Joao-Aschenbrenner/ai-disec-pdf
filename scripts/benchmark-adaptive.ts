@@ -160,6 +160,7 @@ async function main() {
         if (!image) throw new Error("imagem já liberada");
         const requestStart = Date.now();
         try {
+          // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request -- API_URL is fixed to 127.0.0.1; this is a local app-to-server request, not network transport.
           const res = await fetch(`${API_URL}/api/extract`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
