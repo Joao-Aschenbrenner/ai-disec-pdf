@@ -41,7 +41,7 @@ function labeledMoney(text: string): number | null {
 function labeledDocumentNumber(text: string, cls: string): string | null {
   const patterns = cls === "NFS"
     ? [
-        /(?:n[uú]mero\s+da\s+nfs-?e|nfs-?e\s*(?:n[ºo°.]|n[uú]mero))\s*[:#º°\.\-]?\s*([A-Z0-9./-]{2,24})/i,
+        /(?:n[uú]mero\s+da\s+nfs-?e|nfs-?e\s*(?:n[ºo°.]|n[uú]mero))\s*[:#º°\.\-]?\s*([0-9][A-Z0-9./-]{1,23})/i,
         /(?:n[uú]mero\s+da\s+nota)\s*[:#º°\.\-]?\s*([A-Z0-9./-]{2,24})/i,
       ]
     : [

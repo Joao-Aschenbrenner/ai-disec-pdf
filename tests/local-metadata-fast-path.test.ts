@@ -11,7 +11,7 @@ const hardGuard = (documentClass: string) => ({
 });
 
 describe("local metadata fast path", () => {
-  it("resolve NFS somente com campos explícitos completos", () => {
+  it("resolve NFS com rótulo explícito mesmo após o cabeçalho NFS-e", () => {
     const result = tryExtractLocalMetadata({
       hint: hardGuard("NFS"),
       text: `NOTA FISCAL DE SERVIÇOS ELETRÔNICA NFS-e

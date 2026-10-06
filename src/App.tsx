@@ -84,6 +84,8 @@ import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalT
 import { tryExtractLocalMetadata } from "./utils/localMetadataExtractor";
 import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
 import { AdaptivePipeline } from "./utils/adaptivePipeline";
+import { runAutoRetryCycles } from "./utils/autoRetry";
+import { PageRenderCache } from "./utils/pageRenderCache";
 import { formatProcessingElapsed } from "./utils/processingTimer";
 import { version as appVersion } from "../package.json";
 
@@ -684,26 +686,9 @@ export default function App() {
   // Cache curto: só mantém o render enquanto a MESMA página percorre retries.
   // A entrada é descartada ao terminar a página para não acumular JPEGs de
   // alta resolução em máquinas de escritório com 8–16 GB de RAM.
-  const renderCacheRef = useRef<Map<string, Promise<string>>>(new Map());
-  // Pipeline adaptativo compartilhado (mesmo mecanismo do benchmark)
-  const pipelineRef = useRef<AdaptivePipeline>(new AdaptivePipeline());
-
-  const renderCacheKey = (pageId: string, mode: "fast" | "detail") => `${pageId}::${mode}`;
-
-  const clearRenderCacheForPage = (pageId: string) => {
-    renderCacheRef.current.delete(renderCacheKey(pageId, "fast"));
-    renderCacheRef.current.delete(renderCacheKey(pageId, "detail"));
-  };
-
-  const renderPageCached = (
-    page: SplitPage,
-    mode: "fast" | "detail"
-  ): Promise<string> => {
-    const key = renderCacheKey(page.id, mode);
-    const cached = renderCacheRef.current.get(key);
-    if (cached) return cached;
-
-    const pending = (async () => {
+  const renderCacheRef = useRef<PageRenderCache<SplitPage, string> | null>(null);
+  if (!renderCacheRef.current) {
+    renderCacheRef.current = new PageRenderCache<SplitPage, string>(async (page, mode) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         return await Promise.race([
@@ -718,19 +703,26 @@ export default function App() {
       } finally {
         if (timer) clearTimeout(timer);
       }
-    })().catch(error => {
-      renderCacheRef.current.delete(key);
-      throw error;
     });
+  }
+  // Pipeline adaptativo compartilhado (mesmo mecanismo do benchmark)
+  const pipelineRef = useRef<AdaptivePipeline>(new AdaptivePipeline());
 
-    renderCacheRef.current.set(key, pending);
-    return pending;
+  const clearRenderCacheForPage = (pageId: string) => {
+    renderCacheRef.current?.clearForPage(pageId);
+  };
+
+  const renderPageCached = (
+    page: SplitPage,
+    mode: "fast" | "detail"
+  ): Promise<string> => {
+    return renderCacheRef.current!.get(page, mode);
   };
 
   const revokeAllBlobUrls = () => {
     blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     blobUrlsRef.current = [];
-    renderCacheRef.current.clear();
+    renderCacheRef.current?.clear();
   };
 
   useEffect(() => {
@@ -980,23 +972,27 @@ export default function App() {
       // Segmento usa o MESMO mecanismo de retry da fila (runPageWithRetry):
       // falha com modelRotated=true é re-tentada na MESMA página, nunca engolida
       // como sucesso de array.
-      const segmentResult = await pipelineRef.current.runPageWithRetry(
-        segmentPage,
-        async (p) => processSinglePage(p.id ?? segmentPage.id, segmentPage, correction),
-        async (pageId, _attempt, delayMs, signal) => {
-          if (pageId) updatePageStage(pageId, "retrying", 48);
-          if (signal?.candidateCount) {
-            setModelFailoverProgress({
-              tried: Number(signal.modelsTried || 0),
-              total: Number(signal.candidateCount || 0),
-            });
+      let segmentResult: ProcessedPageResult;
+      try {
+        segmentResult = await pipelineRef.current.runPageWithRetry(
+          segmentPage,
+          async (p) => processSinglePage(p.id ?? segmentPage.id, segmentPage, correction),
+          async (pageId, _attempt, delayMs, signal) => {
+            if (pageId) updatePageStage(pageId, "retrying", 48);
+            if (signal?.candidateCount) {
+              setModelFailoverProgress({
+                tried: Number(signal.modelsTried || 0),
+                total: Number(signal.candidateCount || 0),
+              });
+            }
+            syncPipelineState();
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+            syncPipelineState();
           }
-          syncPipelineState();
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-          syncPipelineState();
-        }
-      );
-      clearRenderCacheForPage(segmentPage.id);
+        );
+      } finally {
+        clearRenderCacheForPage(segmentPage.id);
+      }
       if (Array.isArray(segmentResult)) {
         results.push(...segmentResult);
       } else {
@@ -1462,47 +1458,38 @@ export default function App() {
       // esgotarem (ex.: chave inválida ou provider fora por horas).
       const AUTO_RETRY_CYCLES = 5;
       const AUTO_RETRY_COOLDOWN_MS = 30_000;
-      try {
-        for (let cycle = 1; cycle <= AUTO_RETRY_CYCLES; cycle++) {
-          const failedNow = workingPages
-            .map(p => finalPhysical.get(p.id))
-            .filter((r): r is SplitPage => Boolean(r) && !Array.isArray(r) && r.status === "failed");
-          if (failedNow.length === 0) break;
-
+      await runAutoRetryCycles({
+        maxCycles: AUTO_RETRY_CYCLES,
+        getFailedPages: () => workingPages
+          .map(p => finalPhysical.get(p.id))
+          .filter((r): r is SplitPage => Boolean(r) && !Array.isArray(r) && r.status === "failed"),
+        canStartPage: () => pipelineRef.current.canLaunchNewPages(),
+        beforeCycle: async (cycle, failedCount) => {
           setAutoRetryStatus(
-            `Ciclo automático ${cycle}/${AUTO_RETRY_CYCLES}: re-tentando ${failedNow.length} página(s) em 30s (a fila não para).`
+            `Ciclo automático ${cycle}/${AUTO_RETRY_CYCLES}: re-tentando ${failedCount} página(s) em 30s (a fila não para).`
           );
           await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_COOLDOWN_MS));
-
-          let recovered = 0;
-          for (const failedPage of failedNow) {
-            if (!pipelineRef.current.canLaunchNewPages()) break;
-            await resetPageModelFailover(failedPage);
-            setSplitPages(prev => prev.map(p =>
-              p.id === failedPage.id
-                ? { ...p, status: "processing", processingStage: "extracting", processingProgress: 45, error: undefined }
-                : p
-            ));
-            const result = await processWithRetry(failedPage);
-            replaceProcessedResult(failedPage.id, result);
-            if (Array.isArray(result)) {
-              finalPhysical.set(failedPage.id, result[0]);
-              recovered += 1;
-            } else if (result.status !== "failed") {
-              finalPhysical.set(failedPage.id, result);
-              recovered += 1;
-            }
+        },
+        retryPage: async failedPage => {
+          await resetPageModelFailover(failedPage);
+          setSplitPages(prev => prev.map(p =>
+            p.id === failedPage.id
+              ? { ...p, status: "processing", processingStage: "extracting", processingProgress: 45, error: undefined }
+              : p
+          ));
+          const result = await processWithRetry(failedPage);
+          replaceProcessedResult(failedPage.id, result);
+          if (Array.isArray(result)) {
+            finalPhysical.set(failedPage.id, result[0]);
             syncPipelineState();
+            return true;
           }
-          setAutoRetryStatus(null);
-          // Se um ciclo inteiro não recuperou nenhuma página, repetir o mesmo
-          // sweep até 5x só queima tempo/cota. Para aqui e deixa o retry manual
-          // para mudança real de provider/chave/condição.
-          if (recovered === 0) break;
-        }
-      } finally {
-        setAutoRetryStatus(null);
-      }
+          if (result.status !== "failed") finalPhysical.set(failedPage.id, result);
+          syncPipelineState();
+          return result.status !== "failed";
+        },
+        onFinish: () => setAutoRetryStatus(null),
+      });
 
       // PASSAGEM 3: reavalia a sequência já com classificationText vindo do VLM.
       // É aqui que "página 2 do extrato" pode vencer um falso TED isolado do Laya.

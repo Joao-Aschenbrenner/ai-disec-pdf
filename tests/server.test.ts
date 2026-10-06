@@ -102,7 +102,11 @@ describe("Mock dos provedores de IA (catálogo externalizado)", () => {
         // Mocka /api/tags do Ollama local como modelo já baixado
         if (urlStr.includes("localhost:11434/api/tags")) {
           return Promise.resolve(new Response(JSON.stringify({
-            models: [{ name: "llama3.2-vision:11b", model: "llama3.2-vision:11b" }]
+            models: [
+              "llama3.2-vision:11b",
+              "llama3.2-vision:90b",
+              "moondream:1.8b",
+            ].map(name => ({ name, model: name })),
           }), { status: 200, headers: { "Content-Type": "application/json" } }));
         }
         // Mocka Mistral OCR (v1/ocr) — retorna texto extraído

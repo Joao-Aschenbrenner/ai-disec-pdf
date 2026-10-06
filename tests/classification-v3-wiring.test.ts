@@ -82,7 +82,8 @@ describe("Classification V3 wiring", () => {
     // splitAndProcessStackedPage processa cada segmento via runPageWithRetry —
     // um segmento com modelRotated=true é re-tentado na mesma página, e o array
     // resultante nunca mascara falha como sucesso.
-    expect(app).toContain("const segmentResult = await pipelineRef.current.runPageWithRetry(");
+    expect(app).toContain("segmentResult = await pipelineRef.current.runPageWithRetry(");
+    expect(app).toMatch(/finally\s*\{\s*clearRenderCacheForPage\(segmentPage.id\);/);
     // Nenhum call-site de segmento pode chamar processSinglePage diretamente.
     expect(app).not.toMatch(/const segmentResult = await processSinglePage\(/);
     expect(app.match(/runPageWithRetry\(/g)?.length).toBeGreaterThanOrEqual(2);
@@ -140,19 +141,23 @@ describe("Classification V3 wiring", () => {
 
   it("render JPEG é cacheado somente durante o sweep da mesma página", () => {
     const app = read("src/App.tsx");
-    expect(app).toContain("renderCacheRef");
+    const cache = read("src/utils/pageRenderCache.ts");
+    expect(app).toContain("new PageRenderCache");
     expect(app).toContain("renderPageCached");
     expect(app).toContain("clearRenderCacheForPage(page.id)");
     expect(app).toContain("clearRenderCacheForPage(segmentPage.id)");
-    expect(app).toContain("renderCacheRef.current.clear()");
+    expect(app).toContain("renderCacheRef.current?.clear()");
+    expect(cache).toContain("this.entries.set(key, pending)");
+    expect(cache).toContain("clearForPage(pageId: string)");
     expect(app).toContain("Render da página excedeu 60s (watchdog do pipeline).");
   });
 
   it("ciclos automáticos param cedo quando um ciclo inteiro não recupera nada", () => {
     const app = read("src/App.tsx");
+    const retries = read("src/utils/autoRetry.ts");
     expect(app).toContain("AUTO_RETRY_CYCLES = 5");
-    expect(app).toContain("if (recovered === 0) break");
-    expect(app).not.toContain("if (recovered === 0 && cycle === AUTO_RETRY_CYCLES) break");
+    expect(app).toContain("runAutoRetryCycles({");
+    expect(retries).toContain("if (recovered === 0) break");
   });
 
   it("primário dinâmico por latência da sessão (modelo funcional mais rápido primeiro)", () => {
