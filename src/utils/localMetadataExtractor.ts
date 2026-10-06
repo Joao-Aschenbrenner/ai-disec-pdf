@@ -84,13 +84,16 @@ function companyFromExplicitLabel(text: string, cls: string): string | null {
   return null;
 }
 
-function countStrongMarkers(text: string, cls: string): number {
-  const pattern =
-    cls === "NFS" ? /(?:nfs-?e|nota\s+fiscal\s+de\s+servi[cç]os)/gi :
-    cls === "NFE_DANFE" ? /\bdanfe\b/gi :
-    cls === "DARF" ? /\bdarf\b|documento\s+de\s+arrecada[cç][aã]o/gi :
-    /$^/g;
-  return (text.match(pattern) || []).length;
+function hasPossibleMultiplicity(text: string, cls: string): boolean {
+  const patterns =
+    cls === "NFS"
+      ? [/n[uú]mero\s+da\s+nfs-?e/gi]
+      : cls === "NFE_DANFE"
+        ? [/\bdanfe\b/gi]
+        : cls === "DARF"
+          ? [/documento\s+de\s+arrecada[cç][aã]o/gi]
+          : [];
+  return patterns.some(pattern => (text.match(pattern) || []).length > 1);
 }
 
 /**
@@ -114,7 +117,7 @@ export function tryExtractLocalMetadata(input: LocalFastPathInput): ExtractedMet
   if (hint?.source !== "hard-guard") return null;
   if (confidence < 0.96) return null;
   if (!["NFS", "NFE_DANFE", "DARF"].includes(cls)) return null;
-  if (countStrongMarkers(text, cls) > 2) return null;
+  if (hasPossibleMultiplicity(text, cls)) return null;
 
   const valor = labeledMoney(text);
   const companyName = companyFromExplicitLabel(text, cls);
