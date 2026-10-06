@@ -79,6 +79,8 @@ export interface SplitPage {
     nextClass?: string | null;
     sequenceAdjusted?: boolean;
     sequenceReason?: string | null;
+    /** false somente quando a passagem local provou que visão não é necessária. */
+    requiresVision?: boolean;
     modelTier?: 'fast' | 'medium';
   };
 }
