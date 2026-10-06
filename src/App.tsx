@@ -81,6 +81,7 @@ declare global {
 import { sanitizeFilename, generatePageFilename, generateCombinedFilename, makeWindowsSafeFilename, resolveFilenameConflict } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalText";
+import { tryExtractLocalMetadata } from "./utils/localMetadataExtractor";
 import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
 import { AdaptivePipeline } from "./utils/adaptivePipeline";
 import { formatProcessingElapsed } from "./utils/processingTimer";
@@ -680,12 +681,56 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blobUrlsRef = useRef<string[]>([]);
+  // Cache curto: só mantém o render enquanto a MESMA página percorre retries.
+  // A entrada é descartada ao terminar a página para não acumular JPEGs de
+  // alta resolução em máquinas de escritório com 8–16 GB de RAM.
+  const renderCacheRef = useRef<Map<string, Promise<string>>>(new Map());
   // Pipeline adaptativo compartilhado (mesmo mecanismo do benchmark)
   const pipelineRef = useRef<AdaptivePipeline>(new AdaptivePipeline());
+
+  const renderCacheKey = (pageId: string, mode: "fast" | "detail") => `${pageId}::${mode}`;
+
+  const clearRenderCacheForPage = (pageId: string) => {
+    renderCacheRef.current.delete(renderCacheKey(pageId, "fast"));
+    renderCacheRef.current.delete(renderCacheKey(pageId, "detail"));
+  };
+
+  const renderPageCached = (
+    page: SplitPage,
+    mode: "fast" | "detail"
+  ): Promise<string> => {
+    const key = renderCacheKey(page.id, mode);
+    const cached = renderCacheRef.current.get(key);
+    if (cached) return cached;
+
+    const pending = (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          pdfBase64ToJpeg(page.base64, { mode }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("Render da página excedeu 60s (watchdog do pipeline).")),
+              60_000
+            );
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    })().catch(error => {
+      renderCacheRef.current.delete(key);
+      throw error;
+    });
+
+    renderCacheRef.current.set(key, pending);
+    return pending;
+  };
 
   const revokeAllBlobUrls = () => {
     blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     blobUrlsRef.current = [];
+    renderCacheRef.current.clear();
   };
 
   useEffect(() => {
@@ -951,6 +996,7 @@ export default function App() {
           syncPipelineState();
         }
       );
+      clearRenderCacheForPage(segmentPage.id);
       if (Array.isArray(segmentResult)) {
         results.push(...segmentResult);
       } else {
@@ -967,6 +1013,26 @@ export default function App() {
   ): Promise<ProcessedPageResult> => {
     try {
       updatePageStage(id, "extracting", 50);
+
+      // FAST PATH CPU-friendly: só pula o VLM quando o PDF já trouxe texto
+      // embutido, o hard-guard local está muito confiante e TODOS os campos
+      // obrigatórios da classe foram extraídos por rótulos explícitos.
+      // Holerites, scans, correções manuais e qualquer dúvida continuam no
+      // fluxo visual atual — precisão vence velocidade.
+      if (!correction && page.segmentIndex === undefined) {
+        const localMetadata = tryExtractLocalMetadata({
+          text: page.localText,
+          hint: page.v3Hint,
+        });
+        if (localMetadata) {
+          console.info(
+            `[local-fast-path] página ${(page.sourcePageIndex ?? page.index) + 1} resolvida sem VLM (${localMetadata.documentClass})`
+          );
+          updatePageStage(id, "confirming", 94);
+          return buildProcessedPage(id, page, localMetadata);
+        }
+      }
+
       const detailedVisualClasses = new Set([
         "HOLERITE",
         "HOLERITE_13",
@@ -979,32 +1045,12 @@ export default function App() {
         page.segmentIndex === undefined
           ? "fast"
           : "detail";
-      // Watchdog: render preso (pdf.js girando em CPU) não pode congelar o
-      // pipeline — o dono do circuito travaria a fila inteira para sempre.
-      // 60s é folgado: render normal leva 2-5s. Timeout vira falha retryable
-      // e o loop de retry do pipeline segue a lista de modelos normalmente.
-      const renderWithWatchdog = async (): Promise<string> => {
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          return await Promise.race([
-            pdfBase64ToJpeg(page.base64, { mode: visualMode }),
-            new Promise<never>((_, reject) => {
-              timer = setTimeout(
-                () => reject(new Error("Render da página excedeu 60s (watchdog do pipeline).")),
-                60_000
-              );
-            }),
-          ]);
-        } finally {
-          if (timer) clearTimeout(timer);
-        }
-      };
-      // Falha no render é problema LOCAL do cliente, não do provider: marcada
-      // como localFailure, o pipeline NÃO pausa/halta por ela — a folha sai
-      // falhada e entra no ciclo automático de re-tentativa.
+      // Falha no render é problema LOCAL do cliente, não do provider. O
+      // render é cacheado entre os modelos A→B→C desta mesma página e liberado
+      // assim que o retry termina.
       let imageBase64: string;
       try {
-        imageBase64 = await renderWithWatchdog();
+        imageBase64 = await renderPageCached(page, visualMode);
       } catch (renderErr: any) {
         renderErr.localFailure = true;
         throw renderErr;
@@ -1153,6 +1199,7 @@ export default function App() {
         }
       );
     } finally {
+      clearRenderCacheForPage(page.id);
       setModelFailoverProgress(null);
     }
   };
@@ -1230,6 +1277,7 @@ export default function App() {
           confidence: Number(p1.confidence || 0),
           source: p1.source || "no-local-text",
           sequenceAdjusted: false,
+          requiresVision: p1.requiresVision !== false,
         },
       };
     });
@@ -1279,6 +1327,9 @@ export default function App() {
           nextClass: next?.documentClass || null,
           sequenceAdjusted: Boolean(seq.sequenceAdjusted),
           sequenceReason: seq.sequenceReason || null,
+          requiresVision: Boolean(seq.sequenceAdjusted)
+            ? true
+            : page.v3Hint?.requiresVision !== false,
           modelTier: autoTier,
         },
       };
@@ -1444,7 +1495,10 @@ export default function App() {
             syncPipelineState();
           }
           setAutoRetryStatus(null);
-          if (recovered === 0 && cycle === AUTO_RETRY_CYCLES) break;
+          // Se um ciclo inteiro não recuperou nenhuma página, repetir o mesmo
+          // sweep até 5x só queima tempo/cota. Para aqui e deixa o retry manual
+          // para mudança real de provider/chave/condição.
+          if (recovered === 0) break;
         }
       } finally {
         setAutoRetryStatus(null);
