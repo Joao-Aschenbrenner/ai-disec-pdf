@@ -22,9 +22,21 @@ export async function extractEmbeddedPdfText(pageBase64: string): Promise<string
     const page = await pdf.getPage(1);
     const content = await page.getTextContent();
     const chunks = (content.items || [])
-      .map((item: any) => typeof item?.str === "string" ? item.str.trim() : "")
+      .map((item: any) => {
+        if (typeof item?.str !== "string") return "";
+        const value = item.str.trim();
+        if (!value) return "";
+        return item?.hasEOL ? value + "\n" : value + " ";
+      })
       .filter(Boolean);
-    return chunks.join(" ").replace(/\s+/g, " ").trim();
+    // Preserva quebras lógicas de linha: isso permite extrair campos por rótulo
+    // sem OCR e continua compatível com o classificador (whitespace é neutro).
+    return chunks
+      .join("")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
   } finally {
     pdf.destroy();
   }
