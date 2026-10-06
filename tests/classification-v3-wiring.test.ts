@@ -123,6 +123,38 @@ describe("Classification V3 wiring", () => {
     expect(pipeline).toContain("localFailure?: boolean");
   });
 
+  it("fast path local só pula VLM quando requiresVision=false e hard-guard está completo", () => {
+    const app = read("src/App.tsx");
+    const extractor = read("src/utils/localMetadataExtractor.ts");
+    const types = read("src/types.ts");
+
+    expect(app).toContain("tryExtractLocalMetadata");
+    expect(app).toContain("requiresVision: p1.requiresVision !== false");
+    expect(app).toContain("page.v3Hint?.requiresVision !== false");
+    expect(types).toContain("requiresVision?: boolean");
+    expect(extractor).toContain('hint?.source !== "hard-guard"');
+    expect(extractor).toContain("confidence < 0.96");
+    expect(extractor).toContain('["NFS", "NFE_DANFE", "DARF"]');
+    expect(extractor).toContain("if (valor === null || !companyName) return null");
+  });
+
+  it("render JPEG é cacheado somente durante o sweep da mesma página", () => {
+    const app = read("src/App.tsx");
+    expect(app).toContain("renderCacheRef");
+    expect(app).toContain("renderPageCached");
+    expect(app).toContain("clearRenderCacheForPage(page.id)");
+    expect(app).toContain("clearRenderCacheForPage(segmentPage.id)");
+    expect(app).toContain("renderCacheRef.current.clear()");
+    expect(app).toContain("Render da página excedeu 60s (watchdog do pipeline).");
+  });
+
+  it("ciclos automáticos param cedo quando um ciclo inteiro não recupera nada", () => {
+    const app = read("src/App.tsx");
+    expect(app).toContain("AUTO_RETRY_CYCLES = 5");
+    expect(app).toContain("if (recovered === 0) break");
+    expect(app).not.toContain("if (recovered === 0 && cycle === AUTO_RETRY_CYCLES) break");
+  });
+
   it("primário dinâmico por latência da sessão (modelo funcional mais rápido primeiro)", () => {
     const server = read("server/server.ts");
     // Otimização: o primário de novas páginas é escolhido pela telemetria real
