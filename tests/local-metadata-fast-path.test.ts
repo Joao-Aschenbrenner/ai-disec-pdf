@@ -79,6 +79,24 @@ Valor Total do Documento: R$ 980,15`,
     })).toBeNull();
   });
 
+  it("não usa fast path quando a página contém dois documentos fortes", () => {
+    const result = tryExtractLocalMetadata({
+      hint: hardGuard("NFS"),
+      text: `NOTA FISCAL DE SERVIÇOS ELETRÔNICA
+Número da NFS-e: 1001
+PRESTADOR DE SERVIÇOS
+Razão Social: ACME UM LTDA  CNPJ 11.111.111/0001-11
+Valor dos Serviços: R$ 100,00
+
+NOTA FISCAL DE SERVIÇOS ELETRÔNICA
+Número da NFS-e: 1002
+PRESTADOR DE SERVIÇOS
+Razão Social: ACME DOIS LTDA  CNPJ 22.222.222/0001-22
+Valor dos Serviços: R$ 200,00`,
+    });
+    expect(result).toBeNull();
+  });
+
   it("não habilita fast path para holerite ou classe não suportada", () => {
     expect(tryExtractLocalMetadata({
       hint: hardGuard("HOLERITE"),
