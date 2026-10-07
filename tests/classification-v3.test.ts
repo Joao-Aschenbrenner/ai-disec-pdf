@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
 import { resolveSequence } from "../server/classification/sequenceResolver";
-import { buildLayaClassificationEvidence, routeDocumentV3 } from "../server/classification/v3Router";
+import { applyDocumentRoutingV3, buildLayaClassificationEvidence, routeDocumentV3 } from "../server/classification/v3Router";
 import { splitPdfPageAtRatio } from "../src/utils/pageSegmenter";
 
 describe("Classification V3 SequenceResolver", () => {
@@ -160,6 +160,29 @@ describe("Classification V3 structural Vision evidence", () => {
     expect(result.needsReview).toBe(false);
   });
 
+  it("crop de holerite individual é reconhecido pela estrutura", async () => {
+    const result = await routeDocumentV3(
+      "",
+      undefined,
+      {
+        useLaya: false,
+        visualEvidence: {
+          layout: "single_form",
+          keyLabels: ["FUNCIONARIO", "FOLHA MENSAL", "VENCIMENTOS", "DESCONTOS"],
+          separateDocumentBlocks: 1,
+          independentFormHeaders: 1,
+          independentTotals: 1,
+          sharedGrid: false,
+          regions: [
+            { position: "full", kind: "form", hasOwnHeader: true, hasEmployeeField: true, hasOwnTotals: true },
+          ],
+        },
+      }
+    );
+    expect(result.documentClass).toBe("HOLERITE");
+    expect(result.source).toBe("visual-guard");
+  });
+
   it("dois formulários completos viram HOLERITE por estrutura", async () => {
     const result = await routeDocumentV3(
       "",
@@ -204,6 +227,32 @@ describe("Classification V3 structural Vision evidence", () => {
     );
     expect(result.documentClass).toBe("FOPAG_RESUMO");
     expect(result.source).toBe("visual-guard");
+  });
+
+  it("NFS rejeita BASE DE CALCULO/ISS como valor final do documento", async () => {
+    const result = await applyDocumentRoutingV3(
+      {
+        classificationText: "",
+        visualEvidence: {
+          layout: "single_form",
+          keyLabels: ["NFS-e", "PRESTADOR", "TOMADOR", "VALOR LIQUIDO", "ISS"],
+          separateDocumentBlocks: 1,
+        },
+        fieldEvidence: {
+          companyNameLocation: "issuer_header",
+          valorLocation: "document_total",
+          valorLabel: "BASE DE CALCULO",
+          valorRelation: "same_box",
+        },
+        companyName: "EMPRESA TESTE",
+        valor: 123.45,
+      },
+      undefined
+    );
+    expect(result.documentClass).toBe("NFS");
+    expect(result.valor).toBeNull();
+    expect(result.needsReview).toBe(true);
+    expect(result.classificationEvidence).toContain("rejected-value-label:BASE DE CALCULO");
   });
 
   it("ledger bancário com grade de lançamentos é EXTRATO_CC", async () => {
