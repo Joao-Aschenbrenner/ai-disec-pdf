@@ -33,16 +33,32 @@ FORMATO:
   "classificationText": "somente titulos, cabecalhos, rotulos e nomes das colunas; nunca copie conteudo de linhas, nomes, documentos, contas, descricoes ou valores",
   "visualEvidence": {
     "layout": "single_form | multi_row_table | bank_ledger | two_individual_forms | other | unknown",
+    "keyLabels": ["somente rotulos canonicos visiveis; sem valores"],
     "columnHeaders": ["rotulos de coluna visiveis, sem dados das linhas"],
     "separateDocumentBlocks": 1,
     "repeatedPeopleRows": false,
     "transactionLedgerRows": false,
+    "sharedGrid": false,
+    "independentFormHeaders": 1,
+    "independentTotals": 1,
+    "regions": [
+      {
+        "position": "top | middle | bottom | full",
+        "kind": "form | table | header | totals | other",
+        "hasOwnHeader": true,
+        "hasEmployeeField": false,
+        "hasOwnTotals": true,
+        "labels": ["rotulos canonicos deste bloco, sem valores"]
+      }
+    ],
     "pageMarker": "Pagina 2 de 3 ou null"
   },
   "fieldEvidence": {
     "companyNameLocation": "issuer_header | employer_field | institution_header | account_holder_header | transaction_row | unknown",
     "pessoaNomeLocation": "employee_field | report_employee_row | transaction_party | unknown",
-    "valorLocation": "document_total | employee_row | transaction_row | unknown"
+    "valorLocation": "document_total | employee_row | transaction_row | unknown",
+    "valorLabel": "VALOR LIQUIDO | VALOR TOTAL | VALOR DOS SERVICOS | TOTAL A PAGAR | BASE DE CALCULO | ISS | unknown",
+    "valorRelation": "same_row | below_label | same_box | nearby | unknown"
   },
   "notaNumber": "numero da nota/documento ou null",
   "companyName": "prestador/emitente/empregador/titular da conta no cabecalho correto ou null",
@@ -55,6 +71,9 @@ REGRAS:
 2. NAO invente. Campo ilegivel = null.
 3. classificationText deve conter somente titulos, cabecalhos e rotulos visiveis. Nao inclua valores de campos nem texto das linhas de tabela; o Laya recebe esses sinais estruturais para decidir a classe.
 3a. visualEvidence descreve o formato da pagina, nao o conteudo das pessoas/operacoes: use multi_row_table para tabela com varias linhas; bank_ledger para extrato com grade de lancamentos; two_individual_forms somente para dois formularios completos e fisicamente separados; separateDocumentBlocks conta formularios completos, nao linhas da tabela.
+3b. keyLabels e regions devem preservar ROTULOS importantes mesmo quando classificationText for curto. Use apenas estes conceitos canonicos quando visiveis: NFS-E, NOTA FISCAL DE SERVICOS, PRESTADOR, TOMADOR, NUMERO NFS-E, VALOR DOS SERVICOS, VALOR LIQUIDO, BASE DE CALCULO, ISS, DANFE, NF-E, EMITENTE, FUNCIONARIO, EMPREGADOR, FOLHA MENSAL, 13 SALARIO, VENCIMENTOS, DESCONTOS, TOTAL PROVENTOS, TOTAL DESCONTOS, AGENCIA, CONTA, HISTORICO, SALDO, APLICACAO, RESGATE.
+3c. regions nao contem nomes, CPFs, contas, valores nem transacoes. Elas descrevem apenas posicao relativa, tipo de bloco, existencia de cabecalho/campo/totais e rotulos canonicos.
+3d. sharedGrid=true significa uma unica grade compartilhada por varias linhas (relatorio/extrato). Em dois holerites completos, sharedGrid=false, independentFormHeaders=2 e independentTotals=2.
 4. NFS-e: companyName = valor do bloco PRESTADOR/EMITENTE; marque issuer_header. Nunca use TOMADOR.
 5. NFS-e: textos grandes de PREFEITURA, MUNICIPIO, SECRETARIA, DEPARTAMENTO ou nome da cidade NAO sao empresa, salvo se estiverem explicitamente dentro do campo PRESTADOR/EMITENTE.
 6. DANFE/NF-e: companyName = EMITENTE/REMETENTE; marque issuer_header.
@@ -63,7 +82,8 @@ REGRAS:
 9. Extrato bancario com varias operacoes: e UM documento, nunca gere um objeto/arquivo por transacao. Marque layout=bank_ledger e transactionLedgerRows=true; companyName somente do cabecalho da instituicao ou titular da conta; nunca use favorecido/contraparte da transacao; marque transaction_party se a pagina mostrar nomes em lancamentos; valor = null.
 10. Ignore carimbos sobrepostos como "Pago com Recurso do TERMO DE COLABORACAO" para decidir empresa.
 11. Retorne ARRAY somente se houver exatamente dois formularios completos, cada um com seu proprio cabecalho/campos, visualmente separados na pagina. Nesse caso marque, em cada objeto, layout=two_individual_forms e separateDocumentBlocks=2. Duas ou mais linhas de tabela nunca justificam ARRAY.
-12. Preencha valor somente quando estiver rotulado como total consolidado do proprio documento (ex.: Valor Total da Nota/Total a Pagar); marque document_total. Nunca copie total de linha de tabela, lancamento bancario ou empregado.
+12. Preencha valor somente quando estiver rotulado como total consolidado do proprio documento (ex.: Valor Total da Nota/Total a Pagar/Valor Liquido da NFS-e); marque document_total. Nunca copie total de linha de tabela, lancamento bancario ou empregado.
+12a. Para NFS-e, se houver "VALOR LIQUIDO" e esse for o total final do documento, prefira esse campo e registre valorLabel="VALOR LIQUIDO" e a relacao espacial em valorRelation. Nao confunda com BASE DE CALCULO, ISS ou desconto.
 13. Use numero americano em valor: 5425.00, nunca 5.425,00.
 14. Se estiver em duvida, deixe o campo duvidoso null.
 15. Em paginas de continuacao, copie apenas cabecalhos/rotulos visiveis; nao invente um novo documento apenas porque o cabecalho principal nao aparece.
