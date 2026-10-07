@@ -1797,7 +1797,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         markModelSemanticSuccess(provider, requestModel);
         resetPageFailoverCycle(provider, pageFailoverKey);
         await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", sanitizeRoutingMetadataForLog(routedTextData));
-        return res.json(sanitizeRoutingMetadataForLog(routedTextData));
+        return res.json(routedTextData);
       }
 
       const jsonCandidate = extractJsonCandidate(trimmed);
@@ -1856,7 +1856,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           markModelSemanticSuccess(provider, requestModel);
           resetPageFailoverCycle(provider, pageFailoverKey);
           await logUpload(originalName, pageIndex, "success", provider, "Assinatura fiscal forte consolidada em um único documento da página (CLASSIFICATION-V3)", sanitizeRoutingMetadataForLog(routedPage));
-          return res.json(sanitizeRoutingMetadataForLog(routedPage));
+          return res.json(routedPage);
         }
 
         const collapsedPayroll = collapsePayrollRoster(extractedData, { documentClass: v3Hint?.documentClass });
@@ -1866,7 +1866,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           markModelSemanticSuccess(provider, requestModel);
           resetPageFailoverCycle(provider, pageFailoverKey);
           await logUpload(originalName, pageIndex, "success", provider, "Array normalizado para documento único da página (CLASSIFICATION-V3)", sanitizeRoutingMetadataForLog(routedPage));
-          return res.json(sanitizeRoutingMetadataForLog(routedPage));
+          return res.json(routedPage);
         }
 
         // A model array is usually a list of fields, table rows or page regions.
@@ -1877,7 +1877,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           markModelSemanticSuccess(provider, requestModel);
           resetPageFailoverCycle(provider, pageFailoverKey);
           await logUpload(originalName, pageIndex, "success", provider, "Array de extração consolidado em um documento da página (CLASSIFICATION-V3)", sanitizeRoutingMetadataForLog(routedPage));
-          return res.json(sanitizeRoutingMetadataForLog(routedPage));
+          return res.json(routedPage);
         }
       }
 
@@ -1885,7 +1885,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       markModelSemanticSuccess(provider, requestModel);
       resetPageFailoverCycle(provider, pageFailoverKey);
       await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", sanitizeRoutingMetadataForLog(routedData));
-      return res.json(sanitizeRoutingMetadataForLog(routedData));
+      return res.json(routedData);
 
      } catch (error: any) {
        if (requestAbortController.signal.aborted) return;
