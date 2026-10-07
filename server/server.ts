@@ -8,12 +8,14 @@ import { resolveSequence, toSequenceLegacyType } from "./classification/sequence
 import { getLearningStats, rememberConfirmedClassification, findConfirmedPattern } from "./classification/learningStore";
 import { DOCUMENT_CLASSES } from "./classification/documentTaxonomy";
 import { buildExtractionPrompt } from "./classification/extractionPrompt";
+import { collapsePayrollRoster, collapseStatementTransactions } from "./classification/payrollRoster";
+import { isConfirmedTwoDocumentArray, isStrongSingleInvoiceArray, mergeExtractionArray } from "./classification/extractionArray";
 import { getLayaHealth } from "./classification/layaClient";
 
 dotenv.config();
 
 const DEFAULT_PORT = 3001;
-const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
+const DATA_DIR = process.env.AI_DISEC_DATA_DIR || path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
 // Mapeia falhas do provedor de IA para status/mensagem amigáveis.
@@ -61,6 +63,7 @@ const FALLBACK_MODELS: Record<string, { baseUrl: string; model: string }> = {
   LOCAL_OLLAMA: { baseUrl: "http://localhost:11434", model: "llama3.2-vision:11b" },
   OLLAMA_CLOUD: { baseUrl: "https://chat.api.ollama.ai", model: "llama3.2-vision:11b" },
   CODEX: { baseUrl: "https://api.openai.com", model: "gpt-4o" },
+  OPENCODE: { baseUrl: "http://127.0.0.1:4096", model: "" },
 };
 
 interface ModelsCatalog {
@@ -78,6 +81,7 @@ interface ModelsCatalog {
     noVision?: boolean;
     ocrOnly?: boolean;
     optional?: boolean;
+    dynamic?: boolean;
   }>;
 }
 
@@ -171,6 +175,225 @@ const MODEL_RUNTIME_FILE = path.join(DATA_DIR, "model-runtime.json");
 const RUNTIME_SESSION_STARTED_AT = Date.now();
 let runtimeModels: Record<string, RuntimeModelState> = {};
 
+/**
+ * Failover exaustivo por página.
+ * Não é persistido: serve apenas para garantir que UMA página percorra cada
+ * candidato Vision no máximo uma vez antes de declarar o provider esgotado.
+ *
+ * `designated` é o modelo que o failover desta página escolheu para a próxima
+ * tentativa DELA. Sem isso, o activeIndex global (movido pelo failover de
+ * outras páginas em voo) faria esta página chamar modelos que ela já tentou —
+ * livelock observado em corrida de 3 páginas: cada avanço era roubado antes
+ * da próxima chamada, e a página nunca alcançava os últimos candidatos.
+ */
+type PageFailoverCycle = {
+  tried: Set<string>;
+  designated?: string;
+  /** Candidatos já comprovadamente indisponíveis antes desta página começar. */
+  excluded: Set<string>;
+};
+
+let pageFailoverCycles = new Map<string, PageFailoverCycle>();
+let sessionUnavailableModels: Record<string, Set<string>> = {};
+
+function getSessionUnavailableModels(provider: string): Set<string> {
+  if (!sessionUnavailableModels[provider]) {
+    sessionUnavailableModels[provider] = new Set<string>();
+  }
+  return sessionUnavailableModels[provider];
+}
+
+function markModelUnavailableForSession(provider: string, model: string, reason: string): void {
+  if (!model) return;
+  getSessionUnavailableModels(provider).add(model);
+  const state = runtimeModels[provider];
+  if (state) {
+    state.failures[model] = `SESSION_UNAVAILABLE: ${reason.slice(0, 160)}`;
+    runtimeModels[provider] = state;
+    saveRuntimeModels();
+  }
+  console.warn(`[models-runtime] ${provider}: candidato removido dos próximos sweeps desta sessão após indisponibilidade explícita`);
+}
+
+function pageFailoverCycleKey(provider: string, pageKey: string): string {
+  return `${provider}::${pageKey}`;
+}
+
+function resetPageFailoverCycle(provider: string, pageKey: string): void {
+  pageFailoverCycles.delete(pageFailoverCycleKey(provider, pageKey));
+}
+
+function resetProviderFailoverCycles(provider: string): void {
+  const prefix = `${provider}::`;
+  for (const key of pageFailoverCycles.keys()) {
+    if (key.startsWith(prefix)) pageFailoverCycles.delete(key);
+  }
+}
+
+function getPageFailoverCycle(provider: string, pageKey: string): PageFailoverCycle {
+  const key = pageFailoverCycleKey(provider, pageKey);
+  let cycle = pageFailoverCycles.get(key);
+  if (!cycle) {
+    cycle = {
+      tried: new Set<string>(),
+      excluded: new Set(getSessionUnavailableModels(provider)),
+    };
+    pageFailoverCycles.set(key, cycle);
+  }
+  return cycle;
+}
+
+/**
+ * Modelo que ESTA página deve usar agora: o designado pelo failover dela, se
+ * houver e ainda existir no catálogo; senão o candidato ativo global.
+ */
+async function getRequestModel(provider: string, apiKey: string, pageKey: string, preferredModel = ""): Promise<string> {
+  // Garante que a página congele a lista de candidatos já indisponíveis no
+  // momento em que começa. Um modelo que falhar NESTA página ainda conta como
+  // tentativa real dela; páginas futuras já o excluem.
+  const cycle = getPageFailoverCycle(provider, pageKey);
+  const state = runtimeModels[provider];
+
+  const designated = cycle.designated;
+  if (designated && state?.candidates.includes(designated) && !cycle.excluded.has(designated)) {
+    return designated;
+  }
+
+  if (provider === "OPENCODE") {
+    if (preferredModel && state?.candidates.includes(preferredModel) && !cycle.excluded.has(preferredModel)) {
+      return preferredModel;
+    }
+  }
+
+  const active = state?.candidates?.[state.activeIndex];
+  if (active && !cycle.excluded.has(active)) return active;
+
+  const firstEligible = state?.candidates?.find(candidate => !cycle.excluded.has(candidate));
+  if (firstEligible && state) {
+    state.activeIndex = state.candidates.indexOf(firstEligible);
+    runtimeModels[provider] = state;
+    return firstEligible;
+  }
+
+  return getRuntimeModel(provider, apiKey);
+}
+
+type ModelFailoverResult = {
+  modelRotated: boolean;
+  modelExhausted: boolean;
+  candidateCount: number;
+  modelsTried: number;
+  modelsRemaining: number;
+};
+
+function failoverRuntimeModel(
+  provider: string,
+  pageKey: string,
+  failedModel: string,
+  reason: string
+): ModelFailoverResult {
+  const state = runtimeModels[provider];
+  if (!state || !state.candidates.length) {
+    return {
+      modelRotated: false,
+      modelExhausted: true,
+      candidateCount: 0,
+      modelsTried: 0,
+      modelsRemaining: 0,
+    };
+  }
+
+  const cycle = getPageFailoverCycle(provider, pageKey);
+  if (failedModel) cycle.tried.add(failedModel);
+
+  if (failedModel) {
+    state.failures[failedModel] = reason.slice(0, 200);
+    if (state.telemetry[failedModel]) {
+      state.telemetry[failedModel].rotationCount += 1;
+    }
+    resetSessionFailures(provider, failedModel);
+  }
+
+  const eligibleCandidates = state.candidates.filter(candidate => !cycle.excluded.has(candidate));
+  const candidateCount = eligibleCandidates.length;
+  const modelsTried = [...cycle.tried].filter(candidate => eligibleCandidates.includes(candidate)).length;
+
+  if (modelsTried >= candidateCount) {
+    runtimeModels[provider] = state;
+    saveRuntimeModels();
+    return {
+      modelRotated: false,
+      modelExhausted: true,
+      candidateCount,
+      modelsTried,
+      modelsRemaining: 0,
+    };
+  }
+
+  // Se outro request em voo já moveu o provider para um candidato que ESTA
+  // página ainda não tentou, apenas designa esse candidato; não pula mais um.
+  const activeModel = state.candidates[state.activeIndex];
+  if (
+    activeModel &&
+    eligibleCandidates.includes(activeModel) &&
+    !cycle.tried.has(activeModel) &&
+    activeModel !== failedModel
+  ) {
+    cycle.designated = activeModel;
+    runtimeModels[provider] = state;
+    saveRuntimeModels();
+    return {
+      modelRotated: true,
+      modelExhausted: false,
+      candidateCount,
+      modelsTried,
+      modelsRemaining: candidateCount - modelsTried,
+    };
+  }
+
+  const startIndex = Math.max(0, eligibleCandidates.indexOf(failedModel));
+  let nextModel = "";
+  for (let step = 1; step <= candidateCount; step++) {
+    const idx = (startIndex + step) % candidateCount;
+    const candidate = eligibleCandidates[idx];
+    if (!cycle.tried.has(candidate)) {
+      nextModel = candidate;
+      break;
+    }
+  }
+
+  if (!nextModel) {
+    runtimeModels[provider] = state;
+    saveRuntimeModels();
+    return {
+      modelRotated: false,
+      modelExhausted: true,
+      candidateCount,
+      modelsTried,
+      modelsRemaining: 0,
+    };
+  }
+
+  state.activeIndex = state.candidates.indexOf(nextModel);
+  // Designa para ESTA página: a próxima tentativa DELA usa este candidato,
+  // imune ao activeIndex global movido por outras páginas em voo.
+  cycle.designated = nextModel;
+  resetSessionFailures(provider, nextModel);
+  runtimeModels[provider] = state;
+  saveRuntimeModels();
+  console.warn(
+    `[models-runtime] ${provider}: página ${pageKey} falhou no candidato atual; avançando para outro candidato (${modelsTried}/${candidateCount} já tentados)`
+  );
+
+  return {
+    modelRotated: true,
+    modelExhausted: false,
+    candidateCount,
+    modelsTried,
+    modelsRemaining: candidateCount - modelsTried,
+  };
+}
+
 type SessionFailureStreak = {
   timeout: number;
   invalidOutput: number;
@@ -235,7 +458,19 @@ function catalogCandidates(provider: string): string[] {
   return Array.from(new Set(ordered.filter(Boolean)));
 }
 
+/**
+ * Modelos que podem aceitar imagem mas NÃO são modelos generativos de chat.
+ * Eles nunca devem entrar no sweep de classificação/extracao.
+ */
+function modelIsObviouslyNonGenerative(model: string): boolean {
+  const lower = model.toLowerCase();
+  return /(?:^|[\/_-])(embed|embedding|retriever|retrieval|rerank|reranker)(?:[\/_-]|$)/i.test(lower)
+    || /(?:^|[\/_-])(clip|siglip)(?:[\/_-]|$)/i.test(lower);
+}
+
 function modelLooksCompatible(provider: string, model: string): boolean {
+  if (modelIsObviouslyNonGenerative(model)) return false;
+
   const entry = loadModelsCatalog().providers[provider];
   if (!entry) return true;
   if (entry.ocrOnly) return true;
@@ -273,13 +508,42 @@ function providerCredential(provider: string, apiKey: string): string {
   return "";
 }
 
+export function filterOpenCodeVisionFreeModels(data: any): string[] {
+  const connected = new Set(Array.isArray(data?.connected) ? data.connected.map(String) : []);
+  const candidates: string[] = [];
+  for (const providerInfo of Array.isArray(data?.all) ? data.all : []) {
+    const providerId = String(providerInfo?.id || "");
+    if (!providerId || !connected.has(providerId)) continue;
+    const models = providerInfo.models && typeof providerInfo.models === "object" ? providerInfo.models : {};
+    const modelEntries: Array<[string, any]> = Array.isArray(models)
+      ? models.map((model: any) => [String(model?.id || ""), model])
+      : Object.entries(models) as Array<[string, any]>;
+    for (const [modelKey, modelInfo] of modelEntries) {
+      const modelId = String(modelInfo?.id || modelKey);
+      const inputModalities = modelInfo?.modalities?.input;
+      const inputCost = Number(modelInfo?.cost?.input);
+      const outputCost = Number(modelInfo?.cost?.output);
+      // Trust only explicit metadata: image input and zero input/output cost.
+      // A model name containing "free" is never sufficient evidence.
+      if (Array.isArray(inputModalities) && inputModalities.includes("image") &&
+          Number.isFinite(inputCost) && inputCost === 0 &&
+          Number.isFinite(outputCost) && outputCost === 0) {
+        candidates.push(`${providerId}/${modelId}`);
+      }
+    }
+  }
+  return [...new Set(candidates)];
+}
+
 async function fetchLiveModelCandidates(provider: string, apiKey: string): Promise<string[]> {
   const catalog = loadModelsCatalog();
   const entry = catalog.providers[provider];
   if (!entry) return catalogCandidates(provider);
 
   if (provider === "LOCAL_OLLAMA") {
-    const res = await fetch(`${entry.baseUrl.replace(/\/$/, "")}/api/tags`);
+    const localUrl = "http://localhost:11434";
+    assertSafeProviderUrl(`${localUrl}/api/tags`, provider);
+    const res = await fetch(`${localUrl}/api/tags`);
     if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
     const data = await res.json() as any;
     return Array.from(new Set(
@@ -289,17 +553,53 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
     ));
   }
 
+  if (provider === "OPENCODE") {
+    const endpoint = "http://127.0.0.1:4096/provider";
+    assertSafeProviderUrl(endpoint, provider);
+    const headers: Record<string, string> = {};
+    const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
+    if (serverPassword) {
+      const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
+      headers.Authorization = `Basic ${Buffer.from(`${username}:${serverPassword}`).toString("base64")}`;
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(endpoint, { headers, signal: controller.signal });
+      if (!response.ok) throw new Error(`OpenCode HTTP ${response.status}`);
+      const data = await response.json() as any;
+      return filterOpenCodeVisionFreeModels(data);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   const credential = providerCredential(provider, apiKey);
   if (!credential) return catalogCandidates(provider);
 
+  // Base URLs literais por provider (mesmos valores do catálogo versionado):
+  // elimina URL derivada de arquivo na descoberta live — o analyzer de SSRF
+  // exige fonte não controlável.
+  const LIVE_MODELS_BASE_URLS: Record<string, string> = {
+    GOOGLE: "https://generativelanguage.googleapis.com",
+    OPENAI: "https://api.openai.com",
+    ANTHROPIC: "https://api.anthropic.com",
+    MISTRAL: "https://api.mistral.ai",
+    OPENROUTER: "https://openrouter.ai/api",
+    GROQ: "https://api.groq.com/openai",
+    OLLAMA_CLOUD: "https://chat.api.ollama.ai",
+    CODEX: "https://api.openai.com",
+    NVIDIA: "https://integrate.api.nvidia.com",
+  };
   let url = "";
   const headers: Record<string, string> = {};
 
   if (provider === "GOOGLE") {
     url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(credential)}`;
   } else {
+    const baseUrl = LIVE_MODELS_BASE_URLS[provider] || entry.baseUrl.replace(/\/$/, "");
     const endpoint = entry.modelsEndpoint || "/v1/models";
-    url = entry.baseUrl.replace(/\/$/, "") + (endpoint.startsWith("/") ? endpoint : `/${endpoint}`);
+    url = baseUrl + (endpoint.startsWith("/") ? endpoint : `/${endpoint}`);
     if (provider === "ANTHROPIC") {
       headers["x-api-key"] = credential;
       headers["anthropic-version"] = "2023-06-01";
@@ -307,6 +607,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
       headers.Authorization = `Bearer ${credential}`;
     }
   }
+  assertSafeProviderUrl(url, provider);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -344,6 +645,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
 
     rows = rows.filter(row =>
       row.id &&
+      !modelIsObviouslyNonGenerative(row.id) &&
       (row.hasModalityMetadata ? row.explicitVision : modelLooksCompatible(provider, row.id))
     );
     // Mais recente primeiro; empate de created (alguns providers devolvem o
@@ -389,14 +691,18 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
     console.warn(`[models-runtime] ${provider}: refresh falhou; preservando catálogo. Motivo: ${reason}`);
   }
 
-  // O provider ao vivo vem primeiro (mais recente quando a API fornece created_at);
-  // catálogo curado completa os fallbacks conhecidos.
-  const candidates = Array.from(new Set([...(live || []), ...fallback]))
+  // Se a API respondeu com candidatos Vision válidos, o sweep usa SOMENTE
+  // o que ela declarou disponível agora. O catálogo versionado entra apenas
+  // quando a descoberta ao vivo falhar ou vier vazia.
+  const sourceCandidates = provider === "OPENCODE"
+    ? live
+    : live.length > 0 ? live : fallback;
+  const candidates = Array.from(new Set(sourceCandidates))
     .filter(model => modelLooksCompatible(provider, model));
 
   const previous = runtimeModels[provider];
   const next: RuntimeModelState = {
-    candidates: candidates.length ? candidates : fallback,
+    candidates: candidates.length ? candidates : provider === "OPENCODE" ? [] : fallback,
     // Cada nova atualização volta a testar o candidato mais recente.
     // Se falhar durante a sessão, rotateRuntimeModel avança para o próximo.
     activeIndex: 0,
@@ -411,6 +717,8 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
     }
   }
   runtimeModels[provider] = next;
+  sessionUnavailableModels[provider] = new Set<string>();
+  resetProviderFailoverCycles(provider);
   saveRuntimeModels();
   console.log(`[models-runtime] ${provider}: ${next.candidates.length} candidatos atualizados; ativo #${next.activeIndex + 1}`);
   return next;
@@ -464,12 +772,44 @@ function recordTelemetry(provider: string, model: string, outcome: "success" | "
   }
   runtimeModels[provider] = state;
   saveRuntimeModels();
+  if (outcome === "success") refreshActiveIndexByLatency(provider);
 }
 
-function markCurrentModelSemanticSuccess(provider: string): void {
+/**
+ * Otimização de velocidade: o primário (primeiro candidato usado por toda
+ * página NOVA) passa a ser o modelo funcional MAIS RÁPIDO da sessão, medido
+ * pela telemetria real. Score = latência média / taxa de sucesso; só modelos
+ * com >= 2 sucessos e >= 50% de sucesso concorrem. Sem telemetria, nada muda
+ * (a ordem do refresh — created desc + curado — continua valendo).
+ */
+function refreshActiveIndexByLatency(provider: string): void {
   const state = runtimeModels[provider];
-  const current = state?.candidates?.[state.activeIndex];
-  if (current) resetSessionFailures(provider, current);
+  if (!state || state.candidates.length < 2) return;
+  const score = (model: string): number | null => {
+    const t = state.telemetry[model];
+    if (!t || t.successCount < 2) return null;
+    const attempts = t.successCount + t.failureCount + t.timeoutCount;
+    const rate = t.successCount / Math.max(1, attempts);
+    if (rate < 0.5) return null;
+    return t.avgLatencyMs / rate;
+  };
+  let bestIndex = -1;
+  let bestScore = Infinity;
+  state.candidates.forEach((model, i) => {
+    const s = score(model);
+    if (s !== null && s < bestScore) {
+      bestScore = s;
+      bestIndex = i;
+    }
+  });
+  if (bestIndex >= 0 && bestIndex !== state.activeIndex) {
+    state.activeIndex = bestIndex;
+    console.log(`[models-runtime] ${provider}: primário agora é #${bestIndex + 1} (${state.candidates[bestIndex]}) por latência da sessão`);
+  }
+}
+
+function markModelSemanticSuccess(provider: string, model: string): void {
+  if (model) resetSessionFailures(provider, model);
 }
 
 function shouldRotateModel(status: number, body: string, provider?: string): boolean {
@@ -546,6 +886,118 @@ async function logUpload(originalName: string, pageIndex: number, status: string
   } catch (e) {
     console.error("Failed to write upload log", e);
   }
+}
+
+function buildModelFailoverResponse(
+  provider: string,
+  pageKey: string,
+  failedModel: string,
+  reason: string,
+  providerPressure = false
+) {
+  const result = failoverRuntimeModel(provider, pageKey, failedModel, reason);
+
+  if (result.modelExhausted) {
+    return {
+      status: 503,
+      body: {
+        error: `Todos os ${result.candidateCount} modelos Vision disponíveis deste provedor falharam nesta página. A fila continua; esta página entra na re-tentativa automática (ou use Re-tentar).`,
+        retryable: false,
+        modelExhausted: true,
+        candidateCount: result.candidateCount,
+        modelsTried: result.modelsTried,
+        modelsRemaining: 0,
+        providerPressure,
+      },
+    };
+  }
+
+  return {
+    status: 503,
+    body: {
+      error: `Este candidato falhou. Vou tentar outro modelo Vision na mesma página antes de liberar a fila.`,
+      retryAfter: "1s",
+      retryable: true,
+      modelRotated: true,
+      modelExhausted: false,
+      candidateCount: result.candidateCount,
+      modelsTried: result.modelsTried,
+      modelsRemaining: result.modelsRemaining,
+      providerPressure,
+    },
+  };
+}
+
+function shouldQuarantineModelForSession(status: number, body: string): boolean {
+  if ([404, 410].includes(status)) return true;
+  if (status === 403 && !isDefinitiveCredentialError(status, body)) return true;
+  return /model.{0,40}(not found|unavailable|retired|deprecated|unsupported|access denied)|does not support image|not support image input/i.test(body);
+}
+
+function shouldExhaustiveFailover(status: number, body: string): boolean {
+  // 400 de provider pode ser específico do candidato (parâmetro/capacidade/
+  // suporte multimodal). Como o contrato do modo automático é esgotar os
+  // candidatos Vision da página antes de desistir, 400 também entra no sweep.
+  // Erros globais de credencial são interceptados antes por
+  // isDefinitiveCredentialError().
+  if ([400, 403, 404, 408, 410, 422, 500, 502, 503, 504, 529].includes(status)) return true;
+  return /model.{0,40}(not found|unavailable|retired|deprecated|unsupported|invalid|forbidden|access denied)|invalid.{0,20}model|does not support image|not support image input|no workers?|resource.?exhausted|capacity|overloaded|gateway timeout|time.?out|timed out/i.test(body);
+}
+
+// ─── SSRF guard para URLs de provider ───────────────────────────────
+// As URLs de provider vêm do catálogo versionado (server/models.json) e não
+// de input do usuário; o guard é defesa em profundidade contra catálogo
+// adulterado: exige http/https, https + host público para providers cloud,
+// e permite loopback APENAS para serviços locais intencionais (Ollama local).
+const LOCAL_SERVICE_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function isPrivateOrReservedHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (LOCAL_SERVICE_HOSTS.has(host)) return true;
+  if (host === "0.0.0.0" || host.endsWith(".local") || host.endsWith(".internal")) return true;
+  if (/^169\.254\./.test(host)) return true; // link-local
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true; // 172.16-31
+  if (/^127\./.test(host)) return true;
+  // IPv6 loopback/link-local/ULA
+  if (/^(::1|f[cd][0-9a-f]{2}:)/i.test(host)) return true;
+  if (/^fe80:/i.test(host)) return true;
+  return false;
+}
+
+function assertSafeProviderUrl(rawUrl: string, provider: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`URL do provider ${provider} inválida.`);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`Esquema não permitido na URL do provider ${provider}: ${parsed.protocol}`);
+  }
+  const isLocalService = provider === "LOCAL_OLLAMA";
+  const isLoopbackProvider = provider === "OPENCODE";
+  if (isLocalService || isLoopbackProvider) {
+    // Serviço local intencional: exige loopback e http simples.
+    if (!LOCAL_SERVICE_HOSTS.has(parsed.hostname.toLowerCase())) {
+      throw new Error(`${provider} só pode apontar para o loopback.`);
+    }
+    return;
+  }
+  if (parsed.protocol !== "https:" || isPrivateOrReservedHost(parsed.hostname)) {
+    throw new Error(`URL do provider ${provider} aponta para host privado/reservado ou sem TLS.`);
+  }
+}
+
+function isDefinitiveCredentialError(status: number, body: string): boolean {
+  // Alguns gateways devolvem credencial inválida como 400/403 em vez de 401.
+  // A mensagem explícita de autenticação vence o failover de modelos.
+  if (/invalid api key|invalid key|unauthorized|authentication failed|expired token|invalid token|bad credentials/i.test(body)) {
+    return true;
+  }
+  if (status === 401) return true;
+  return false;
 }
 
 function extractAIError(status: number, body: string): { userMessage: string; retryAfter?: string; retryable?: boolean; modelRotated?: boolean } {
@@ -682,6 +1134,33 @@ function wrapObjectsInArray(text: string): string {
   if (objs.length <= 1) return text;
   return "[" + objs.join(",") + "]";
 }
+
+/**
+ * Select the top-level JSON value from a model response. A `[` inside an object
+ * (for example `visualEvidence.columnHeaders`) is ordinary field data, not a
+ * signal that the whole response is a multi-document array.
+ */
+export function extractJsonCandidate(raw: string): string | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  const objectStart = text.indexOf("{");
+  const arrayStart = text.indexOf("[");
+  if (arrayStart >= 0 && (objectStart < 0 || arrayStart < objectStart)) {
+    const arrayEnd = text.lastIndexOf("]");
+    if (arrayEnd > arrayStart) return text.slice(arrayStart, arrayEnd + 1);
+    return wrapObjectsInArray(text.slice(arrayStart));
+  }
+
+  if (objectStart >= 0) {
+    const objectText = text.slice(objectStart);
+    if (hasMultipleObjects(objectText)) return wrapObjectsInArray(objectText);
+    const objectEnd = text.lastIndexOf("}");
+    if (objectEnd > objectStart) return text.slice(objectStart, objectEnd + 1);
+  }
+
+  return null;
+}
 export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = false) {
   const app = express();
   const PORT = port;
@@ -689,8 +1168,23 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
   app.use(express.json({ limit: "50mb" }));
 
   app.post("/api/extract", async (req, res) => {
+    const requestAbortController = new AbortController();
+    const abortForClientDisconnect = () => {
+      if (res.writableEnded || requestAbortController.signal.aborted) return;
+      const reason = new Error("Cliente encerrou a requisição de extração.");
+      reason.name = "AbortError";
+      requestAbortController.abort(reason);
+    };
+    const linkClientAbort = (controller: AbortController) => {
+      const abortLinkedController = () => controller.abort(requestAbortController.signal.reason);
+      if (requestAbortController.signal.aborted) abortLinkedController();
+      else requestAbortController.signal.addEventListener("abort", abortLinkedController, { once: true });
+      return () => requestAbortController.signal.removeEventListener("abort", abortLinkedController);
+    };
+    req.once("aborted", abortForClientDisconnect);
+    res.once("close", abortForClientDisconnect);
     try {
-      const { pdfBase64, originalName, pageIndex, correction, v3Hint } = req.body;
+      const { pdfBase64, originalName, pageIndex, correction, v3Hint, runtimePageId } = req.body;
 
       if (!pdfBase64) {
         return res.status(400).json({ error: "Faltando dados do PDF (pdfBase64)." });
@@ -700,9 +1194,11 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const apiKey = settings.apiKey || "";
       const providerSetting = (settings.provider || "NVIDIA").toUpperCase();
       // LOCAL_OLLAMA e CODEX (com OAuth) não precisam de apiKey das settings
-      if (!apiKey && providerSetting !== "LOCAL_OLLAMA" && providerSetting !== "CODEX") {
-        return res.status(500).json({
-          error: "Nenhuma chave de API configurada. Vá em Configurações e adicione sua chave."
+      if (!apiKey && providerSetting !== "LOCAL_OLLAMA" && providerSetting !== "CODEX" && providerSetting !== "OPENCODE") {
+        return res.status(401).json({
+          error: "Nenhuma chave de API configurada. Vá em Configurações e adicione sua chave.",
+          retryable: false,
+          providerAuthError: true,
         });
       }
 
@@ -733,24 +1229,31 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
        // O usuário não escolhe modelo/tier. O contexto ajusta só o custo visual;
        // o modelo real é descoberto e rotacionado automaticamente.
        const modelTier = hintedTier;
+       const pageFailoverKey = String(runtimePageId || `${originalName || "document"}::${pageIndex ?? 0}`);
+       let requestModel = "";
        let aiResponse;
        try {
          // Helper for OpenAI-compatible providers. The endpoint is selected from
          // this fixed allowlist; no request-controlled URL is ever fetched.
          type OpenAICompatProvider = "OPENROUTER" | "GROQ" | "OLLAMA_CLOUD" | "CODEX" | "NVIDIA";
          interface OpenAICompatConfig { provider: OpenAICompatProvider; model: string; apiKey: string; }
-         const OPENAI_COMPAT_BASE_URLS: Record<OpenAICompatProvider, string> = {
-           OPENROUTER: "https://openrouter.ai/api",
-           GROQ: "https://api.groq.com/openai",
-           OLLAMA_CLOUD: "https://chat.api.ollama.ai",
-           CODEX: "https://api.openai.com",
-           NVIDIA: "https://integrate.api.nvidia.com",
-         };
          const callOpenAICompatible = async (config: OpenAICompatConfig, image: string, promptText: string) => {
-           const endpoint = new URL("/v1/chat/completions", OPENAI_COMPAT_BASE_URLS[config.provider]).toString();
+           // Endpoint literal por provider: nenhuma parte da URL deriva de
+           // request/config — o taint não alcança o fetch.
+           let endpoint: string;
+           switch (config.provider) {
+             case "OPENROUTER": endpoint = "https://openrouter.ai/api/v1/chat/completions"; break;
+             case "GROQ": endpoint = "https://api.groq.com/openai/v1/chat/completions"; break;
+             case "OLLAMA_CLOUD": endpoint = "https://chat.api.ollama.ai/v1/chat/completions"; break;
+             case "CODEX": endpoint = "https://api.openai.com/v1/chat/completions"; break;
+             case "NVIDIA": endpoint = "https://integrate.api.nvidia.com/v1/chat/completions"; break;
+             default: throw new Error(`Provider sem endpoint OpenAI-compatível: ${config.provider}`);
+           }
+           assertSafeProviderUrl(endpoint, config.provider);
            const imageDetail = modelTier === "fast" ? "low" : "high";
            const tokenBudget = modelTier === "fast" ? 640 : 1024;
            const controller = new AbortController();
+           const unlinkClientAbort = linkClientAbort(controller);
            const timeout = setTimeout(() => controller.abort(), config.provider === "NVIDIA" ? 120_000 : 75_000);
            const providerOptions = config.provider === "NVIDIA"
              ? config.model === "z-ai/glm-5.3-flash"
@@ -776,13 +1279,15 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              });
            } finally {
              clearTimeout(timeout);
+             unlinkClientAbort();
            }
          };
 
           if (provider === "GOOGLE") {
             if (!apiKey) throw new Error("Chave de API Google não configurada.");
-            const googleModel = await getRuntimeModel("GOOGLE", apiKey);
+            const googleModel = requestModel = await getRequestModel("GOOGLE", apiKey, pageFailoverKey);
             const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${googleModel}:generateContent?key=${apiKey}`;
+            assertSafeProviderUrl(googleUrl, provider);
             console.log(`[AI] Enviando para Google Gemini (${googleModel})...`);
             const startTime = Date.now();
             aiResponse = await fetch(googleUrl, {
@@ -790,14 +1295,16 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              headers: { "Content-Type": "application/json" },
              body: JSON.stringify({
                contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: imageBase64 } }, { text: prompt }] }]
-             })
+             }),
+             signal: requestAbortController.signal,
            });
            recordTelemetry(provider, googleModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "OPENAI") {
             if (!apiKey) throw new Error("Chave de API OpenAI não configurada.");
-            const openaiModel = await getRuntimeModel("OPENAI", apiKey);
+            const openaiModel = requestModel = await getRequestModel("OPENAI", apiKey, pageFailoverKey);
             console.log(`[AI] Enviando para OpenAI (${openaiModel})...`);
             const startTime = Date.now();
+            assertSafeProviderUrl("https://api.openai.com/v1/chat/completions", provider);
             aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
@@ -807,14 +1314,16 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                temperature: 0.1,
                max_tokens: modelTier === "fast" ? 640 : 1024,
                top_p: 0.9
-             })
+             }),
+             signal: requestAbortController.signal,
            });
            recordTelemetry(provider, openaiModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "ANTHROPIC") {
             if (!apiKey) throw new Error("Chave de API Anthropic não configurada.");
-            const anthropicModel = await getRuntimeModel("ANTHROPIC", apiKey);
+            const anthropicModel = requestModel = await getRequestModel("ANTHROPIC", apiKey, pageFailoverKey);
             console.log(`[AI] Enviando para Anthropic Claude (${anthropicModel})...`);
             const startTime = Date.now();
+            assertSafeProviderUrl("https://api.anthropic.com/v1/messages", provider);
             aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
               method: "POST",
               headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
@@ -822,23 +1331,26 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 model: anthropicModel,
                max_tokens: 1024,
                messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } }, { type: "text", text: prompt }] }]
-             })
+             }),
+             signal: requestAbortController.signal,
            });
            recordTelemetry(provider, anthropicModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "MISTRAL") {
             if (!apiKey) throw new Error("Chave de API Mistral não configurada.");
-            const mistralModel = await getRuntimeModel("MISTRAL", apiKey);
+            const mistralModel = requestModel = await getRequestModel("MISTRAL", apiKey, pageFailoverKey);
             console.log(`[AI] Enviando para Mistral OCR (${mistralModel})...`);
             // Mistral não tem visão direta — usa OCR (v1/ocr) para extrair texto da imagem,
             // depois classifica o texto com um modelo de texto (mistral-small-latest).
             const startTime = Date.now();
+            assertSafeProviderUrl("https://api.mistral.ai/v1/ocr", provider);
             const ocrRes = await fetch("https://api.mistral.ai/v1/ocr", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
               body: JSON.stringify({
                 model: mistralModel,
                 document: { type: "image_url", image_url: `data:image/jpeg;base64,${imageBase64}` }
-              })
+              }),
+              signal: requestAbortController.signal,
             });
             recordTelemetry(provider, mistralModel, ocrRes.ok ? "success" : "failure", Date.now() - startTime);
             if (!ocrRes.ok) {
@@ -858,33 +1370,111 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 messages: [{ role: "user", content: prompt + "\n\n--- TEXTO EXTRAÍDO DO DOCUMENTO ---\n" + extractedText }],
                 temperature: 0.1,
                 max_tokens: 1024,
-              })
+            }),
+            signal: requestAbortController.signal,
             });
             aiResponse = classifyRes;
            } else if (provider === "OPENROUTER") {
              if (!apiKey) throw new Error("Chave de API OpenRouter não configurada.");
-             const openrouterModel = await getRuntimeModel("OPENROUTER", apiKey);
+             const openrouterModel = requestModel = await getRequestModel("OPENROUTER", apiKey, pageFailoverKey);
              console.log(`[AI] Enviando para OpenRouter (${openrouterModel})...`);
              const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "OPENROUTER", model: openrouterModel, apiKey }, imageBase64, prompt);
              recordTelemetry(provider, openrouterModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
            } else if (provider === "GROQ") {
              if (!apiKey) throw new Error("Chave de API Groq não configurada.");
-             const groqModel = await getRuntimeModel("GROQ", apiKey);
+             const groqModel = requestModel = await getRequestModel("GROQ", apiKey, pageFailoverKey);
              console.log(`[AI] Enviando para Groq (${groqModel})...`);
              const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "GROQ", model: groqModel, apiKey }, imageBase64, prompt);
              recordTelemetry(provider, groqModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
+           } else if (provider === "OPENCODE") {
+             requestModel = await getRequestModel("OPENCODE", "", pageFailoverKey, settings.model);
+             if (!requestModel) {
+               return res.status(503).json({
+                 error: "Nenhum modelo OpenCode conectado declara visão e custo zero. Atualize a lista em Configurações.",
+                 retryable: false,
+               });
+             }
+             const separator = requestModel.indexOf("/");
+             if (separator < 1 || separator === requestModel.length - 1) {
+               throw new Error("Modelo OpenCode selecionado está em formato inválido.");
+             }
+             const providerId = requestModel.slice(0, separator);
+             const modelId = requestModel.slice(separator + 1);
+             const baseUrl = "http://127.0.0.1:4096";
+             assertSafeProviderUrl(`${baseUrl}/session`, provider);
+             const openCodeHeaders: Record<string, string> = { "Content-Type": "application/json" };
+             const openCodePassword = process.env.OPENCODE_SERVER_PASSWORD;
+             if (openCodePassword) {
+               const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
+               openCodeHeaders.Authorization = `Basic ${Buffer.from(`${username}:${openCodePassword}`).toString("base64")}`;
+             }
+             const controller = new AbortController();
+             const unlinkClientAbort = linkClientAbort(controller);
+             const timeout = setTimeout(() => controller.abort(), 120_000);
+             const startTime = Date.now();
+             let sessionId = "";
+             console.log(`[AI] Enviando para OpenCode (${providerId}/${modelId})...`);
+             try {
+               const sessionResponse = await fetch(`${baseUrl}/session`, {
+                 method: "POST",
+                 headers: openCodeHeaders,
+                 body: JSON.stringify({ title: "AI Disec PDF - classificação de página" }),
+                 signal: controller.signal,
+               });
+               if (!sessionResponse.ok) {
+                 aiResponse = sessionResponse;
+               } else {
+                 const session = await sessionResponse.json() as any;
+                 sessionId = String(session.id || "");
+                 if (!sessionId) throw new Error("OpenCode não retornou uma sessão válida.");
+                 const messageResponse = await fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/message`, {
+                   method: "POST",
+                   headers: openCodeHeaders,
+                   body: JSON.stringify({
+                     model: { providerID: providerId, modelID: modelId },
+                     parts: [
+                       { type: "file", mime: "image/jpeg", filename: "pagina.jpg", url: `data:image/jpeg;base64,${imageBase64}` },
+                       { type: "text", text: prompt },
+                     ],
+                   }),
+                   signal: controller.signal,
+                 });
+                 if (!messageResponse.ok) {
+                   aiResponse = messageResponse;
+                 } else {
+                   const message = await messageResponse.json() as any;
+                   const content = Array.isArray(message.parts)
+                     ? message.parts.filter((part: any) => part?.type === "text").map((part: any) => String(part.text || "")).join("\n")
+                     : "";
+                   aiResponse = new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+                     status: 200,
+                     headers: { "Content-Type": "application/json" },
+                   });
+                 }
+               }
+             } finally {
+               clearTimeout(timeout);
+               unlinkClientAbort();
+               if (sessionId) {
+                 fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}`, {
+                   method: "DELETE",
+                   headers: openCodeHeaders,
+                 }).catch(() => {});
+               }
+               recordTelemetry(provider, requestModel, aiResponse?.ok ? "success" : "failure", Date.now() - startTime);
+             }
            } else if (provider === "LOCAL_OLLAMA") {
               // Ollama local — sem chave de API. Endpoint /api/chat (não /v1/chat/completions).
               // O modelo escolhido nas Configurações (settings.model) tem prioridade sobre o tier selecionado.
-              const ollamaLocalModel = await getRuntimeModel("LOCAL_OLLAMA", "");
+              const ollamaLocalModel = requestModel = await getRequestModel("LOCAL_OLLAMA", "", pageFailoverKey);
               const ollamaConfig = getProviderConfig("LOCAL_OLLAMA");
               console.log(`[AI] Enviando para Ollama local (${ollamaLocalModel})...`);
 
               // Verifica se o modelo está baixado antes de chamar /api/chat
               try {
-                const tagsRes = await fetch(`${ollamaConfig.baseUrl}/api/tags`, { method: "GET" });
+                const tagsRes = await fetch(`${ollamaConfig.baseUrl}/api/tags`, { method: "GET", signal: requestAbortController.signal });
                 if (tagsRes.ok) {
                   const tagsData = await tagsRes.json() as any;
                   const installed = (tagsData.models || []).map((m: any) => m.name || m.model);
@@ -895,11 +1485,13 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                   }
                 }
               } catch (tagErr) {
+                if (requestAbortController.signal.aborted) return;
                 // Se falhar a verificação, segue para /api/chat que dará o erro real
                 console.warn("[AI] Não foi possível verificar /api/tags, tentando /api/chat direto:", tagErr instanceof Error ? tagErr.message : tagErr);
               }
 
               const startTime = Date.now();
+              assertSafeProviderUrl(`${ollamaConfig.baseUrl}/api/chat`, provider);
               aiResponse = await fetch(`${ollamaConfig.baseUrl}/api/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -910,11 +1502,12 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                   stream: false,
                   options: { temperature: 0.1 }
                 }),
+                signal: requestAbortController.signal,
               });
               recordTelemetry(provider, ollamaLocalModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
 } else if (provider === "OLLAMA_CLOUD") {
               if (!apiKey) throw new Error("Token Ollama Cloud não configurado. Obtenha em https://ollama.com/signup.");
-              const ollamaCloudModel = await getRuntimeModel("OLLAMA_CLOUD", apiKey);
+              const ollamaCloudModel = requestModel = await getRequestModel("OLLAMA_CLOUD", apiKey, pageFailoverKey);
               console.log(`[AI] Enviando para Ollama Cloud (${ollamaCloudModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "OLLAMA_CLOUD", model: ollamaCloudModel, apiKey }, imageBase64, prompt);
@@ -932,69 +1525,106 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 } catch (e) { /* ignora */ }
               }
               if (!codexKey) throw new Error("Login Codex necessário. Clique em 'Sign in with ChatGPT' nas Configurações, ou cole uma API key da OpenAI.");
-              const codexModel = await getRuntimeModel("CODEX", codexKey);
+              const codexModel = requestModel = await getRequestModel("CODEX", codexKey, pageFailoverKey);
               console.log(`[AI] Enviando para OpenAI/Codex (${codexModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "CODEX", model: codexModel, apiKey: codexKey }, imageBase64, prompt);
               recordTelemetry(provider, codexModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
             } else {
               // NVIDIA (padrão)
-              const nvidiaModel = await getRuntimeModel("NVIDIA", apiKey);
+              const nvidiaModel = requestModel = await getRequestModel("NVIDIA", apiKey, pageFailoverKey);
               console.log(`[AI] Enviando para NVIDIA (${nvidiaModel})...`);
               const startTime = Date.now();
               aiResponse = await callOpenAICompatible({ provider: "NVIDIA", model: nvidiaModel, apiKey }, imageBase64, prompt);
               recordTelemetry(provider, nvidiaModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
             }
-} catch (aiErr) {
+         } catch (aiErr) {
+          if (requestAbortController.signal.aborted) return;
           await logError("Falha ao chamar o provedor de IA", aiErr);
-          const isThrownTimeout = aiErr?.name === "AbortError" || /abort|time.?out/i.test(String(aiErr?.message || ""));
-          const thrownState = runtimeModels[provider];
-          const thrownCurrent = thrownState?.candidates?.[thrownState.activeIndex];
-          if (isThrownTimeout && thrownCurrent) {
-            const streak = noteSessionFailure(provider, thrownCurrent, "timeout");
-            recordTelemetry(provider, thrownCurrent, "timeout", 0);
 
-            if (streak >= 2 && rotateRuntimeModel(provider, "timeout consecutivo na sessão (AbortError)")) {
-              return res.status(503).json({
-                error: "O modelo automático excedeu o tempo limite repetidamente. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-                retryAfter: "1s",
-                modelRotated: true,
-                retryable: true,
-              });
-            }
-          } else if (shouldRotateThrown(aiErr)) {
-            rotateRuntimeModel(provider, aiErr instanceof Error ? aiErr.message : String(aiErr));
+          const message = aiErr instanceof Error ? aiErr.message : String(aiErr);
+          const isCredentialProblem =
+            /api key|unauthorized|forbidden|permission|login .*necess/i.test(message);
+
+          if (isCredentialProblem) {
+            return res.status(401).json({
+              error: "Chave/token ausente ou inválido para este provedor. Verifique as Configurações.",
+              retryable: false,
+              providerAuthError: true,
+            });
           }
+
+          if (requestModel) {
+            recordTelemetry(provider, requestModel, /abort|time.?out/i.test(message) ? "timeout" : "failure", 0);
+            const failover = buildModelFailoverResponse(
+              provider,
+              pageFailoverKey,
+              requestModel,
+              `throw: ${message}`,
+              /abort|time.?out|timed out|econnreset|econnrefused|fetch failed|socket/i.test(message)
+            );
+            return res.status(failover.status).json(failover.body);
+          }
+
           throw aiErr;
         }
 
        if (!aiResponse.ok) {
          const errBody = await aiResponse.text();
          console.error("[AI API Error]:", aiResponse.status, errBody);
-         
-         const state = runtimeModels[provider];
-         const current = state?.candidates?.[state.activeIndex];
 
-         if (state && current) {
-           state.failures[current] = `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`;
+         const parsedError = extractAIError(aiResponse.status, errBody);
 
-           if ([408, 502, 503, 504, 529].includes(aiResponse.status)) {
-             noteSessionFailure(provider, current, "timeout");
-             recordTelemetry(provider, current, "timeout", 0);
-           }
-         }
-
-         if (shouldRotateModel(aiResponse.status, errBody, provider) && rotateRuntimeModel(provider, `HTTP ${aiResponse.status}`)) {
-           return res.status(503).json({
-             error: "O modelo automático realmente ficou indisponível ou repetiu a falha. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-             retryAfter: "1s",
-             modelRotated: true,
-             retryable: true,
+         // 401 e 403 com evidência explícita de credencial inválida são globais:
+         // trocar modelo não resolve. Já um 403 de acesso a MODELO entra no sweep.
+         if (isDefinitiveCredentialError(aiResponse.status, errBody)) {
+           return res.status(aiResponse.status).json({
+             error: parsedError.userMessage,
+             retryable: false,
+             providerAuthError: true,
            });
          }
 
-         const { userMessage, retryAfter, retryable, modelRotated } = extractAIError(aiResponse.status, errBody);
-         return res.status(aiResponse.status).json({ error: userMessage, retryAfter, retryable, modelRotated });
+         // 429 é pressão/cota do provider: respeita backoff no MESMO candidato.
+         if (aiResponse.status === 429) {
+           return res.status(429).json({
+             error: parsedError.userMessage,
+             retryAfter: parsedError.retryAfter || "60s",
+             retryable: true,
+             modelRotated: false,
+           });
+         }
+
+         if (requestModel && shouldExhaustiveFailover(aiResponse.status, errBody)) {
+           if (shouldQuarantineModelForSession(aiResponse.status, errBody)) {
+             markModelUnavailableForSession(
+               provider,
+               requestModel,
+               `HTTP ${aiResponse.status}: ${errBody.slice(0, 120)}`
+             );
+           }
+
+           if ([408, 502, 503, 504, 529].includes(aiResponse.status)) {
+             recordTelemetry(provider, requestModel, "timeout", 0);
+           } else {
+             recordTelemetry(provider, requestModel, "failure", 0);
+           }
+           const failover = buildModelFailoverResponse(
+             provider,
+             pageFailoverKey,
+             requestModel,
+             `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`,
+             [408, 502, 503, 504, 529].includes(aiResponse.status) &&
+               !shouldQuarantineModelForSession(aiResponse.status, errBody)
+           );
+           return res.status(failover.status).json(failover.body);
+         }
+
+         return res.status(aiResponse.status).json({
+           error: parsedError.userMessage,
+           retryAfter: parsedError.retryAfter,
+           retryable: parsedError.retryable,
+         });
        }
 
        const data = await aiResponse.json();
@@ -1014,28 +1644,14 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         console.log("[AI OCR] Resposta recebida:", responseText?.substring(0, 200));
 
       if (!responseText) {
-        const invalidState = runtimeModels[provider];
-        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
-        const invalidStreak = invalidModel
-          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
-          : 1;
-
-        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
-
-        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "empty-response-repeated")) {
-          return res.status(503).json({
-            error: "O modelo respondeu vazio repetidamente. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-            retryAfter: "1s",
-            modelRotated: true,
-            retryable: true,
-          });
-        }
-
-        return res.status(503).json({
-          error: "O modelo respondeu vazio. Vou repetir nesta mesma página e manter a fila pausada antes de considerar troca de modelo.",
-          retryAfter: "1s",
-          retryable: true,
-        });
+        if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
+        const failover = buildModelFailoverResponse(
+          provider,
+          pageFailoverKey,
+          requestModel,
+          "empty-response"
+        );
+        return res.status(failover.status).json(failover.body);
       }
 
       const cleaned = responseText
@@ -1059,55 +1675,25 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       if (shouldTreatAsClassificationText(trimmed)) {
         await logUpload(originalName, pageIndex, "success", provider, "Resposta sem JSON; texto corrido usado como classificationText (fallback V3)");
         const routedTextData = await applyDocumentRoutingV3({ classificationText: trimmed }, v3Hint);
-        markCurrentModelSemanticSuccess(provider);
+        markModelSemanticSuccess(provider, requestModel);
+        resetPageFailoverCycle(provider, pageFailoverKey);
         await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", routedTextData);
         return res.json(routedTextData);
       }
 
-      if (trimmed.includes("[")) {
-        // Tenta array primeiro: do primeiro [ ao ultimo ]
-        const arrStart = trimmed.indexOf("[");
-        const arrEnd = trimmed.lastIndexOf("]");
-        if (arrStart !== -1 && arrEnd !== -1 && arrEnd > arrStart) {
-          jsonStr = trimmed.substring(arrStart, arrEnd + 1);
-        } else {
-          // Sem ], envolve tudo que tem { em array
-          jsonStr = wrapObjectsInArray(trimmed);
-        }
-      } else if (hasMultipleObjects(trimmed)) {
-        // Multiplos {...} {...} sem [ ] — envolve em array
-        jsonStr = wrapObjectsInArray(trimmed);
-      } else {
-        // Objeto unico: do primeiro { ao ultimo }
-        const jsonStart = trimmed.indexOf("{");
-        const jsonEnd = trimmed.lastIndexOf("}");
-        if (jsonStart === -1 || jsonEnd === -1) {
-          await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
-        const invalidState = runtimeModels[provider];
-        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
-        const invalidStreak = invalidModel
-          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
-          : 1;
-
-        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
-
-        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "no-usable-json-repeated")) {
-          return res.status(503).json({
-            error: "O modelo repetiu a resposta incompatível. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-            retryAfter: "1s",
-            modelRotated: true,
-            retryable: true,
-          });
-        }
-
-        return res.status(503).json({
-          error: "O modelo respondeu em formato incompatível. Vou repetir nesta mesma página sem avançar a fila.",
-          retryAfter: "1s",
-          retryable: true,
-        });
-        }
-        jsonStr = trimmed.substring(jsonStart, jsonEnd + 1);
+      const jsonCandidate = extractJsonCandidate(trimmed);
+      if (!jsonCandidate) {
+        await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
+        if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
+        const failover = buildModelFailoverResponse(
+          provider,
+          pageFailoverKey,
+          requestModel,
+          "no-usable-json"
+        );
+        return res.status(failover.status).json(failover.body);
       }
+      jsonStr = jsonCandidate;
 
       // Try to parse; if fails, attempt to fix common JSON errors
       let extractedData: any;
@@ -1121,57 +1707,69 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       }
       // Ultima tentativa: se ainda falhou e era multiplos objetos, tenta parsear cada um individualmente
       if (!parseSucceeded) {
-        const objs = extractIndividualObjects(jsonStr);
-        if (objs.length > 1) {
-          const parsed = [];
-          for (const o of objs) {
-            for (const attempt of [o, fixJSON(o)]) {
-              try { parsed.push(JSON.parse(attempt)); break; } catch {}
-            }
-          }
-          if (parsed.length > 0) { extractedData = parsed; parseSucceeded = true; }
-        }
-      }
-      if (!parseSucceeded) {
         await logUpload(originalName, pageIndex, "error", provider, `JSON inválido: ${jsonStr.substring(0, 500)}`);
-        const invalidState = runtimeModels[provider];
-        const invalidModel = invalidState?.candidates?.[invalidState.activeIndex];
-        const invalidStreak = invalidModel
-          ? noteSessionFailure(provider, invalidModel, "invalidOutput")
-          : 1;
-
-        if (invalidModel) recordTelemetry(provider, invalidModel, "failure", 0);
-
-        if (invalidStreak >= 2 && rotateRuntimeModel(provider, "invalid-json-output-repeated")) {
-          return res.status(503).json({
-            error: "O modelo repetiu a saída incompatível. Troquei para outro candidato compatível e vou estabilizar nesta página antes de continuar a fila.",
-            retryAfter: "1s",
-            modelRotated: true,
-            retryable: true,
-          });
-        }
-
-        return res.status(503).json({
-          error: "O modelo retornou uma resposta incompatível. Vou repetir nesta mesma página sem avançar a fila.",
-          retryAfter: "1s",
-          retryable: true,
-        });
+        if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
+        const failover = buildModelFailoverResponse(
+          provider,
+          pageFailoverKey,
+          requestModel,
+          "invalid-json-output"
+        );
+        return res.status(failover.status).json(failover.body);
       }
 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
-        const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
-        markCurrentModelSemanticSuccess(provider);
-        await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V3)`, routedDocuments);
-        return res.json({ _multiple: true, documents: routedDocuments });
+        // Explicitly verified, physically separated forms are the only case
+        // where a model array may become multiple PDFs. Keep this before all
+        // single-document normalization rules.
+        if (isConfirmedTwoDocumentArray(extractedData)) {
+          const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
+          markModelSemanticSuccess(provider, requestModel);
+          resetPageFailoverCycle(provider, pageFailoverKey);
+          await logUpload(originalName, pageIndex, "success", provider, "Dois formulários completos confirmados na mesma página (CLASSIFICATION-V3)", routedDocuments);
+          return res.json({ _multiple: true, documents: routedDocuments });
+        }
+
+        const pageExtraction = mergeExtractionArray(extractedData);
+        if (pageExtraction && isStrongSingleInvoiceArray(extractedData)) {
+          const routedPage = await applyDocumentRoutingV3(pageExtraction, v3Hint);
+          markModelSemanticSuccess(provider, requestModel);
+          resetPageFailoverCycle(provider, pageFailoverKey);
+          await logUpload(originalName, pageIndex, "success", provider, "Assinatura fiscal forte consolidada em um único documento da página (CLASSIFICATION-V3)", routedPage);
+          return res.json(routedPage);
+        }
+
+        const collapsedPayroll = collapsePayrollRoster(extractedData, { documentClass: v3Hint?.documentClass });
+        const collapsedPage = collapsedPayroll || collapseStatementTransactions(extractedData, { documentClass: v3Hint?.documentClass });
+        if (collapsedPage) {
+          const routedPage = await applyDocumentRoutingV3(collapsedPage, v3Hint);
+          markModelSemanticSuccess(provider, requestModel);
+          resetPageFailoverCycle(provider, pageFailoverKey);
+          await logUpload(originalName, pageIndex, "success", provider, "Array normalizado para documento único da página (CLASSIFICATION-V3)", routedPage);
+          return res.json(routedPage);
+        }
+
+        // A model array is usually a list of fields, table rows or page regions.
+        // Do not create multiple PDFs unless the visual evidence confirms two
+        // complete forms. This keeps invoices, statements and reports intact.
+        if (pageExtraction) {
+          const routedPage = await applyDocumentRoutingV3(pageExtraction, v3Hint);
+          markModelSemanticSuccess(provider, requestModel);
+          resetPageFailoverCycle(provider, pageFailoverKey);
+          await logUpload(originalName, pageIndex, "success", provider, "Array de extração consolidado em um documento da página (CLASSIFICATION-V3)", routedPage);
+          return res.json(routedPage);
+        }
       }
 
       const routedData = await applyDocumentRoutingV3(extractedData, v3Hint);
-      markCurrentModelSemanticSuccess(provider);
+      markModelSemanticSuccess(provider, requestModel);
+      resetPageFailoverCycle(provider, pageFailoverKey);
       await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", routedData);
       return res.json(routedData);
 
      } catch (error: any) {
+       if (requestAbortController.signal.aborted) return;
        const failure = classifyProviderFailure(error);
        await logError("Unhandled exception in /api/extract", error);
        await logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", failure.message);
@@ -1180,6 +1778,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
          error: failure.message,
          retryable: failure.retryable,
        });
+     } finally {
+       req.removeListener("aborted", abortForClientDisconnect);
+       res.removeListener("close", abortForClientDisconnect);
      }
   });
 
@@ -1229,6 +1830,8 @@ if (process.env.NODE_ENV === "test" || process.env.VITEST) {
   app.post("/api/test/clear-runtime", (_req, res) => {
     runtimeModels = {};
     sessionFailureStreaks = {};
+    pageFailoverCycles.clear();
+    sessionUnavailableModels = {};
     try {
       if (fs.existsSync(MODEL_RUNTIME_FILE)) fs.unlinkSync(MODEL_RUNTIME_FILE);
     } catch {}
@@ -1236,6 +1839,15 @@ if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     return res.json({ success: true });
   });
 }
+
+app.post("/api/models/runtime/reset-page-failover", (req, res) => {
+  const settings = getSettings();
+  const provider = String(req.body?.provider || settings.provider || "NVIDIA").toUpperCase();
+  const runtimePageId = String(req.body?.runtimePageId || "");
+  if (!runtimePageId) return res.status(400).json({ error: "runtimePageId obrigatório" });
+  resetPageFailoverCycle(provider, runtimePageId);
+  return res.json({ success: true });
+});
 
 app.post("/api/models/runtime/refresh-all", async (_req, res) => {
   try {
@@ -1254,7 +1866,8 @@ app.post("/api/models/runtime/refresh-all", async (_req, res) => {
 
     await Promise.all(providers.map(async provider => {
       const key = typeof apiKeys[provider] === "string" ? apiKeys[provider] : "";
-      const shouldRefresh = Boolean(key) || provider === "LOCAL_OLLAMA" || provider === "CODEX";
+      const shouldRefresh = Boolean(key) || provider === "LOCAL_OLLAMA" || provider === "CODEX" ||
+        (provider === "OPENCODE" && String(data.provider || "").toUpperCase() === "OPENCODE");
       if (!shouldRefresh) {
         results[provider] = { status: "catalog", candidateCount: catalogCandidates(provider).length };
         return;
@@ -1385,11 +1998,13 @@ app.get("/api/settings", (req, res) => {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
       const provider = requestedProvider || String(data.provider || "NVIDIA").toUpperCase();
       const apiKeys = data.apiKeys && typeof data.apiKeys === "object" ? data.apiKeys : {};
+      const models = data.models && typeof data.models === "object" ? data.models : {};
       const legacyKey = typeof data.apiKey === "string" && String(data.provider || "").toUpperCase() === provider ? data.apiKey : "";
       return res.json({
         provider,
         apiKey: typeof apiKeys[provider] === "string" ? apiKeys[provider] : legacyKey,
-        model: "",
+        model: typeof models[provider] === "string" ? models[provider] :
+          (String(data.provider || "").toUpperCase() === provider && typeof data.model === "string" ? data.model : ""),
         modelTier: "auto",
       });
     }
@@ -1404,6 +2019,7 @@ app.post("/api/settings", (req, res) => {
     ensureDataDir();
     const provider = String(req.body?.provider || "NVIDIA").toUpperCase();
     const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey : "";
+    const model = typeof req.body?.model === "string" ? req.body.model : "";
 
     let previous: any = {};
     try {
@@ -1411,12 +2027,14 @@ app.post("/api/settings", (req, res) => {
     } catch {}
 
     const apiKeys = previous.apiKeys && typeof previous.apiKeys === "object" ? { ...previous.apiKeys } : {};
+    const models = previous.models && typeof previous.models === "object" ? { ...previous.models } : {};
     if (previous.provider && typeof previous.apiKey === "string" && previous.apiKey && !apiKeys[String(previous.provider).toUpperCase()]) {
       apiKeys[String(previous.provider).toUpperCase()] = previous.apiKey;
     }
-    if (apiKey || provider === "LOCAL_OLLAMA" || provider === "CODEX") apiKeys[provider] = apiKey;
+    if (apiKey || provider === "LOCAL_OLLAMA" || provider === "CODEX" || provider === "OPENCODE") apiKeys[provider] = apiKey;
+    if (provider === "OPENCODE") models[provider] = model;
 
-    const settings = { provider, apiKeys, modelTier: "auto" };
+    const settings = { provider, apiKeys, models, modelTier: "auto" };
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
     console.log(`[settings] Saved provider=${provider} automatic-model-selection=true`);
     return res.json({ success: true });
@@ -1435,7 +2053,10 @@ function getSettings() {
       const apiKey = typeof apiKeys[provider] === "string"
         ? apiKeys[provider]
         : (typeof data.apiKey === "string" ? data.apiKey : "");
-      return { provider, apiKey, model: "", modelTier: "auto" };
+      const models = data.models && typeof data.models === "object" ? data.models : {};
+      const model = typeof models[provider] === "string" ? models[provider] :
+        (String(data.provider || "").toUpperCase() === provider && typeof data.model === "string" ? data.model : "");
+      return { provider, apiKey, model, modelTier: "auto" };
     }
   } catch {}
   return { provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" };
@@ -1466,6 +2087,27 @@ app.get("/api/models", (req, res) => {
     return res.json(simplified);
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/opencode/models", async (_req, res) => {
+  try {
+    const models = await fetchLiveModelCandidates("OPENCODE", "");
+    if (!models.length) {
+      return res.json({
+        available: false,
+        models: [],
+        message: "Conecte um provedor no OpenCode que declare entrada por imagem e custo de entrada/saída igual a zero.",
+      });
+    }
+    return res.json({ available: true, models });
+  } catch (error: any) {
+    return res.status(503).json({
+      available: false,
+      models: [],
+      message: "Inicie o serviço local do OpenCode e conecte um provedor antes de atualizar a lista.",
+      error: error?.message || "OpenCode indisponível",
+    });
   }
 });
 

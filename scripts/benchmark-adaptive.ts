@@ -160,6 +160,7 @@ async function main() {
         if (!image) throw new Error("imagem já liberada");
         const requestStart = Date.now();
         try {
+          // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request -- API_URL is fixed to 127.0.0.1; this is a local app-to-server request, not network transport.
           const res = await fetch(`${API_URL}/api/extract`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -167,6 +168,7 @@ async function main() {
               pdfBase64: image,
               originalName: "benchmark.pdf",
               pageIndex: p.index,
+              runtimePageId: `index:${p.index}`,
               v3Hint: v3Hints.get(p.index),
             }),
           });
@@ -180,6 +182,10 @@ async function main() {
               statusCode: res.status,
               retryable: typeof errJson.retryable === "boolean" ? errJson.retryable : [408, 429, 500, 502, 503, 504, 529].includes(res.status),
               modelRotated: errJson.modelRotated === true,
+              modelExhausted: errJson.modelExhausted === true,
+              candidateCount: Number(errJson.candidateCount || 0),
+              modelsTried: Number(errJson.modelsTried || 0),
+              modelsRemaining: Number(errJson.modelsRemaining || 0),
               error: String(errJson.error || `HTTP ${res.status}`),
               providerTimeMs,
               pageIndex: p.index,

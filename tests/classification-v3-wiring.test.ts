@@ -25,14 +25,18 @@ describe("Classification V3 wiring", () => {
     expect(server).toContain("shouldRotateModel");
   });
 
-  it("renderer usa pipeline de 3 páginas e três tentativas reais", () => {
+  it("renderer usa pipeline de 3 páginas e failover exaustivo de modelos", () => {
     const app = read("src/App.tsx");
     const pipeline = read("src/utils/adaptivePipeline.ts");
-    expect(app).toContain("const AUTO_PIPELINE_CONCURRENCY = 3");
+    expect(app).toContain("const AUTO_PIPELINE_CONCURRENCY = 4");
     expect(app).toContain("AdaptivePipeline"); // mecanismo compartilhado app/benchmark
-    // Três tentativas reais vivem no módulo compartilhado
-    expect(pipeline).toContain("AUTO_PIPELINE_MAX_ATTEMPTS = 3");
-    expect(pipeline).toContain("AUTO_PIPELINE_MAX_CONCURRENCY = 3");
+    // Três tentativas valem só para o MESMO candidato; rotações Vision
+    // continuam até modelExhausted, com safety ceiling alto.
+    expect(pipeline).toContain("AUTO_PIPELINE_MAX_SAME_MODEL_ATTEMPTS = 3");
+    expect(pipeline).toContain("AUTO_PIPELINE_SAFETY_ATTEMPTS = 64");
+    expect(pipeline).toContain("AUTO_PIPELINE_MAX_CONCURRENCY = 4");
+    expect(pipeline).toContain("signal.modelExhausted");
+    expect(pipeline).toContain("signal.modelRotated");
     expect(pipeline).toContain("runPageWithRetry");
     expect(app).toContain("runV3Prepasses");
     expect(app).toContain("PASSAGEM 3");
@@ -50,6 +54,9 @@ describe("Classification V3 wiring", () => {
     expect(app).not.toContain("Precisão do modelo");
     expect(app).not.toContain("GLM-5.3-Flash — padrão");
     expect(app).not.toContain("GPT-4o");
+    expect(app).toContain('<option value="OPENCODE">OpenCode CLI</option>');
+    expect(app).toContain("Iniciar / atualizar modelos");
+    expect(app).toContain("custo de entrada e saída igual a zero");
   });
 
   it("UI mantém cronômetro total do processamento e acumula retries", () => {
@@ -62,6 +69,109 @@ describe("Classification V3 wiring", () => {
     expect(app).toContain("resetProcessingTimer()");
     expect(app).toContain("processingTimerAccumulatedMsRef");
     expect(app).toContain("window.setInterval(refresh, 250)");
+  });
+
+  it("os três retrys manuais + o ciclo automático resetam o sweep de failover da página", () => {
+    const app = read("src/App.tsx");
+    // Re-tentar N, Re-tentar individual, correção manual e o CICLO AUTOMÁTICO
+    // chamam resetPageModelFailover antes de reprocessar — nenhum bypassa o
+    // sweep (cada re-tentativa recomeça dos modelos 1,2,3,4...).
+    expect(app.match(/await resetPageModelFailover\(/g)?.length).toBe(4);
+    expect(app).toContain("runtimePageId: page.id");
+  });
+
+  it("segmentos empilhados usam o MESMO runPageWithRetry da fila (falha não é engolida)", () => {
+    const app = read("src/App.tsx");
+    // splitAndProcessStackedPage processa cada segmento via runPageWithRetry —
+    // um segmento com modelRotated=true é re-tentado na mesma página, e o array
+    // resultante nunca mascara falha como sucesso.
+    expect(app).toContain("segmentResult = await pipelineRef.current.runPageWithRetry(");
+    expect(app).toMatch(/finally\s*\{\s*clearRenderCacheForPage\(segmentPage.id\);/);
+    // Nenhum call-site de segmento pode chamar processSinglePage diretamente.
+    expect(app).not.toMatch(/const segmentResult = await processSinglePage\(/);
+    expect(app.match(/runPageWithRetry\(/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("render e fetch têm watchdog: hang não pode congelar o dono do circuito", () => {
+    const app = read("src/App.tsx");
+    // Render preso (pdf.js girando em CPU) travava o retry do dono da
+    // estabilização e congelava a fila inteira. O watchdog converte hang em
+    // falha retryable e o loop segue a lista de modelos.
+    expect(app).toContain("Render da página excedeu 60s (watchdog do pipeline).");
+    expect(app).toContain("requestController.abort(new DOMException(\"Tempo limite da requisicao\", \"TimeoutError\"))");
+    expect(app).toContain("150_000");
+  });
+
+  it("exaustão de modelos NÃO para o lote: ciclos automáticos de re-tentativa", () => {
+    const app = read("src/App.tsx");
+    const pipeline = read("src/utils/adaptivePipeline.ts");
+    // Novo contrato do produto: modelExhausted libera o circuito (fila segue)
+    // e o App roda ciclos automáticos com cooldown sobre as páginas falhas.
+    expect(pipeline).toContain("resumeAfterModelsExhausted");
+    expect(pipeline).not.toContain("this.haltForModelsExhausted(pageKey)");
+    expect(app).toContain("AUTO_RETRY_CYCLES = 5");
+    expect(app).toContain("AUTO_RETRY_COOLDOWN_MS = 30_000");
+    expect(app).toContain("Ciclo automático");
+    expect(app).toContain("autoRetryStatus");
+    // 401/403 (credencial) continua parando — trocar modelo não resolve chave.
+    expect(pipeline).toContain("haltForProviderAuth()");
+  });
+
+  it("falha LOCAL de render não para a fila (sai falhada e vai para o ciclo)", () => {
+    const app = read("src/App.tsx");
+    const pipeline = read("src/utils/adaptivePipeline.ts");
+    // Render/watchdog é problema do cliente: sem localFailure o halt de
+    // estabilidade abandonava silenciosamente as folhas restantes do lote.
+    expect(app).toContain("renderErr.localFailure = true");
+    expect(app).toContain("localFailure: cancelled || err?.localFailure === true");
+    expect(pipeline).toContain("if (signal.localFailure)");
+    expect(pipeline).toContain("localFailure?: boolean");
+  });
+
+  it("fast path local só pula VLM quando requiresVision=false e hard-guard está completo", () => {
+    const app = read("src/App.tsx");
+    const extractor = read("src/utils/localMetadataExtractor.ts");
+    const types = read("src/types.ts");
+
+    expect(app).toContain("tryExtractLocalMetadata");
+    expect(app).toContain("requiresVision: p1.requiresVision !== false");
+    expect(app).toContain("page.v3Hint?.requiresVision !== false");
+    expect(types).toContain("requiresVision?: boolean");
+    expect(extractor).toContain('hint?.source !== "hard-guard"');
+    expect(extractor).toContain("confidence < 0.96");
+    expect(extractor).toContain('["NFS", "NFE_DANFE", "DARF"]');
+    expect(extractor).toContain("if (valor === null || !companyName) return null");
+  });
+
+  it("render JPEG é cacheado somente durante o sweep da mesma página", () => {
+    const app = read("src/App.tsx");
+    const cache = read("src/utils/pageRenderCache.ts");
+    expect(app).toContain("new PageRenderCache");
+    expect(app).toContain("renderPageCached");
+    expect(app).toContain("clearRenderCacheForPage(page.id)");
+    expect(app).toContain("clearRenderCacheForPage(segmentPage.id)");
+    expect(app).toContain("renderCacheRef.current?.clear()");
+    expect(cache).toContain("this.entries.set(key, pending)");
+    expect(cache).toContain("clearForPage(pageId: string)");
+    expect(app).toContain("Render da página excedeu 60s (watchdog do pipeline).");
+  });
+
+  it("ciclos automáticos param cedo quando um ciclo inteiro não recupera nada", () => {
+    const app = read("src/App.tsx");
+    const retries = read("src/utils/autoRetry.ts");
+    expect(app).toContain("AUTO_RETRY_CYCLES = 5");
+    expect(app).toContain("runAutoRetryCycles({");
+    expect(retries).toContain("if (recovered === 0) break");
+  });
+
+  it("primário dinâmico por latência da sessão (modelo funcional mais rápido primeiro)", () => {
+    const server = read("server/server.ts");
+    // Otimização: o primário de novas páginas é escolhido pela telemetria real
+    // (score = latência média / taxa de sucesso; >= 2 sucessos e >= 50%).
+    expect(server).toContain("function refreshActiveIndexByLatency");
+    expect(server).toContain("t.successCount < 2) return null");
+    expect(server).toContain("rate < 0.5) return null");
+    expect(server).toContain("refreshActiveIndexByLatency(provider)");
   });
 
   it("Electron não desacelera o processamento em background", () => {
