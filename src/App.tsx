@@ -1128,6 +1128,104 @@ export default function App() {
     return results;
   };
 
+  const tryRecoverStackedPayrollPage = async (
+    id: string,
+    page: SplitPage,
+    separatorRatio: number,
+    correction?: string
+  ): Promise<SplitPage[] | null> => {
+    const segments = await splitPdfPageAtRatio(page.base64, separatorRatio);
+    const results: SplitPage[] = [];
+    let accepted = false;
+
+    try {
+      // Recovery condicional: só roda depois que a página inteira ficou genérica
+      // ou em revisão E o detector local encontrou um separador plausível.
+      for (const segment of segments) {
+        const segmentPage: SplitPage = {
+          ...page,
+          id: `${id}-probe-s${segment.segmentIndex + 1}`,
+          base64: segment.base64,
+          blobUrl: segment.blobUrl,
+          sourcePageIndex: page.sourcePageIndex ?? page.index,
+          segmentIndex: segment.segmentIndex,
+          segmentPosition: segment.position,
+          status: "processing",
+          processingStage: "extracting",
+          processingProgress: 55,
+          // O crop precisa ser julgado pela própria evidência visual, não herdar
+          // uma classe OUTRO/baixa confiança da página física inteira.
+          v3Hint: {
+            ...page.v3Hint,
+            documentClass: undefined,
+            confidence: 0,
+            source: "conditional-crop-probe",
+            sequenceAdjusted: false,
+            sequenceReason: null,
+            requiresVision: true,
+            modelTier: "medium",
+          },
+        };
+
+        let segmentResult: ProcessedPageResult;
+        try {
+          segmentResult = await pipelineRef.current.runPageWithRetry(
+            segmentPage,
+            async (p) => processSinglePage(p.id ?? segmentPage.id, segmentPage, correction),
+            async (pageId, _attempt, delayMs, signal) => {
+              if (pageId) updatePageStage(pageId, "retrying", 48);
+              if (signal?.candidateCount) {
+                setModelFailoverProgress({
+                  tried: Number(signal.modelsTried || 0),
+                  total: Number(signal.candidateCount || 0),
+                });
+              }
+              syncPipelineState();
+              await waitForDelay(delayMs, processingAbortControllerRef.current?.signal);
+              syncPipelineState();
+            }
+          );
+        } finally {
+          clearRenderCacheForPage(segmentPage.id);
+        }
+
+        // Um crop nunca pode se multiplicar de novo durante este probe.
+        if (Array.isArray(segmentResult)) return null;
+        results.push(segmentResult);
+      }
+
+      const validPair =
+        results.length === 2 &&
+        results.every(result =>
+          result.status === "success" &&
+          ["HOLERITE", "HOLERITE_13"].includes(result.metadata?.documentClass || "") &&
+          result.metadata?.fieldEvidence?.pessoaNomeLocation === "employee_field" &&
+          Boolean(result.metadata?.pessoaNome) &&
+          result.metadata?.needsReview !== true
+        );
+
+      if (!validPair) {
+        console.info(
+          `[conditional-crop] página ${(page.sourcePageIndex ?? page.index) + 1}: crops não provaram dois holerites independentes; mantendo página inteira`
+        );
+        return null;
+      }
+
+      accepted = true;
+      segments.forEach(segment => blobUrlsRef.current.push(segment.blobUrl));
+      console.info(
+        `[conditional-crop] página ${(page.sourcePageIndex ?? page.index) + 1}: dois holerites independentes confirmados pelos crops`
+      );
+      return results;
+    } finally {
+      if (!accepted) {
+        for (const segment of segments) {
+          try { URL.revokeObjectURL(segment.blobUrl); } catch {}
+        }
+      }
+    }
+  };
+
   const processSinglePage = async (
     id: string,
     page: SplitPage,
@@ -1271,6 +1369,26 @@ export default function App() {
         const layout = await detectStackedDocumentSeparator(imageBase64);
         if (layout.likely && layout.separatorRatio !== null) {
           return splitAndProcessStackedPage(id, page, layout.separatorRatio, correction);
+        }
+      }
+
+      // Recovery coarse-to-fine para scans genéricos: NÃO divide diretamente.
+      // Primeiro exige um separador local plausível; depois classifica os dois
+      // crops e só aceita o split se ambos forem holerites independentes com
+      // employee_field. Tabelas/relatórios voltam intactos para a página original.
+      if (
+        page.segmentIndex === undefined &&
+        (metadata.documentClass === "OUTRO" || metadata.needsReview === true)
+      ) {
+        const layout = await detectStackedDocumentSeparator(imageBase64);
+        if (layout.likely && layout.separatorRatio !== null) {
+          const recovered = await tryRecoverStackedPayrollPage(
+            id,
+            page,
+            layout.separatorRatio,
+            correction
+          );
+          if (recovered) return recovered;
         }
       }
 
