@@ -1760,7 +1760,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           responseText = data.choices?.[0]?.message?.content || "";
         }
 
-        console.log("[AI OCR] Resposta recebida:", responseText?.substring(0, 200));
+        console.log(`[AI OCR] Resposta recebida (${responseText?.length || 0} caracteres; conteúdo omitido do log)`);
 
       if (!responseText) {
         if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
