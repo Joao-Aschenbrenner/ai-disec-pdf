@@ -15,7 +15,7 @@ import { getLayaHealth } from "./classification/layaClient";
 dotenv.config();
 
 const DEFAULT_PORT = 3001;
-const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
+const DATA_DIR = process.env.AI_DISEC_DATA_DIR || path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
 // Mapeia falhas do provedor de IA para status/mensagem amigáveis.
@@ -1168,6 +1168,21 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
   app.use(express.json({ limit: "50mb" }));
 
   app.post("/api/extract", async (req, res) => {
+    const requestAbortController = new AbortController();
+    const abortForClientDisconnect = () => {
+      if (res.writableEnded || requestAbortController.signal.aborted) return;
+      const reason = new Error("Cliente encerrou a requisição de extração.");
+      reason.name = "AbortError";
+      requestAbortController.abort(reason);
+    };
+    const linkClientAbort = (controller: AbortController) => {
+      const abortLinkedController = () => controller.abort(requestAbortController.signal.reason);
+      if (requestAbortController.signal.aborted) abortLinkedController();
+      else requestAbortController.signal.addEventListener("abort", abortLinkedController, { once: true });
+      return () => requestAbortController.signal.removeEventListener("abort", abortLinkedController);
+    };
+    req.once("aborted", abortForClientDisconnect);
+    res.once("close", abortForClientDisconnect);
     try {
       const { pdfBase64, originalName, pageIndex, correction, v3Hint, runtimePageId } = req.body;
 
@@ -1238,6 +1253,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            const imageDetail = modelTier === "fast" ? "low" : "high";
            const tokenBudget = modelTier === "fast" ? 640 : 1024;
            const controller = new AbortController();
+           const unlinkClientAbort = linkClientAbort(controller);
            const timeout = setTimeout(() => controller.abort(), config.provider === "NVIDIA" ? 120_000 : 75_000);
            const providerOptions = config.provider === "NVIDIA"
              ? config.model === "z-ai/glm-5.3-flash"
@@ -1263,6 +1279,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              });
            } finally {
              clearTimeout(timeout);
+             unlinkClientAbort();
            }
          };
 
@@ -1278,7 +1295,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              headers: { "Content-Type": "application/json" },
              body: JSON.stringify({
                contents: [{ role: "user", parts: [{ inlineData: { mimeType: "image/jpeg", data: imageBase64 } }, { text: prompt }] }]
-             })
+             }),
+             signal: requestAbortController.signal,
            });
            recordTelemetry(provider, googleModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "OPENAI") {
@@ -1296,7 +1314,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                temperature: 0.1,
                max_tokens: modelTier === "fast" ? 640 : 1024,
                top_p: 0.9
-             })
+             }),
+             signal: requestAbortController.signal,
            });
            recordTelemetry(provider, openaiModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "ANTHROPIC") {
@@ -1312,7 +1331,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 model: anthropicModel,
                max_tokens: 1024,
                messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } }, { type: "text", text: prompt }] }]
-             })
+             }),
+             signal: requestAbortController.signal,
            });
            recordTelemetry(provider, anthropicModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
           } else if (provider === "MISTRAL") {
@@ -1329,7 +1349,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               body: JSON.stringify({
                 model: mistralModel,
                 document: { type: "image_url", image_url: `data:image/jpeg;base64,${imageBase64}` }
-              })
+              }),
+              signal: requestAbortController.signal,
             });
             recordTelemetry(provider, mistralModel, ocrRes.ok ? "success" : "failure", Date.now() - startTime);
             if (!ocrRes.ok) {
@@ -1349,7 +1370,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 messages: [{ role: "user", content: prompt + "\n\n--- TEXTO EXTRAÍDO DO DOCUMENTO ---\n" + extractedText }],
                 temperature: 0.1,
                 max_tokens: 1024,
-              })
+            }),
+            signal: requestAbortController.signal,
             });
             aiResponse = classifyRes;
            } else if (provider === "OPENROUTER") {
@@ -1389,6 +1411,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                openCodeHeaders.Authorization = `Basic ${Buffer.from(`${username}:${openCodePassword}`).toString("base64")}`;
              }
              const controller = new AbortController();
+             const unlinkClientAbort = linkClientAbort(controller);
              const timeout = setTimeout(() => controller.abort(), 120_000);
              const startTime = Date.now();
              let sessionId = "";
@@ -1433,6 +1456,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                }
              } finally {
                clearTimeout(timeout);
+               unlinkClientAbort();
                if (sessionId) {
                  fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}`, {
                    method: "DELETE",
@@ -1450,7 +1474,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
               // Verifica se o modelo está baixado antes de chamar /api/chat
               try {
-                const tagsRes = await fetch(`${ollamaConfig.baseUrl}/api/tags`, { method: "GET" });
+                const tagsRes = await fetch(`${ollamaConfig.baseUrl}/api/tags`, { method: "GET", signal: requestAbortController.signal });
                 if (tagsRes.ok) {
                   const tagsData = await tagsRes.json() as any;
                   const installed = (tagsData.models || []).map((m: any) => m.name || m.model);
@@ -1461,6 +1485,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                   }
                 }
               } catch (tagErr) {
+                if (requestAbortController.signal.aborted) return;
                 // Se falhar a verificação, segue para /api/chat que dará o erro real
                 console.warn("[AI] Não foi possível verificar /api/tags, tentando /api/chat direto:", tagErr instanceof Error ? tagErr.message : tagErr);
               }
@@ -1477,6 +1502,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                   stream: false,
                   options: { temperature: 0.1 }
                 }),
+                signal: requestAbortController.signal,
               });
               recordTelemetry(provider, ollamaLocalModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
 } else if (provider === "OLLAMA_CLOUD") {
@@ -1512,7 +1538,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               aiResponse = await callOpenAICompatible({ provider: "NVIDIA", model: nvidiaModel, apiKey }, imageBase64, prompt);
               recordTelemetry(provider, nvidiaModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
             }
-} catch (aiErr) {
+         } catch (aiErr) {
+          if (requestAbortController.signal.aborted) return;
           await logError("Falha ao chamar o provedor de IA", aiErr);
 
           const message = aiErr instanceof Error ? aiErr.message : String(aiErr);
@@ -1742,6 +1769,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       return res.json(routedData);
 
      } catch (error: any) {
+       if (requestAbortController.signal.aborted) return;
        const failure = classifyProviderFailure(error);
        await logError("Unhandled exception in /api/extract", error);
        await logUpload(req.body?.originalName || "unknown", req.body?.pageIndex ?? -1, "error", "unknown", failure.message);
@@ -1750,6 +1778,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
          error: failure.message,
          retryable: failure.retryable,
        });
+     } finally {
+       req.removeListener("aborted", abortForClientDisconnect);
+       res.removeListener("close", abortForClientDisconnect);
      }
   });
 

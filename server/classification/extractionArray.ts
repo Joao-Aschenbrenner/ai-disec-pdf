@@ -65,20 +65,33 @@ function flattenedText(rows: ExtractedRecord[]): string {
 export function isConfirmedTwoDocumentArray(input: unknown): input is ExtractedRecord[] {
   if (!Array.isArray(input) || input.length !== 2 || !input.every(isRecord)) return false;
 
-  return input.every(row => {
+  const identities: string[] = [];
+  const validDocuments = input.every(row => {
     const visual = isRecord(row.visualEvidence) ? row.visualEvidence : {};
     const fields = isRecord(row.fieldEvidence) ? row.fieldEvidence : {};
     if (visual.layout !== "two_individual_forms" || Number(visual.separateDocumentBlocks) !== 2) return false;
 
     const signature = classifyBySignatures(String(row.classificationText || row.ocrText || ""));
     if (["HOLERITE", "HOLERITE_13"].includes(signature.documentClass)) {
-      return fields.pessoaNomeLocation === "employee_field";
+      const person = normalize(row.pessoaNome);
+      if (fields.pessoaNomeLocation !== "employee_field" || !person) return false;
+      identities.push(`${signature.documentClass}:${person}`);
+      return true;
     }
     if (["NFS", "NFE_DANFE"].includes(signature.documentClass)) {
-      return fields.companyNameLocation === "issuer_header";
+      const company = normalize(row.companyName);
+      const invoiceNumber = normalize(row.notaNumber);
+      if (fields.companyNameLocation !== "issuer_header" || !company || !invoiceNumber) return false;
+      identities.push(`${signature.documentClass}:${invoiceNumber}`);
+      return true;
     }
     return false;
   });
+
+  // A repeated region or duplicated model answer is not evidence of a second
+  // physical document. Require a different employee or invoice number for the
+  // two independently identified forms before creating two output PDFs.
+  return validDocuments && identities.length === input.length && new Set(identities).size === identities.length;
 }
 
 /** Merge a model array into one page-level extraction without trusting row values. */

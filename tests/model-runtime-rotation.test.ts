@@ -6,7 +6,7 @@ import { startServer, stopServer } from "../server/server";
 
 const PORT = 3016;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
-const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
+const DATA_DIR = process.env.AI_DISEC_DATA_DIR || path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const savedSettings = fs.existsSync(SETTINGS_FILE)
   ? fs.readFileSync(SETTINGS_FILE, "utf8")

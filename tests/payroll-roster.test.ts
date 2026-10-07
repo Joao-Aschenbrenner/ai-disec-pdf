@@ -179,6 +179,28 @@ describe("payroll report and visual evidence guards", () => {
     ])).toBe(false);
   });
 
+  it("não divide duas regiões da mesma nota fiscal como se fossem notas distintas", () => {
+    const regions = [1, 2].map(() => ({
+      classificationText: "NOTA FISCAL DE SERVICOS ELETRONICA NFS-e PRESTADOR DE SERVICOS TOMADOR DE SERVICOS",
+      notaNumber: "618",
+      companyName: "Emitente de teste",
+      visualEvidence: { layout: "two_individual_forms", separateDocumentBlocks: 2 },
+      fieldEvidence: { companyNameLocation: "issuer_header" },
+    }));
+    expect(isConfirmedTwoDocumentArray(regions)).toBe(false);
+  });
+
+  it("mantém a divisão de duas notas fiscais quando número e emissor identificam cada formulário", () => {
+    const forms = ["618", "619"].map(notaNumber => ({
+      classificationText: "NOTA FISCAL DE SERVICOS ELETRONICA NFS-e PRESTADOR DE SERVICOS TOMADOR DE SERVICOS",
+      notaNumber,
+      companyName: "Emitente de teste",
+      visualEvidence: { layout: "two_individual_forms", separateDocumentBlocks: 2 },
+      fieldEvidence: { companyNameLocation: "issuer_header" },
+    }));
+    expect(isConfirmedTwoDocumentArray(forms)).toBe(true);
+  });
+
   it("envia ao Laya somente rótulos estruturais, sem PII nem valores das linhas", async () => {
     const secretName = "NOME PESSOA TESTE";
     const secretAmount = "987654.32";

@@ -7,7 +7,7 @@ import { startServer, stopServer } from "../server/server";
 // Importamos após preparar/stub do models.json quando necessário.
 // Como loadModelsCatalog cacheia, precisamos isolar o módulo por teste.
 
-const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
+const DATA_DIR = process.env.AI_DISEC_DATA_DIR || path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const savedSettings = fs.existsSync(SETTINGS_FILE) ? fs.readFileSync(SETTINGS_FILE, "utf8") : null;
 const MOCK_API_KEY = "x".repeat(8);
