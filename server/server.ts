@@ -888,6 +888,55 @@ async function logUpload(originalName: string, pageIndex: number, status: string
   }
 }
 
+function readJpegDimensionsFromBase64(base64: string): { width: number; height: number } | null {
+  try {
+    // SOF normalmente aparece antes dos dados comprimidos. Limitar o decode
+    // evita duplicar um JPEG inteiro na RAM só para telemetria.
+    const head = Buffer.from(base64.slice(0, 131072), "base64");
+    if (head.length < 4 || head[0] !== 0xff || head[1] !== 0xd8) return null;
+
+    let offset = 2;
+    const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+    while (offset + 8 < head.length) {
+      if (head[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      while (offset < head.length && head[offset] === 0xff) offset += 1;
+      const marker = head[offset++];
+      if (marker === 0xd8 || marker === 0xd9) continue;
+      if (offset + 1 >= head.length) break;
+      const length = head.readUInt16BE(offset);
+      if (length < 2 || offset + length > head.length) break;
+      if (sofMarkers.has(marker) && length >= 7) {
+        return {
+          height: head.readUInt16BE(offset + 3),
+          width: head.readUInt16BE(offset + 5),
+        };
+      }
+      offset += length;
+    }
+  } catch {}
+  return null;
+}
+
+function buildVisionCallDiagnostics(
+  model: string,
+  latencyMs: number,
+  imageBase64: string,
+  modelTier: string
+) {
+  const dimensions = readJpegDimensionsFromBase64(imageBase64);
+  return {
+    model,
+    latencyMs,
+    imageWidth: dimensions?.width ?? null,
+    imageHeight: dimensions?.height ?? null,
+    imageBytesApprox: Math.floor((imageBase64.length * 3) / 4),
+    renderTier: modelTier,
+  };
+}
+
 function buildModelFailoverResponse(
   provider: string,
   pageKey: string,
@@ -1230,6 +1279,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
        // o modelo real é descoberto e rotacionado automaticamente.
        const modelTier = hintedTier;
        const pageFailoverKey = String(runtimePageId || `${originalName || "document"}::${pageIndex ?? 0}`);
+       const providerRequestStartedAt = Date.now();
        let requestModel = "";
        let aiResponse;
        try {
@@ -1555,6 +1605,15 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           }
 
           if (requestModel) {
+            const providerLatencyMs = Date.now() - providerRequestStartedAt;
+            await logUpload(
+              originalName,
+              pageIndex,
+              "vision-error",
+              provider,
+              "VISION_CALL_THROW",
+              buildVisionCallDiagnostics(requestModel, providerLatencyMs, imageBase64, modelTier)
+            );
             recordTelemetry(provider, requestModel, /abort|time.?out/i.test(message) ? "timeout" : "failure", 0);
             const failover = buildModelFailoverResponse(
               provider,
@@ -1568,6 +1627,16 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
           throw aiErr;
         }
+
+       const providerLatencyMs = Date.now() - providerRequestStartedAt;
+       await logUpload(
+         originalName,
+         pageIndex,
+         aiResponse.ok ? "vision" : "vision-error",
+         provider,
+         "VISION_CALL",
+         buildVisionCallDiagnostics(requestModel, providerLatencyMs, imageBase64, modelTier)
+       );
 
        if (!aiResponse.ok) {
          const errBody = await aiResponse.text();
