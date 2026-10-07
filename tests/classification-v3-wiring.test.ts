@@ -174,6 +174,44 @@ describe("Classification V3 wiring", () => {
     expect(server).toContain("refreshActiveIndexByLatency(provider)");
   });
 
+  it("Vision preserva evidência espacial sanitizada para o Laya", () => {
+    const prompt = read("server/classification/extractionPrompt.ts");
+    const router = read("server/classification/v3Router.ts");
+    const types = read("src/types.ts");
+    expect(prompt).toContain('"keyLabels"');
+    expect(prompt).toContain('"independentFormHeaders"');
+    expect(prompt).toContain('"independentTotals"');
+    expect(prompt).toContain('"regions"');
+    expect(prompt).toContain('"valorLabel"');
+    expect(prompt).toContain('"valorRelation"');
+    expect(router).toContain("collectSafeVisualLabels");
+    expect(router).toContain("classifyByVisualStructure");
+    expect(router).toContain('source: "visual-guard"');
+    expect(types).toContain("keyLabels?: string[]");
+    expect(types).toContain("regions?: Array<");
+  });
+
+  it("crop condicional só aceita dois holerites independentes comprovados", () => {
+    const app = read("src/App.tsx");
+    expect(app).toContain("tryRecoverStackedPayrollPage");
+    expect(app).toContain("conditional-crop-probe");
+    expect(app).toContain('["HOLERITE", "HOLERITE_13"]');
+    expect(app).toContain('pessoaNomeLocation === "employee_field"');
+    expect(app).toContain("crops não provaram dois holerites independentes; mantendo página inteira");
+    expect(app).toContain("URL.revokeObjectURL(segment.blobUrl)");
+  });
+
+  it("telemetria Vision registra modelo, latência, dimensões e bytes sem conteúdo do documento", () => {
+    const server = read("server/server.ts");
+    expect(server).toContain("buildVisionCallDiagnostics");
+    expect(server).toContain("readJpegDimensionsFromBase64");
+    expect(server).toContain("VISION_CALL");
+    expect(server).toContain("latencyMs");
+    expect(server).toContain("imageWidth");
+    expect(server).toContain("imageHeight");
+    expect(server).toContain("imageBytesApprox");
+  });
+
   it("Electron não desacelera o processamento em background", () => {
     const main = read("electron/main.cjs");
     expect(main).toContain("backgroundThrottling: false");
