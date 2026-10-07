@@ -131,6 +131,7 @@ describe("Exhaustive Vision failover", () => {
             candidateCount: body.candidateCount,
             modelsTried: body.modelsTried,
             modelsRemaining: body.modelsRemaining,
+            providerPressure: body.providerPressure,
           };
         }
 

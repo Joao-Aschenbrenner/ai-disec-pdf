@@ -57,6 +57,10 @@ declare global {
       install: () => Promise<{ ok: boolean; error?: string; path?: string }>;
       pullModel: (model: string) => Promise<{ ok: boolean; model?: string; error?: string }>;
       onPullProgress: (fn: (p: { line: string; model: string }) => void) => () => void;
+      // OpenCode CLI (instalação opcional, serviço local e descoberta de modelos)
+      openCodeStatus: () => Promise<{ installed: boolean; path: string | null; running: boolean; version: string | null }>;
+      openCodeInstall: () => Promise<{ ok: boolean; error?: string; alreadyInstalled?: boolean }>;
+      openCodeStart: () => Promise<{ ok: boolean; error?: string; alreadyRunning?: boolean; version?: string | null }>;
       // Laya local
       layaStatus: () => Promise<{
         installed: boolean;
@@ -90,9 +94,25 @@ import { formatProcessingElapsed } from "./utils/processingTimer";
 import { version as appVersion } from "../package.json";
 
 const AUTO_PIPELINE_CONCURRENCY = 4;
+function waitForDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal?.aborted) return resolve();
+    let timer = 0;
+    const abort = () => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    };
+    timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
 const VISIBLE_PROVIDERS = new Set([
   "NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC",
-  "OPENROUTER", "GROQ", "OLLAMA_CLOUD", "CODEX", "LOCAL_OLLAMA",
+  "OPENROUTER", "GROQ", "OLLAMA_CLOUD", "CODEX", "LOCAL_OLLAMA", "OPENCODE",
 ]);
 
 // Default concurrency (used before component mounts)
@@ -100,7 +120,7 @@ let currentConcurrencyRef = AUTO_PIPELINE_CONCURRENCY;
 
 function providerConcurrency(_provider: string): number {
   // Produto simplificado: um único motor visível em modo Automático.
-  // Concorrência adaptativa: começa em 3, reduz sob pressão, recupera gradualmente.
+  // Concorrência adaptativa: começa em 4, reduz sob pressão real e recupera gradualmente.
   return currentConcurrencyRef;
 }
 
@@ -222,6 +242,101 @@ function OllamaAutoSetup() {
       >
         {busy ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Preparando...</> : <><RefreshCw className="w-3.5 h-3.5" /> Preparar / atualizar automaticamente</>}
       </button>
+    </div>
+  );
+}
+
+function OpenCodeSetup({ model, setModel }: { model: string; setModel: (model: string) => void }) {
+  const api = window.electronAPI;
+  const [status, setStatus] = useState<{ installed: boolean; path: string | null; running: boolean; version: string | null } | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [busy, setBusy] = useState<"install" | "discover" | null>(null);
+  const [message, setMessage] = useState("Verificando OpenCode CLI...");
+
+  const refreshStatus = async () => {
+    try {
+      const result = await api?.openCodeStatus?.();
+      if (result) setStatus(result);
+      return result;
+    } catch {
+      setMessage("Não foi possível verificar o OpenCode CLI.");
+      return null;
+    }
+  };
+
+  const discoverModels = async () => {
+    setBusy("discover");
+    try {
+      const started = await api?.openCodeStart?.();
+      if (!started?.ok) throw new Error(started?.error || "Não foi possível iniciar OpenCode.");
+      const response = await fetch("/api/opencode/models");
+      const result = await response.json();
+      const available = Array.isArray(result.models) ? result.models as string[] : [];
+      setModels(available);
+      if (!response.ok || !result.available || available.length === 0) {
+        setMessage(result.message || "Nenhum modelo gratuito com visão foi encontrado.");
+        return;
+      }
+      setModel(available.includes(model) ? model : available[0]);
+      setMessage(`${available.length} modelo${available.length === 1 ? "" : "s"} com visão e custo de entrada/saída zero no catálogo do OpenCode.`);
+      await refreshStatus();
+    } catch (error: any) {
+      setModels([]);
+      setMessage(error?.message || "Falha ao consultar modelos OpenCode.");
+      await refreshStatus();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const install = async () => {
+    if (!api?.openCodeInstall) return;
+    setBusy("install");
+    setMessage("Instalando OpenCode CLI...");
+    try {
+      const result = await api.openCodeInstall();
+      if (!result.ok) throw new Error(result.error || "Falha ao instalar OpenCode CLI.");
+      setMessage(result.alreadyInstalled ? "OpenCode CLI já está instalado." : "OpenCode CLI instalado. Inicie o serviço e conecte seus provedores.");
+      await refreshStatus();
+    } catch (error: any) {
+      setMessage(error?.message || "Falha ao instalar OpenCode CLI.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  useEffect(() => {
+    refreshStatus().then(result => {
+      if (result?.running) discoverModels();
+    });
+  }, []);
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Cpu className="w-4 h-4 text-cyan-400" />
+        <span className="text-xs font-bold text-slate-200">OpenCode CLI — modelos de visão</span>
+        {status?.running && <span className="text-[9px] font-bold text-emerald-300 bg-emerald-950/40 px-1.5 py-0.5 rounded">serviço ativo</span>}
+      </div>
+      <p className="text-[11px] text-slate-400 mb-3">{message}</p>
+      <p className="text-[10px] leading-4 text-slate-500 mb-3">Só entram modelos conectados que declarem entrada por imagem e custo de entrada e saída igual a zero. Configure a conta com <code>opencode auth login</code>. Limites do provedor ainda podem se aplicar; o documento será enviado ao provedor escolhido no OpenCode.</p>
+      {models.length > 0 && (
+        <div className="mb-3">
+          <label className="block text-[10px] font-semibold text-slate-400 mb-1">Modelo OpenCode gratuito com visão</label>
+          <select value={model} onChange={event => setModel(event.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-[11px] text-slate-200">
+            {models.map(candidate => <option key={candidate} value={candidate}>{candidate}</option>)}
+          </select>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={status?.installed ? discoverModels : install}
+        disabled={busy !== null}
+        className="w-full px-3 py-2 text-xs font-bold text-white bg-cyan-700 hover:bg-cyan-600 rounded-lg disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+      >
+        {busy ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {busy === "install" ? "Instalando CLI..." : "Iniciando e atualizando modelos..."}</> : status?.installed ? <><RefreshCw className="w-3.5 h-3.5" /> Iniciar / atualizar modelos</> : <><Download className="w-3.5 h-3.5" /> Instalar OpenCode CLI</>}
+      </button>
+      {status?.version && <p className="text-[9px] text-slate-600 mt-2">OpenCode {status.version}</p>}
     </div>
   );
 }
@@ -525,6 +640,7 @@ export default function App() {
   const [showDocModal, setShowDocModal] = useState(false);
   const [settingsProvider, setSettingsProvider] = useState("NVIDIA");
   const [settingsApiKey, setSettingsApiKey] = useState("");
+  const [settingsModel, setSettingsModel] = useState("");
   const [currentProvider, setCurrentProvider] = useState("NVIDIA");
   const [savingSettings, setSavingSettings] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
@@ -545,10 +661,11 @@ export default function App() {
 
       setCurrentProvider(provider);
       setSettingsProvider(provider);
+      setSettingsModel(typeof s.model === "string" ? s.model : "");
 
       if (provider === String(s.provider || "").toUpperCase()) {
         setSettingsApiKey(typeof s.apiKey === "string" ? s.apiKey : "");
-        if (!s.apiKey && provider !== "LOCAL_OLLAMA" && provider !== "CODEX") {
+        if (!s.apiKey && provider !== "LOCAL_OLLAMA" && provider !== "CODEX" && provider !== "OPENCODE") {
           setTimeout(() => setShowFirstTimeWarning(true), 800);
         }
       } else {
@@ -683,6 +800,7 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const blobUrlsRef = useRef<string[]>([]);
+  const processingAbortControllerRef = useRef<AbortController | null>(null);
   // Cache curto: só mantém o render enquanto a MESMA página percorre retries.
   // A entrada é descartada ao terminar a página para não acumular JPEGs de
   // alta resolução em máquinas de escritório com 8–16 GB de RAM.
@@ -875,44 +993,52 @@ export default function App() {
     // Incrementa contador de tentativas reais
     setAttemptCount(prev => prev + 1);
     
-    const response = await fetch("/api/extract", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // Watchdog de rede: o provider tem timeout próprio (75-120s) no server;
-      // 150s aqui cobre fila do server + provider e impede fetch eterno.
-      signal: AbortSignal.timeout(150_000),
-      body: JSON.stringify({
-        pdfBase64: imageBase64,
-        originalName: page.originalFileName,
-        pageIndex: page.sourcePageIndex ?? page.index,
-        runtimePageId: page.id,
-        v3Hint: page.v3Hint,
-        ...(correction ? { correction } : {}),
-      }),
-    });
+    const requestController = new AbortController();
+    const timeout = window.setTimeout(() => requestController.abort(new DOMException("Tempo limite da requisicao", "TimeoutError")), 150_000);
+    const runSignal = processingAbortControllerRef.current?.signal;
+    const abortFromRun = () => requestController.abort(runSignal?.reason);
+    if (runSignal?.aborted) abortFromRun();
+    else runSignal?.addEventListener("abort", abortFromRun, { once: true });
 
-    if (!response.ok) {
-      const errJson = await response.json().catch(() => ({}));
-      const err = new Error(errJson.error || "Erro de requisição.") as any;
-      err.retryAfter = errJson.retryAfter;
-      err.status = response.status;
-      err.retryable =
-        typeof errJson.retryable === "boolean"
-          ? errJson.retryable
-          : [408, 429, 500, 502, 503, 504, 529].includes(response.status);
-      // Propaga estado do failover Vision para o pipeline.
-      err.modelRotated = errJson.modelRotated === true;
-      err.modelExhausted = errJson.modelExhausted === true;
-      err.candidateCount = Number(errJson.candidateCount || 0);
-      err.modelsTried = Number(errJson.modelsTried || 0);
-      err.modelsRemaining = Number(errJson.modelsRemaining || 0);
-      err.providerAuthError = errJson.providerAuthError === true;
-      throw err;
+    try {
+      const response = await fetch("/api/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: requestController.signal,
+        body: JSON.stringify({
+          pdfBase64: imageBase64,
+          originalName: page.originalFileName,
+          pageIndex: page.sourcePageIndex ?? page.index,
+          runtimePageId: page.id,
+          v3Hint: page.v3Hint,
+          ...(correction ? { correction } : {}),
+        }),
+      });
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        const err = new Error(errJson.error || "Erro de requisição.") as any;
+        err.retryAfter = errJson.retryAfter;
+        err.status = response.status;
+        err.retryable =
+          typeof errJson.retryable === "boolean"
+            ? errJson.retryable
+            : [408, 429, 500, 502, 503, 504, 529].includes(response.status);
+        err.modelRotated = errJson.modelRotated === true;
+        err.providerPressure = typeof errJson.providerPressure === "boolean" ? errJson.providerPressure : undefined;
+        err.modelExhausted = errJson.modelExhausted === true;
+        err.candidateCount = Number(errJson.candidateCount || 0);
+        err.modelsTried = Number(errJson.modelsTried || 0);
+        err.modelsRemaining = Number(errJson.modelsRemaining || 0);
+        err.providerAuthError = errJson.providerAuthError === true;
+        throw err;
+      }
+
+      const data = await response.json();
+      return { ...data, modelRotated: data.modelRotated === true };
+    } finally {
+      window.clearTimeout(timeout);
+      runSignal?.removeEventListener("abort", abortFromRun);
     }
-    
-    const data = await response.json();
-    // Retorna modelRotated se o backend enviou (para retry automático)
-    return { ...data, modelRotated: data.modelRotated === true };
   };
 
   const buildProcessedPage = (
@@ -986,7 +1112,7 @@ export default function App() {
               });
             }
             syncPipelineState();
-            await new Promise(resolve => setTimeout(resolve, delayMs));
+            await waitForDelay(delayMs, processingAbortControllerRef.current?.signal);
             syncPipelineState();
           }
         );
@@ -1072,10 +1198,20 @@ export default function App() {
 
       // Se o VLM encontrou dois documentos, materializa dois PDFs. Tenta usar o
       // separador visual real e cai para 50/50 somente se não houver separador confiável.
-      if (
+      const twoCompleteFormsConfirmed =
         result._multiple &&
         Array.isArray(result.documents) &&
         result.documents.length === 2 &&
+        result.documents.every((doc: ExtractedMetadata) => {
+          const visual = doc.visualEvidence;
+          const fields = doc.fieldEvidence;
+          return visual?.layout === "two_individual_forms" &&
+            visual.separateDocumentBlocks === 2 &&
+            ((["HOLERITE", "HOLERITE_13"].includes(doc.documentClass || "") && fields?.pessoaNomeLocation === "employee_field") ||
+              (["NFS", "NFE_DANFE"].includes(doc.documentClass || "") && fields?.companyNameLocation === "issuer_header"));
+        });
+      if (
+        twoCompleteFormsConfirmed &&
         page.segmentIndex === undefined
       ) {
         const layout = await detectStackedDocumentSeparator(imageBase64);
@@ -1084,6 +1220,28 @@ export default function App() {
 
       if (result._multiple && Array.isArray(result.documents)) {
         const docs = result.documents as ExtractedMetadata[];
+        // Defense in depth for older server responses or malformed model output:
+        // an unverified array still represents one page in the output ZIP.
+        if (!twoCompleteFormsConfirmed || page.segmentIndex !== undefined) {
+          const metadata: ExtractedMetadata = {
+            isNotaFiscal: false,
+            notaNumber: null,
+            companyName: null,
+            valor: null,
+            pessoaNome: null,
+            documentType: "outros",
+            documentClass: "OUTRO",
+            classificationText: docs.map(doc => doc.classificationText || "").filter(Boolean).join(" | ").slice(0, 4000),
+            visualEvidence: { layout: "unknown", separateDocumentBlocks: 1 },
+            fieldEvidence: {},
+            classificationConfidence: 0.2,
+            classificationSource: "unverified-array-collapsed",
+            needsReview: true,
+            layaChecked: false,
+            layaConfidence: 0,
+          };
+          return buildProcessedPage(id, page, metadata);
+        }
         const firstMeta = docs[0];
         let customFilename = generateCombinedFilename(docs, page.sourcePageIndex ?? page.index, filenameOptions);
         if (removeOriginalName) {
@@ -1119,8 +1277,11 @@ export default function App() {
       updatePageStage(id, "confirming", 94);
       return buildProcessedPage(id, page, metadata);
     } catch (err: any) {
-      const aborted = err?.name === "AbortError" || /aborted/i.test(String(err?.message || ""));
-      const message = aborted
+      const cancelled = processingAbortControllerRef.current?.signal.aborted === true;
+      const aborted = cancelled || err?.name === "AbortError" || /aborted|timeout/i.test(String(err?.message || ""));
+      const message = cancelled
+        ? "Processamento interrompido pelo usuário."
+        : aborted
         ? "Tempo limite do provedor excedido. A página será tentada novamente."
         : (err?.message || "Erro de processamento");
       console.error("Page processing failed", page.index + 1, message);
@@ -1132,11 +1293,14 @@ export default function App() {
         processingProgress: 100,
         error: message,
         retryAfter: err?.retryAfter,
-        retryable: err?.retryable !== false,
+        retryable: !cancelled && err?.retryable !== false,
         // Propaga info do failover Vision para retry inteligente.
         modelRotated: err?.modelRotated === true,
         modelExhausted: err?.modelExhausted === true,
-        localFailure: err?.localFailure === true,
+        localFailure: cancelled || err?.localFailure === true,
+        providerPressure: typeof err?.providerPressure === "boolean"
+          ? err.providerPressure
+          : !cancelled && (err?.status === undefined || [408, 429, 500, 502, 503, 504, 529].includes(err?.status)),
         candidateCount: Number(err?.candidateCount || 0),
         modelsTried: Number(err?.modelsTried || 0),
         modelsRemaining: Number(err?.modelsRemaining || 0),
@@ -1190,7 +1354,7 @@ export default function App() {
             });
           }
           syncPipelineState();
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+          await waitForDelay(delayMs, processingAbortControllerRef.current?.signal);
           syncPipelineState();
         }
       );
@@ -1215,8 +1379,8 @@ export default function App() {
     });
   };
 
-  const runV3Prepasses = async (pages: SplitPage[]): Promise<SplitPage[]> => {
-    const healthRes = await fetch("/api/classification/health");
+  const runV3Prepasses = async (pages: SplitPage[], signal?: AbortSignal): Promise<SplitPage[]> => {
+  const healthRes = await fetch("/api/classification/health", { signal });
     const health = await healthRes.json().catch(() => ({}));
     if (!healthRes.ok || !health?.laya?.healthy) {
       const error: any = new Error("Classification V3 exige Laya ativo. Abra Configurações e inicie o Laya.");
@@ -1227,6 +1391,7 @@ export default function App() {
     // PASSAGEM 1A: extrai camada de texto local. Em scan puro isso retorna vazio,
     // e a página será classificada pelo Laya depois que o VLM produzir classificationText.
     const withText = await mapPool(pages, AUTO_PIPELINE_CONCURRENCY, async (page) => {
+      if (signal?.aborted) return page;
       updatePageStage(page.id, "preparing", 8);
       let localText = "";
       try {
@@ -1254,6 +1419,7 @@ export default function App() {
           text: p.localText || "",
         })),
       }),
+      signal,
     });
     const pass1 = await pass1Res.json().catch(() => ({}));
     if (!pass1Res.ok) throw new Error(pass1.error || "Falha na primeira passagem do classificador.");
@@ -1293,6 +1459,7 @@ export default function App() {
           needsReview: (page.v3Hint?.confidence || 0) < 0.80,
         })),
       }),
+      signal,
     });
     const sequence = await seqRes.json().catch(() => ({}));
     if (!seqRes.ok) throw new Error(sequence.error || "Falha na validação de sequência.");
@@ -1355,6 +1522,8 @@ export default function App() {
     }
 
     // Inicializa métricas da execução (pipeline compartilhado + espelho React)
+    const processingController = new AbortController();
+    processingAbortControllerRef.current = processingController;
     pipelineRef.current.reset(4);
     setPipelineHalted(false);
     setModelFailoverProgress(null);
@@ -1379,12 +1548,12 @@ export default function App() {
       }));
       setSplitPages(initialPages);
 
-      const workingPages = await runV3Prepasses(initialPages);
+      const workingPages = await runV3Prepasses(initialPages, processingController.signal);
       const queue = workingPages.filter(p => p.status !== "success");
       const activePromises: Promise<void>[] = [];
       const finalPhysical = new Map<string, SplitPage>();
 
-      while (queue.length > 0 || activePromises.length > 0) {
+      while ((queue.length > 0 || activePromises.length > 0) && !processingController.signal.aborted) {
         const pipeline = pipelineRef.current;
 
         // Circuit breaker: se uma página detectou instabilidade, nenhuma página
@@ -1435,6 +1604,11 @@ export default function App() {
         }
       }
 
+      if (processingController.signal.aborted) {
+        await Promise.allSettled([...activePromises]);
+        return;
+      }
+
       if (pipelineRef.current.halted && queue.length > 0) {
         const waitingIds = new Set(queue.map(page => page.id));
         setSplitPages(prev => prev.map(page =>
@@ -1463,12 +1637,12 @@ export default function App() {
         getFailedPages: () => workingPages
           .map(p => finalPhysical.get(p.id))
           .filter((r): r is SplitPage => Boolean(r) && !Array.isArray(r) && r.status === "failed"),
-        canStartPage: () => pipelineRef.current.canLaunchNewPages(),
+        canStartPage: () => !processingController.signal.aborted && pipelineRef.current.canLaunchNewPages(),
         beforeCycle: async (cycle, failedCount) => {
           setAutoRetryStatus(
             `Ciclo automático ${cycle}/${AUTO_RETRY_CYCLES}: re-tentando ${failedCount} página(s) em 30s (a fila não para).`
           );
-          await new Promise(resolve => setTimeout(resolve, AUTO_RETRY_COOLDOWN_MS));
+          await waitForDelay(AUTO_RETRY_COOLDOWN_MS, processingController.signal);
         },
         retryPage: async failedPage => {
           await resetPageModelFailover(failedPage);
@@ -1490,6 +1664,8 @@ export default function App() {
         },
         onFinish: () => setAutoRetryStatus(null),
       });
+
+      if (processingController.signal.aborted) return;
 
       // PASSAGEM 3: reavalia a sequência já com classificationText vindo do VLM.
       // É aqui que "página 2 do extrato" pode vencer um falso TED isolado do Laya.
@@ -1516,6 +1692,7 @@ export default function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pages: finalSequenceInput }),
+          signal: processingController.signal,
         });
         const seqData = await seqRes.json().catch(() => ({}));
 
@@ -1582,6 +1759,7 @@ export default function App() {
         }
       }
     } catch (error: any) {
+      if (processingController.signal.aborted) return;
       console.error("[Classification V3]", error);
       if (error?.code === "LAYA_REQUIRED") setShowSettings(true);
       alert(error?.message || "Falha no fluxo Classification V3.");
@@ -1596,11 +1774,15 @@ export default function App() {
       stopProcessingTimer();
       setIsProcessing(false);
       window.electronAPI?.endProcessing();
+      if (processingAbortControllerRef.current === processingController) {
+        processingAbortControllerRef.current = null;
+      }
     }
   };
 
   // Clear / Reset App
   const resetApp = () => {
+    processingAbortControllerRef.current?.abort(new DOMException("Processamento cancelado pelo usuário", "AbortError"));
     revokeAllBlobUrls();
     resetProcessingTimer();
     setSelectedFile(null);
@@ -1625,43 +1807,48 @@ export default function App() {
   // Create ZIP and trigger browser download
   const downloadAllAsZip = async () => {
     if (splitPages.length === 0) return;
-    
-    const zip = new JSZip();
-    const cleanOriginalName = sanitizeFilename(selectedFile?.name.replace(/\.pdf$/i, "") || "documentos");
-    
-    let addedCount = 0;
-    const usedZipNames = new Set<string>();
-    
-    for (const page of splitPages) {
-      if (page.status !== "success") continue;
-      // Decode base64 to binary ArrayBuffer/Uint8Array
-      const binaryString = window.atob(page.base64);
-      const len = binaryString.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+
+    let blobUrl: string | null = null;
+    try {
+      const zip = new JSZip();
+      const cleanOriginalName = (sanitizeFilename(selectedFile?.name.replace(/\.pdf$/i, "") || "documentos") || "documentos")
+        .slice(0, 48)
+        .replace(/_+$/g, "");
+      let addedCount = 0;
+      const usedZipNames = new Set<string>();
+
+      for (const page of splitPages) {
+        if (page.status !== "success") continue;
+        const binaryString = window.atob(page.base64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
+        zip.file(resolveFilenameConflict(page.customFilename, usedZipNames), bytes);
+        addedCount++;
       }
-      
-      const zipFilename = resolveFilenameConflict(page.customFilename, usedZipNames);
-      zip.file(zipFilename, bytes);
-      addedCount++;
+
+      if (addedCount === 0) {
+        alert("Nenhum arquivo válido encontrado para criar o pacote ZIP.");
+        return;
+      }
+
+      const content = await zip.generateAsync({ type: "blob" });
+      blobUrl = URL.createObjectURL(content);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `${cleanOriginalName || "documentos"}_separado_organizado.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      // Electron/Chromium can cancel the download when a blob URL is revoked synchronously.
+      window.setTimeout(() => {
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+      }, 60_000);
+    } catch (error) {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      console.error("ZIP download failed", error);
+      alert("Falha ao criar ou iniciar o download do ZIP. Revise os arquivos concluídos e tente novamente.");
     }
-
-    if (addedCount === 0) {
-      alert("Nenhum arquivo válido encontrado para criar o pacote ZIP.");
-      return;
-    }
-
-    const content = await zip.generateAsync({ type: "blob" });
-    const blobUrl = URL.createObjectURL(content);
-
-    const link = document.createElement("a");
-    link.href = blobUrl;
-    link.download = `${cleanOriginalName}_separado_organizado.zip`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(blobUrl);
   };
 
   // Update specific metadata field value manually to re-trigger filename generation
@@ -1855,10 +2042,12 @@ export default function App() {
   const handleProviderChange = async (provider: string) => {
     setSettingsProvider(provider);
     setSettingsApiKey("");
+    setSettingsModel("");
     try {
       const res = await fetch(`/api/settings?provider=${encodeURIComponent(provider)}`);
       const data = await res.json();
       setSettingsApiKey(typeof data.apiKey === "string" ? data.apiKey : "");
+      setSettingsModel(typeof data.model === "string" ? data.model : "");
       fetch("/api/models/runtime/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1876,7 +2065,7 @@ export default function App() {
       const res = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: settingsProvider, apiKey: settingsApiKey, model: "", modelTier: "auto" }),
+        body: JSON.stringify({ provider: settingsProvider, apiKey: settingsApiKey, model: settingsProvider === "OPENCODE" ? settingsModel : "", modelTier: "auto" }),
       });
       if (res.ok) {
         setCurrentProvider(settingsProvider);
@@ -1983,7 +2172,7 @@ export default function App() {
       </header>
       </div>
 
-      {showFirstTimeWarning && !settingsApiKey && currentProvider !== "LOCAL_OLLAMA" && currentProvider !== "CODEX" && (
+      {showFirstTimeWarning && !settingsApiKey && currentProvider !== "LOCAL_OLLAMA" && currentProvider !== "CODEX" && currentProvider !== "OPENCODE" && (
         <div className="max-w-[1600px] w-full mx-auto px-4 md:px-8 pt-2">
           <div className="bg-rose-950/30 border border-rose-800/40 rounded-xl px-5 py-3 flex items-start gap-3 animate-fadeIn">
             <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
@@ -2859,6 +3048,7 @@ export default function App() {
                     <option value="GROQ">Groq</option>
                     <option value="OLLAMA_CLOUD">Ollama Cloud</option>
                     <option value="CODEX">Codex</option>
+                    <option value="OPENCODE">OpenCode CLI</option>
                   </optgroup>
                   <optgroup label="Local">
                     <option value="LOCAL_OLLAMA">Ollama Local</option>
@@ -2875,7 +3065,9 @@ export default function App() {
                 </div>
               </div>
 
-              {settingsProvider === "CODEX" ? (
+              {settingsProvider === "OPENCODE" ? (
+                <OpenCodeSetup model={settingsModel} setModel={setSettingsModel} />
+              ) : settingsProvider === "CODEX" ? (
                 <CodexLogin apiKey={settingsApiKey} setApiKey={setSettingsApiKey} />
               ) : settingsProvider === "LOCAL_OLLAMA" ? (
                 <OllamaAutoSetup />

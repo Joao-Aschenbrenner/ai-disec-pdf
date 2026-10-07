@@ -1,4 +1,4 @@
-import { classifyBySignatures } from "./documentSignatures";
+import { classificationCueLabels, classifyBySignatures } from "./documentSignatures";
 import { classifyWithLaya } from "./layaClient";
 import { DocumentClass, toLegacyDocumentType } from "./documentTaxonomy";
 import { findConfirmedPattern } from "./learningStore";
@@ -27,6 +27,68 @@ function clamp(n: number) {
   return Math.max(0, Math.min(0.99, n));
 }
 
+const SAFE_COLUMN_HEADERS = new Set([
+  "NOME", "CPF", "CNPJ", "AGENCIA", "CONTA", "AGENCIA/CONTA", "ACEITO", "TIPO", "VALOR",
+  "DATA", "DESCRICAO", "HISTORICO", "LANCAMENTO", "DEBITO", "CREDITO", "SALDO",
+  "VENCIMENTOS", "DESCONTOS", "REFERENCIA", "CODIGO", "EMITENTE", "PRESTADOR", "TOMADOR",
+  "COMPETENCIA", "MENSALISTA", "FOLHA MENSAL", "PIX", "TED",
+]);
+
+function normalizeHeader(value: unknown): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/^AGENCIA CONTA$/, "AGENCIA/CONTA");
+}
+
+function safePageMarker(value: unknown): string | null {
+  const match = String(value || "").match(/(?:PAG(?:INA)?\s*)\d{1,3}(?:\s*(?:DE|\/)\s*\d{1,3})?/i);
+  return match ? match[0].toUpperCase().replace(/\s+/g, " ") : null;
+}
+
+/** Build a redacted, visual-only description for Laya; field values never leave this process. */
+export function buildLayaClassificationEvidence(raw: Record<string, any>): string {
+  const sourceText = String(raw.classificationText || raw.ocrText || raw.evidenceText || "");
+  const cueLabels = classificationCueLabels(sourceText);
+  const visual = raw.visualEvidence && typeof raw.visualEvidence === "object" ? raw.visualEvidence : {};
+  const headers = Array.isArray(visual.columnHeaders)
+    ? [...new Set(visual.columnHeaders.map(normalizeHeader).filter((header: string) => SAFE_COLUMN_HEADERS.has(header)))]
+    : [];
+  const layout = ["single_form", "multi_row_table", "bank_ledger", "two_individual_forms", "other", "unknown"].includes(visual.layout)
+    ? visual.layout
+    : "unknown";
+  const fields = raw.fieldEvidence && typeof raw.fieldEvidence === "object" ? raw.fieldEvidence : {};
+  const safeLocations = new Set([
+    "issuer_header", "employer_field", "institution_header", "account_holder_header",
+    "transaction_row", "employee_field", "report_employee_row", "transaction_party",
+    "document_total", "employee_row", "unknown",
+  ]);
+  const safeLocation = (value: unknown) => safeLocations.has(String(value)) ? String(value) : "unknown";
+  const blocks = Number.isInteger(Number(visual.separateDocumentBlocks))
+    ? Math.max(0, Math.min(20, Number(visual.separateDocumentBlocks)))
+    : "unknown";
+  const bool = (value: unknown) => typeof value === "boolean" ? String(value) : "unknown";
+  const pageMarker = safePageMarker(visual.pageMarker);
+
+  return [
+    "SINAIS VISUAIS PARA CLASSIFICACAO (sem nomes, CPFs, contas, transacoes ou valores):",
+    `layout=${layout}`,
+    `cabecalhos=${headers.join(" | ") || "nao identificados"}`,
+    `blocos_de_documento=${blocks}`,
+    `linhas_repetidas_de_pessoas=${bool(visual.repeatedPeopleRows)}`,
+    `linhas_de_lancamentos_bancarios=${bool(visual.transactionLedgerRows)}`,
+    `origem_campo_empresa=${safeLocation(fields.companyNameLocation)}`,
+    `origem_campo_pessoa=${safeLocation(fields.pessoaNomeLocation)}`,
+    `origem_campo_valor=${safeLocation(fields.valorLocation)}`,
+    ...(pageMarker ? [`marcador_de_pagina=${pageMarker}`] : []),
+    `rotulos_textuais_reconhecidos=${cueLabels.join(" | ") || "nenhum"}`,
+  ].join("\n");
+}
+
 /**
  * Classification V3:
  * - Laya é consultado em toda página com texto útil.
@@ -37,14 +99,14 @@ function clamp(n: number) {
 export async function routeDocumentV3(
   text: string,
   hint?: V3RoutingHint,
-  options: { useLaya?: boolean } = {}
+  options: { useLaya?: boolean; layaEvidence?: string; visualEvidence?: Record<string, unknown> } = {}
 ): Promise<V3RoutingResult> {
   const sig = classifyBySignatures(text);
   const memory = findConfirmedPattern(text);
 
   const laya = options.useLaya === false
     ? { available: false, reason: "disabled" }
-    : await classifyWithLaya(text, 5000);
+    : await classifyWithLaya(options.layaEvidence || text, 5000);
 
   const layaChecked = options.useLaya !== false;
   const layaClass = laya.available ? laya.documentClass : undefined;
@@ -134,6 +196,32 @@ export async function routeDocumentV3(
     };
   }
 
+  // A strong layout signal from Vision is independent evidence for Laya. This
+  // lets a clear bank ledger resolve at 80%+ instead of falling back to OUTRO
+  // solely because text OCR missed the statement title.
+  const visual = options.visualEvidence || {};
+  const confirmsStatement =
+    visual.layout === "bank_ledger" &&
+    visual.transactionLedgerRows === true &&
+    ["EXTRATO_CC", "EXTRATO_INVESTIMENTO"].includes(String(layaClass));
+  const confirmsPayrollTable =
+    visual.layout === "multi_row_table" &&
+    visual.repeatedPeopleRows === true &&
+    ["FOPAG_RESUMO", "FOPAG_13_RESUMO"].includes(String(layaClass));
+  if (layaClass && layaConfidence >= 0.80 && (confirmsStatement || confirmsPayrollTable)) {
+    const structuralCue = confirmsStatement ? "visual:bank-ledger" : "visual:payroll-table";
+    return {
+      documentClass: layaClass,
+      documentType: toLegacyDocumentType(layaClass),
+      confidence: clamp(layaConfidence),
+      source: "laya",
+      evidence: [...sig.evidence, structuralCue, `laya:${layaClass}`],
+      needsReview: false,
+      layaChecked,
+      layaConfidence,
+    };
+  }
+
   if (layaClass && layaConfidence >= 0.90) {
     return {
       documentClass: layaClass,
@@ -177,19 +265,13 @@ export async function applyDocumentRoutingV3<T extends Record<string, any>>(
   raw: T,
   hint?: V3RoutingHint
 ): Promise<T> {
-  const classificationText = String(
-    raw.classificationText ||
-    raw.ocrText ||
-    raw.evidenceText ||
-    [
-      raw.companyName,
-      raw.pessoaNome,
-      raw.notaNumber,
-      raw.documentType,
-    ].filter(Boolean).join(" ")
-  );
+  const sourceText = String(raw.classificationText || raw.ocrText || raw.evidenceText || "");
+  const layaEvidence = buildLayaClassificationEvidence(raw);
 
-  const route = await routeDocumentV3(classificationText, hint);
+  const visualEvidence = raw.visualEvidence && typeof raw.visualEvidence === "object"
+    ? raw.visualEvidence as Record<string, unknown>
+    : undefined;
+  const route = await routeDocumentV3(sourceText, hint, { layaEvidence, visualEvidence });
   const result: any = {
     ...raw,
     documentClass: route.documentClass,
@@ -202,17 +284,48 @@ export async function applyDocumentRoutingV3<T extends Record<string, any>>(
     layaConfidence: route.layaConfidence,
   };
 
+  const fieldEvidence = raw.fieldEvidence && typeof raw.fieldEvidence === "object" ? raw.fieldEvidence : {};
   if (route.documentClass === "HOLERITE" || route.documentClass === "HOLERITE_13") {
     result.valor = null;
+    result.pessoaNome = fieldEvidence.pessoaNomeLocation === "employee_field" ? raw.pessoaNome ?? null : null;
     result.isNotaFiscal = false;
   } else if (route.documentClass === "FOPAG_RESUMO" || route.documentClass === "FOPAG_13_RESUMO") {
-    result.valor = raw.valor ?? null;
+    result.valor = null;
+    result.pessoaNome = null;
+    result.companyName = fieldEvidence.companyNameLocation === "employer_field" ? raw.companyName ?? null : null;
+    result.fieldEvidence = {
+      ...fieldEvidence,
+      pessoaNomeLocation: "report_employee_row",
+      valorLocation: "employee_row",
+    };
+    result.visualEvidence = raw.visualEvidence || {
+      layout: "multi_row_table",
+      columnHeaders: ["NOME", "CPF", "AGENCIA/CONTA", "ACEITO", "TIPO", "VALOR"],
+      separateDocumentBlocks: 1,
+      repeatedPeopleRows: true,
+      transactionLedgerRows: false,
+    };
+    result.isNotaFiscal = false;
+  } else if (route.documentClass === "EXTRATO_CC" || route.documentClass === "EXTRATO_INVESTIMENTO") {
+    result.valor = null;
+    result.pessoaNome = null;
+    result.companyName = ["institution_header", "account_holder_header"].includes(fieldEvidence.companyNameLocation)
+      ? raw.companyName ?? null
+      : null;
     result.isNotaFiscal = false;
   } else if (route.documentClass === "NFS" || route.documentClass === "NFE_DANFE") {
     result.isNotaFiscal = true;
     result.pessoaNome = null;
+    result.companyName = fieldEvidence.companyNameLocation === "issuer_header" ? raw.companyName ?? null : null;
+    result.valor = fieldEvidence.valorLocation === "document_total" ? raw.valor ?? null : null;
   } else {
     result.isNotaFiscal = false;
+    result.pessoaNome = null;
+    result.companyName = ["issuer_header", "employer_field", "institution_header", "account_holder_header"]
+      .includes(fieldEvidence.companyNameLocation)
+      ? raw.companyName ?? null
+      : null;
+    result.valor = fieldEvidence.valorLocation === "document_total" ? raw.valor ?? null : null;
   }
 
   return result;

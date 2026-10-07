@@ -2,20 +2,21 @@
  * Pipeline adaptativo — concorrência + estabilização por página.
  *
  * Regras:
- * - saudável: até 3 páginas simultâneas;
- * - ao primeiro erro de modelo/provider, a página atual vira a dona da estabilização;
+ * - saudável: até 4 páginas simultâneas;
+ * - erro real de cota/capacidade/timeout reduz a concorrência até estabilizar;
+ * - uma rotação por falha específica do candidato não serializa o lote;
  * - nenhuma página NOVA entra enquanto essa página percorre os candidatos Vision;
  * - modelRotated=true NÃO tem limite fixo de 3 tentativas: continua até o backend
  *   informar modelExhausted=true;
  * - 401/403 param imediatamente porque trocar modelo não corrige chave/permissão;
  * - 429 usa backoff no mesmo candidato e mantém um limite curto de tentativas;
  * - quando um candidato estabiliza a página, a fila reabre em concorrência 1 e
- *   recupera gradualmente até 3.
+ *   recupera gradualmente até 4.
  */
 
 export const AUTO_PIPELINE_MAX_SAME_MODEL_ATTEMPTS = 3;
 export const AUTO_PIPELINE_MAX_CONCURRENCY = 4;
-export const AUTO_PIPELINE_SUCCESS_STREAK = 6;
+export const AUTO_PIPELINE_SUCCESS_STREAK = 3;
 /** Apenas proteção contra bug/loop; o limite real do failover é modelsExhausted do backend. */
 export const AUTO_PIPELINE_SAFETY_ATTEMPTS = 64;
 
@@ -26,6 +27,8 @@ export interface PageFailureSignal {
   retryable?: boolean;
   retryAfter?: string;
   modelRotated?: boolean;
+  /** true only for provider capacity/network pressure; a model-only rotation does not pause the batch. */
+  providerPressure?: boolean;
   modelExhausted?: boolean;
   candidateCount?: number;
   modelsTried?: number;
@@ -114,7 +117,7 @@ export class AdaptivePipeline {
   private openCircuit(pageId: string | undefined, signal: PageFailureSignal): void {
     const from = this.currentConcurrency;
 
-    // A primeira página que percebe a instabilidade fica responsável por
+    // A primeira página que percebe pressão real fica responsável por
     // estabilizar o provider. Outras páginas já em voo não roubam esse papel.
     if (!this.queuePaused) {
       this.stabilizingPageId = pageId;
@@ -248,15 +251,11 @@ export class AdaptivePipeline {
     // Credencial/permissão são definitivos, não instabilidade de modelo.
     if (result.retryable === false) return;
 
-    const isPressure =
-      result.modelRotated === true ||
-      result.statusCode === 429 ||
-      result.statusCode === 504 ||
-      result.statusCode === 503 ||
-      result.statusCode === 500 ||
-      result.statusCode === 408 ||
-      result.statusCode === 502 ||
-      result.statusCode === 529;
+    const isPressure = typeof result.providerPressure === "boolean"
+      ? result.providerPressure
+      : result.modelRotated === true
+        ? false
+        : [429, 504, 503, 500, 408, 502, 529].includes(Number(result.statusCode));
 
     if (!isPressure) return;
     this.openCircuit(pageId, result);

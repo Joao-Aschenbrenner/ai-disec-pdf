@@ -7,7 +7,7 @@ import {
 const success = { status: "success" as const };
 
 describe("Adaptive Pipeline — exhaustive Vision failover", () => {
-  it("continua além de 3 tentativas enquanto o backend estiver rotacionando modelos", async () => {
+  it("continua a rotação sem serializar o lote quando a falha é específica do modelo", async () => {
     const pipeline = new AdaptivePipeline(3);
     let calls = 0;
 
@@ -40,7 +40,7 @@ describe("Adaptive Pipeline — exhaustive Vision failover", () => {
     expect(pipeline.rotationCount).toBe(5);
     expect(pipeline.halted).toBe(false);
     expect(pipeline.queuePaused).toBe(false);
-    expect(pipeline.currentConcurrency).toBe(1);
+    expect(pipeline.currentConcurrency).toBe(3);
   });
 
   it("exaustão de modelos NÃO para mais a fila: circuito libera e a página sai com falha", async () => {
@@ -57,6 +57,7 @@ describe("Adaptive Pipeline — exhaustive Vision failover", () => {
             retryable: true,
             statusCode: 503,
             modelRotated: true,
+            providerPressure: true,
             modelExhausted: false,
             candidateCount: 5,
             modelsTried: calls,
@@ -158,6 +159,7 @@ describe("Adaptive Pipeline — exhaustive Vision failover", () => {
             retryable: true,
             statusCode: 503,
             modelRotated: true,
+            providerPressure: true,
             candidateCount: 3,
             modelsTried: 1,
             modelsRemaining: 2,
@@ -184,6 +186,7 @@ describe("Adaptive Pipeline — exhaustive Vision failover", () => {
               retryable: true,
               statusCode: 503,
               modelRotated: true,
+              providerPressure: true,
               candidateCount: 3,
               modelsTried: 1,
               modelsRemaining: 2,
@@ -220,6 +223,7 @@ describe("Adaptive Pipeline — exhaustive Vision failover", () => {
             retryable: true,
             statusCode: 503,
             modelRotated: true,
+            providerPressure: true,
             candidateCount: 2,
             modelsTried: 1,
             modelsRemaining: 1,
@@ -288,6 +292,7 @@ describe("Adaptive Pipeline — exhaustive Vision failover", () => {
               retryable: true,
               statusCode: 503,
               modelRotated: true,
+              providerPressure: true,
               candidateCount: 2,
               modelsTried: 1,
               modelsRemaining: 1,

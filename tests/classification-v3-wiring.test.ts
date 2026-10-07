@@ -54,6 +54,9 @@ describe("Classification V3 wiring", () => {
     expect(app).not.toContain("Precisão do modelo");
     expect(app).not.toContain("GLM-5.3-Flash — padrão");
     expect(app).not.toContain("GPT-4o");
+    expect(app).toContain('<option value="OPENCODE">OpenCode CLI</option>');
+    expect(app).toContain("Iniciar / atualizar modelos");
+    expect(app).toContain("custo de entrada e saída igual a zero");
   });
 
   it("UI mantém cronômetro total do processamento e acumula retries", () => {
@@ -95,7 +98,8 @@ describe("Classification V3 wiring", () => {
     // estabilização e congelava a fila inteira. O watchdog converte hang em
     // falha retryable e o loop segue a lista de modelos.
     expect(app).toContain("Render da página excedeu 60s (watchdog do pipeline).");
-    expect(app).toContain("AbortSignal.timeout(150_000)");
+    expect(app).toContain("requestController.abort(new DOMException(\"Tempo limite da requisicao\", \"TimeoutError\"))");
+    expect(app).toContain("150_000");
   });
 
   it("exaustão de modelos NÃO para o lote: ciclos automáticos de re-tentativa", () => {
@@ -119,7 +123,7 @@ describe("Classification V3 wiring", () => {
     // Render/watchdog é problema do cliente: sem localFailure o halt de
     // estabilidade abandonava silenciosamente as folhas restantes do lote.
     expect(app).toContain("renderErr.localFailure = true");
-    expect(app).toContain("localFailure: err?.localFailure === true");
+    expect(app).toContain("localFailure: cancelled || err?.localFailure === true");
     expect(pipeline).toContain("if (signal.localFailure)");
     expect(pipeline).toContain("localFailure?: boolean");
   });

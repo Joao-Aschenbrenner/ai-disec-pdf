@@ -83,6 +83,7 @@ describe("Falha de modelo avança imediatamente para o próximo Vision", () => {
                   pessoaNome: null,
                   notaNumber: null,
                   valor: 100.5,
+                  fieldEvidence: { companyNameLocation: "issuer_header", valorLocation: "document_total" },
                 }),
               },
             }],
@@ -139,6 +140,7 @@ describe("Falha de modelo avança imediatamente para o próximo Vision", () => {
       expect(firstBody.modelExhausted).toBe(false);
       expect(firstBody.modelsTried).toBe(1);
       expect(firstBody.candidateCount).toBeGreaterThanOrEqual(2);
+      expect(firstBody.providerPressure).toBe(scenario.key === "timeout");
       expect(usedModels[0]).toBe("fixture-vision-a");
 
       const second = await fetch(`${BASE_URL}/api/extract`, {

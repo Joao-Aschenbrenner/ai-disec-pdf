@@ -8,6 +8,8 @@ import { resolveSequence, toSequenceLegacyType } from "./classification/sequence
 import { getLearningStats, rememberConfirmedClassification, findConfirmedPattern } from "./classification/learningStore";
 import { DOCUMENT_CLASSES } from "./classification/documentTaxonomy";
 import { buildExtractionPrompt } from "./classification/extractionPrompt";
+import { collapsePayrollRoster, collapseStatementTransactions } from "./classification/payrollRoster";
+import { isConfirmedTwoDocumentArray, isStrongSingleInvoiceArray, mergeExtractionArray } from "./classification/extractionArray";
 import { getLayaHealth } from "./classification/layaClient";
 
 dotenv.config();
@@ -61,6 +63,7 @@ const FALLBACK_MODELS: Record<string, { baseUrl: string; model: string }> = {
   LOCAL_OLLAMA: { baseUrl: "http://localhost:11434", model: "llama3.2-vision:11b" },
   OLLAMA_CLOUD: { baseUrl: "https://chat.api.ollama.ai", model: "llama3.2-vision:11b" },
   CODEX: { baseUrl: "https://api.openai.com", model: "gpt-4o" },
+  OPENCODE: { baseUrl: "http://127.0.0.1:4096", model: "" },
 };
 
 interface ModelsCatalog {
@@ -78,6 +81,7 @@ interface ModelsCatalog {
     noVision?: boolean;
     ocrOnly?: boolean;
     optional?: boolean;
+    dynamic?: boolean;
   }>;
 }
 
@@ -243,7 +247,7 @@ function getPageFailoverCycle(provider: string, pageKey: string): PageFailoverCy
  * Modelo que ESTA página deve usar agora: o designado pelo failover dela, se
  * houver e ainda existir no catálogo; senão o candidato ativo global.
  */
-async function getRequestModel(provider: string, apiKey: string, pageKey: string): Promise<string> {
+async function getRequestModel(provider: string, apiKey: string, pageKey: string, preferredModel = ""): Promise<string> {
   // Garante que a página congele a lista de candidatos já indisponíveis no
   // momento em que começa. Um modelo que falhar NESTA página ainda conta como
   // tentativa real dela; páginas futuras já o excluem.
@@ -253,6 +257,12 @@ async function getRequestModel(provider: string, apiKey: string, pageKey: string
   const designated = cycle.designated;
   if (designated && state?.candidates.includes(designated) && !cycle.excluded.has(designated)) {
     return designated;
+  }
+
+  if (provider === "OPENCODE") {
+    if (preferredModel && state?.candidates.includes(preferredModel) && !cycle.excluded.has(preferredModel)) {
+      return preferredModel;
+    }
   }
 
   const active = state?.candidates?.[state.activeIndex];
@@ -498,6 +508,33 @@ function providerCredential(provider: string, apiKey: string): string {
   return "";
 }
 
+export function filterOpenCodeVisionFreeModels(data: any): string[] {
+  const connected = new Set(Array.isArray(data?.connected) ? data.connected.map(String) : []);
+  const candidates: string[] = [];
+  for (const providerInfo of Array.isArray(data?.all) ? data.all : []) {
+    const providerId = String(providerInfo?.id || "");
+    if (!providerId || !connected.has(providerId)) continue;
+    const models = providerInfo.models && typeof providerInfo.models === "object" ? providerInfo.models : {};
+    const modelEntries: Array<[string, any]> = Array.isArray(models)
+      ? models.map((model: any) => [String(model?.id || ""), model])
+      : Object.entries(models) as Array<[string, any]>;
+    for (const [modelKey, modelInfo] of modelEntries) {
+      const modelId = String(modelInfo?.id || modelKey);
+      const inputModalities = modelInfo?.modalities?.input;
+      const inputCost = Number(modelInfo?.cost?.input);
+      const outputCost = Number(modelInfo?.cost?.output);
+      // Trust only explicit metadata: image input and zero input/output cost.
+      // A model name containing "free" is never sufficient evidence.
+      if (Array.isArray(inputModalities) && inputModalities.includes("image") &&
+          Number.isFinite(inputCost) && inputCost === 0 &&
+          Number.isFinite(outputCost) && outputCost === 0) {
+        candidates.push(`${providerId}/${modelId}`);
+      }
+    }
+  }
+  return [...new Set(candidates)];
+}
+
 async function fetchLiveModelCandidates(provider: string, apiKey: string): Promise<string[]> {
   const catalog = loadModelsCatalog();
   const entry = catalog.providers[provider];
@@ -514,6 +551,27 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
         .map((m: any) => m?.name || m?.model || "")
         .filter((m: string) => m && modelLooksCompatible(provider, m))
     ));
+  }
+
+  if (provider === "OPENCODE") {
+    const endpoint = "http://127.0.0.1:4096/provider";
+    assertSafeProviderUrl(endpoint, provider);
+    const headers: Record<string, string> = {};
+    const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
+    if (serverPassword) {
+      const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
+      headers.Authorization = `Basic ${Buffer.from(`${username}:${serverPassword}`).toString("base64")}`;
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(endpoint, { headers, signal: controller.signal });
+      if (!response.ok) throw new Error(`OpenCode HTTP ${response.status}`);
+      const data = await response.json() as any;
+      return filterOpenCodeVisionFreeModels(data);
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   const credential = providerCredential(provider, apiKey);
@@ -636,13 +694,15 @@ async function refreshRuntimeModels(provider: string, apiKey: string): Promise<R
   // Se a API respondeu com candidatos Vision válidos, o sweep usa SOMENTE
   // o que ela declarou disponível agora. O catálogo versionado entra apenas
   // quando a descoberta ao vivo falhar ou vier vazia.
-  const sourceCandidates = live.length > 0 ? live : fallback;
+  const sourceCandidates = provider === "OPENCODE"
+    ? live
+    : live.length > 0 ? live : fallback;
   const candidates = Array.from(new Set(sourceCandidates))
     .filter(model => modelLooksCompatible(provider, model));
 
   const previous = runtimeModels[provider];
   const next: RuntimeModelState = {
-    candidates: candidates.length ? candidates : fallback,
+    candidates: candidates.length ? candidates : provider === "OPENCODE" ? [] : fallback,
     // Cada nova atualização volta a testar o candidato mais recente.
     // Se falhar durante a sessão, rotateRuntimeModel avança para o próximo.
     activeIndex: 0,
@@ -832,7 +892,8 @@ function buildModelFailoverResponse(
   provider: string,
   pageKey: string,
   failedModel: string,
-  reason: string
+  reason: string,
+  providerPressure = false
 ) {
   const result = failoverRuntimeModel(provider, pageKey, failedModel, reason);
 
@@ -846,6 +907,7 @@ function buildModelFailoverResponse(
         candidateCount: result.candidateCount,
         modelsTried: result.modelsTried,
         modelsRemaining: 0,
+        providerPressure,
       },
     };
   }
@@ -861,6 +923,7 @@ function buildModelFailoverResponse(
       candidateCount: result.candidateCount,
       modelsTried: result.modelsTried,
       modelsRemaining: result.modelsRemaining,
+      providerPressure,
     },
   };
 }
@@ -914,7 +977,8 @@ function assertSafeProviderUrl(rawUrl: string, provider: string): void {
     throw new Error(`Esquema não permitido na URL do provider ${provider}: ${parsed.protocol}`);
   }
   const isLocalService = provider === "LOCAL_OLLAMA";
-  if (isLocalService) {
+  const isLoopbackProvider = provider === "OPENCODE";
+  if (isLocalService || isLoopbackProvider) {
     // Serviço local intencional: exige loopback e http simples.
     if (!LOCAL_SERVICE_HOSTS.has(parsed.hostname.toLowerCase())) {
       throw new Error(`${provider} só pode apontar para o loopback.`);
@@ -1070,6 +1134,33 @@ function wrapObjectsInArray(text: string): string {
   if (objs.length <= 1) return text;
   return "[" + objs.join(",") + "]";
 }
+
+/**
+ * Select the top-level JSON value from a model response. A `[` inside an object
+ * (for example `visualEvidence.columnHeaders`) is ordinary field data, not a
+ * signal that the whole response is a multi-document array.
+ */
+export function extractJsonCandidate(raw: string): string | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  const objectStart = text.indexOf("{");
+  const arrayStart = text.indexOf("[");
+  if (arrayStart >= 0 && (objectStart < 0 || arrayStart < objectStart)) {
+    const arrayEnd = text.lastIndexOf("]");
+    if (arrayEnd > arrayStart) return text.slice(arrayStart, arrayEnd + 1);
+    return wrapObjectsInArray(text.slice(arrayStart));
+  }
+
+  if (objectStart >= 0) {
+    const objectText = text.slice(objectStart);
+    if (hasMultipleObjects(objectText)) return wrapObjectsInArray(objectText);
+    const objectEnd = text.lastIndexOf("}");
+    if (objectEnd > objectStart) return text.slice(objectStart, objectEnd + 1);
+  }
+
+  return null;
+}
 export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = false) {
   const app = express();
   const PORT = port;
@@ -1088,7 +1179,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const apiKey = settings.apiKey || "";
       const providerSetting = (settings.provider || "NVIDIA").toUpperCase();
       // LOCAL_OLLAMA e CODEX (com OAuth) não precisam de apiKey das settings
-      if (!apiKey && providerSetting !== "LOCAL_OLLAMA" && providerSetting !== "CODEX") {
+      if (!apiKey && providerSetting !== "LOCAL_OLLAMA" && providerSetting !== "CODEX" && providerSetting !== "OPENCODE") {
         return res.status(401).json({
           error: "Nenhuma chave de API configurada. Vá em Configurações e adicione sua chave.",
           retryable: false,
@@ -1275,6 +1366,81 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              const startTime = Date.now();
              aiResponse = await callOpenAICompatible({ provider: "GROQ", model: groqModel, apiKey }, imageBase64, prompt);
              recordTelemetry(provider, groqModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
+           } else if (provider === "OPENCODE") {
+             requestModel = await getRequestModel("OPENCODE", "", pageFailoverKey, settings.model);
+             if (!requestModel) {
+               return res.status(503).json({
+                 error: "Nenhum modelo OpenCode conectado declara visão e custo zero. Atualize a lista em Configurações.",
+                 retryable: false,
+               });
+             }
+             const separator = requestModel.indexOf("/");
+             if (separator < 1 || separator === requestModel.length - 1) {
+               throw new Error("Modelo OpenCode selecionado está em formato inválido.");
+             }
+             const providerId = requestModel.slice(0, separator);
+             const modelId = requestModel.slice(separator + 1);
+             const baseUrl = "http://127.0.0.1:4096";
+             assertSafeProviderUrl(`${baseUrl}/session`, provider);
+             const openCodeHeaders: Record<string, string> = { "Content-Type": "application/json" };
+             const openCodePassword = process.env.OPENCODE_SERVER_PASSWORD;
+             if (openCodePassword) {
+               const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
+               openCodeHeaders.Authorization = `Basic ${Buffer.from(`${username}:${openCodePassword}`).toString("base64")}`;
+             }
+             const controller = new AbortController();
+             const timeout = setTimeout(() => controller.abort(), 120_000);
+             const startTime = Date.now();
+             let sessionId = "";
+             console.log(`[AI] Enviando para OpenCode (${providerId}/${modelId})...`);
+             try {
+               const sessionResponse = await fetch(`${baseUrl}/session`, {
+                 method: "POST",
+                 headers: openCodeHeaders,
+                 body: JSON.stringify({ title: "AI Disec PDF - classificação de página" }),
+                 signal: controller.signal,
+               });
+               if (!sessionResponse.ok) {
+                 aiResponse = sessionResponse;
+               } else {
+                 const session = await sessionResponse.json() as any;
+                 sessionId = String(session.id || "");
+                 if (!sessionId) throw new Error("OpenCode não retornou uma sessão válida.");
+                 const messageResponse = await fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/message`, {
+                   method: "POST",
+                   headers: openCodeHeaders,
+                   body: JSON.stringify({
+                     model: { providerID: providerId, modelID: modelId },
+                     parts: [
+                       { type: "file", mime: "image/jpeg", filename: "pagina.jpg", url: `data:image/jpeg;base64,${imageBase64}` },
+                       { type: "text", text: prompt },
+                     ],
+                   }),
+                   signal: controller.signal,
+                 });
+                 if (!messageResponse.ok) {
+                   aiResponse = messageResponse;
+                 } else {
+                   const message = await messageResponse.json() as any;
+                   const content = Array.isArray(message.parts)
+                     ? message.parts.filter((part: any) => part?.type === "text").map((part: any) => String(part.text || "")).join("\n")
+                     : "";
+                   aiResponse = new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+                     status: 200,
+                     headers: { "Content-Type": "application/json" },
+                   });
+                 }
+               }
+             } finally {
+               clearTimeout(timeout);
+               if (sessionId) {
+                 fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}`, {
+                   method: "DELETE",
+                   headers: openCodeHeaders,
+                 }).catch(() => {});
+               }
+               recordTelemetry(provider, requestModel, aiResponse?.ok ? "success" : "failure", Date.now() - startTime);
+             }
            } else if (provider === "LOCAL_OLLAMA") {
               // Ollama local — sem chave de API. Endpoint /api/chat (não /v1/chat/completions).
               // O modelo escolhido nas Configurações (settings.model) tem prioridade sobre o tier selecionado.
@@ -1367,7 +1533,8 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               provider,
               pageFailoverKey,
               requestModel,
-              `throw: ${message}`
+              `throw: ${message}`,
+              /abort|time.?out|timed out|econnreset|econnrefused|fetch failed|socket/i.test(message)
             );
             return res.status(failover.status).json(failover.body);
           }
@@ -1419,7 +1586,9 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              provider,
              pageFailoverKey,
              requestModel,
-             `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`
+             `HTTP ${aiResponse.status}: ${errBody.slice(0, 150)}`,
+             [408, 502, 503, 504, 529].includes(aiResponse.status) &&
+               !shouldQuarantineModelForSession(aiResponse.status, errBody)
            );
            return res.status(failover.status).json(failover.body);
          }
@@ -1485,37 +1654,19 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         return res.json(routedTextData);
       }
 
-      if (trimmed.includes("[")) {
-        // Tenta array primeiro: do primeiro [ ao ultimo ]
-        const arrStart = trimmed.indexOf("[");
-        const arrEnd = trimmed.lastIndexOf("]");
-        if (arrStart !== -1 && arrEnd !== -1 && arrEnd > arrStart) {
-          jsonStr = trimmed.substring(arrStart, arrEnd + 1);
-        } else {
-          // Sem ], envolve tudo que tem { em array
-          jsonStr = wrapObjectsInArray(trimmed);
-        }
-      } else if (hasMultipleObjects(trimmed)) {
-        // Multiplos {...} {...} sem [ ] — envolve em array
-        jsonStr = wrapObjectsInArray(trimmed);
-      } else {
-        // Objeto unico: do primeiro { ao ultimo }
-        const jsonStart = trimmed.indexOf("{");
-        const jsonEnd = trimmed.lastIndexOf("}");
-        if (jsonStart === -1 || jsonEnd === -1) {
-          await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
-          if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
-          const failover = buildModelFailoverResponse(
-            provider,
-            pageFailoverKey,
-            requestModel,
-            "no-usable-json"
-          );
-          return res.status(failover.status).json(failover.body);
-
-        }
-        jsonStr = trimmed.substring(jsonStart, jsonEnd + 1);
+      const jsonCandidate = extractJsonCandidate(trimmed);
+      if (!jsonCandidate) {
+        await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
+        if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
+        const failover = buildModelFailoverResponse(
+          provider,
+          pageFailoverKey,
+          requestModel,
+          "no-usable-json"
+        );
+        return res.status(failover.status).json(failover.body);
       }
+      jsonStr = jsonCandidate;
 
       // Try to parse; if fails, attempt to fix common JSON errors
       let extractedData: any;
@@ -1542,11 +1693,46 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
       // If the response is an array (multiple documents per page), handle each
       if (Array.isArray(extractedData)) {
-        const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
-        markModelSemanticSuccess(provider, requestModel);
-        resetPageFailoverCycle(provider, pageFailoverKey);
-        await logUpload(originalName, pageIndex, "success", provider, `Array com ${routedDocuments.length} documentos (CLASSIFICATION-V3)`, routedDocuments);
-        return res.json({ _multiple: true, documents: routedDocuments });
+        // Explicitly verified, physically separated forms are the only case
+        // where a model array may become multiple PDFs. Keep this before all
+        // single-document normalization rules.
+        if (isConfirmedTwoDocumentArray(extractedData)) {
+          const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
+          markModelSemanticSuccess(provider, requestModel);
+          resetPageFailoverCycle(provider, pageFailoverKey);
+          await logUpload(originalName, pageIndex, "success", provider, "Dois formulários completos confirmados na mesma página (CLASSIFICATION-V3)", routedDocuments);
+          return res.json({ _multiple: true, documents: routedDocuments });
+        }
+
+        const pageExtraction = mergeExtractionArray(extractedData);
+        if (pageExtraction && isStrongSingleInvoiceArray(extractedData)) {
+          const routedPage = await applyDocumentRoutingV3(pageExtraction, v3Hint);
+          markModelSemanticSuccess(provider, requestModel);
+          resetPageFailoverCycle(provider, pageFailoverKey);
+          await logUpload(originalName, pageIndex, "success", provider, "Assinatura fiscal forte consolidada em um único documento da página (CLASSIFICATION-V3)", routedPage);
+          return res.json(routedPage);
+        }
+
+        const collapsedPayroll = collapsePayrollRoster(extractedData, { documentClass: v3Hint?.documentClass });
+        const collapsedPage = collapsedPayroll || collapseStatementTransactions(extractedData, { documentClass: v3Hint?.documentClass });
+        if (collapsedPage) {
+          const routedPage = await applyDocumentRoutingV3(collapsedPage, v3Hint);
+          markModelSemanticSuccess(provider, requestModel);
+          resetPageFailoverCycle(provider, pageFailoverKey);
+          await logUpload(originalName, pageIndex, "success", provider, "Array normalizado para documento único da página (CLASSIFICATION-V3)", routedPage);
+          return res.json(routedPage);
+        }
+
+        // A model array is usually a list of fields, table rows or page regions.
+        // Do not create multiple PDFs unless the visual evidence confirms two
+        // complete forms. This keeps invoices, statements and reports intact.
+        if (pageExtraction) {
+          const routedPage = await applyDocumentRoutingV3(pageExtraction, v3Hint);
+          markModelSemanticSuccess(provider, requestModel);
+          resetPageFailoverCycle(provider, pageFailoverKey);
+          await logUpload(originalName, pageIndex, "success", provider, "Array de extração consolidado em um documento da página (CLASSIFICATION-V3)", routedPage);
+          return res.json(routedPage);
+        }
       }
 
       const routedData = await applyDocumentRoutingV3(extractedData, v3Hint);
@@ -1649,7 +1835,8 @@ app.post("/api/models/runtime/refresh-all", async (_req, res) => {
 
     await Promise.all(providers.map(async provider => {
       const key = typeof apiKeys[provider] === "string" ? apiKeys[provider] : "";
-      const shouldRefresh = Boolean(key) || provider === "LOCAL_OLLAMA" || provider === "CODEX";
+      const shouldRefresh = Boolean(key) || provider === "LOCAL_OLLAMA" || provider === "CODEX" ||
+        (provider === "OPENCODE" && String(data.provider || "").toUpperCase() === "OPENCODE");
       if (!shouldRefresh) {
         results[provider] = { status: "catalog", candidateCount: catalogCandidates(provider).length };
         return;
@@ -1780,11 +1967,13 @@ app.get("/api/settings", (req, res) => {
       const data = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8"));
       const provider = requestedProvider || String(data.provider || "NVIDIA").toUpperCase();
       const apiKeys = data.apiKeys && typeof data.apiKeys === "object" ? data.apiKeys : {};
+      const models = data.models && typeof data.models === "object" ? data.models : {};
       const legacyKey = typeof data.apiKey === "string" && String(data.provider || "").toUpperCase() === provider ? data.apiKey : "";
       return res.json({
         provider,
         apiKey: typeof apiKeys[provider] === "string" ? apiKeys[provider] : legacyKey,
-        model: "",
+        model: typeof models[provider] === "string" ? models[provider] :
+          (String(data.provider || "").toUpperCase() === provider && typeof data.model === "string" ? data.model : ""),
         modelTier: "auto",
       });
     }
@@ -1799,6 +1988,7 @@ app.post("/api/settings", (req, res) => {
     ensureDataDir();
     const provider = String(req.body?.provider || "NVIDIA").toUpperCase();
     const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey : "";
+    const model = typeof req.body?.model === "string" ? req.body.model : "";
 
     let previous: any = {};
     try {
@@ -1806,12 +1996,14 @@ app.post("/api/settings", (req, res) => {
     } catch {}
 
     const apiKeys = previous.apiKeys && typeof previous.apiKeys === "object" ? { ...previous.apiKeys } : {};
+    const models = previous.models && typeof previous.models === "object" ? { ...previous.models } : {};
     if (previous.provider && typeof previous.apiKey === "string" && previous.apiKey && !apiKeys[String(previous.provider).toUpperCase()]) {
       apiKeys[String(previous.provider).toUpperCase()] = previous.apiKey;
     }
-    if (apiKey || provider === "LOCAL_OLLAMA" || provider === "CODEX") apiKeys[provider] = apiKey;
+    if (apiKey || provider === "LOCAL_OLLAMA" || provider === "CODEX" || provider === "OPENCODE") apiKeys[provider] = apiKey;
+    if (provider === "OPENCODE") models[provider] = model;
 
-    const settings = { provider, apiKeys, modelTier: "auto" };
+    const settings = { provider, apiKeys, models, modelTier: "auto" };
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf8");
     console.log(`[settings] Saved provider=${provider} automatic-model-selection=true`);
     return res.json({ success: true });
@@ -1830,7 +2022,10 @@ function getSettings() {
       const apiKey = typeof apiKeys[provider] === "string"
         ? apiKeys[provider]
         : (typeof data.apiKey === "string" ? data.apiKey : "");
-      return { provider, apiKey, model: "", modelTier: "auto" };
+      const models = data.models && typeof data.models === "object" ? data.models : {};
+      const model = typeof models[provider] === "string" ? models[provider] :
+        (String(data.provider || "").toUpperCase() === provider && typeof data.model === "string" ? data.model : "");
+      return { provider, apiKey, model, modelTier: "auto" };
     }
   } catch {}
   return { provider: "NVIDIA", apiKey: "", model: "", modelTier: "auto" };
@@ -1861,6 +2056,27 @@ app.get("/api/models", (req, res) => {
     return res.json(simplified);
   } catch (err) {
     return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/opencode/models", async (_req, res) => {
+  try {
+    const models = await fetchLiveModelCandidates("OPENCODE", "");
+    if (!models.length) {
+      return res.json({
+        available: false,
+        models: [],
+        message: "Conecte um provedor no OpenCode que declare entrada por imagem e custo de entrada/saída igual a zero.",
+      });
+    }
+    return res.json({ available: true, models });
+  } catch (error: any) {
+    return res.status(503).json({
+      available: false,
+      models: [],
+      message: "Inicie o serviço local do OpenCode e conecte um provedor antes de atualizar a lista.",
+      error: error?.message || "OpenCode indisponível",
+    });
   }
 });
 

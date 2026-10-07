@@ -18,13 +18,15 @@ describe("Catálogo de modelos (server/models.json)", () => {
     expect(fs.existsSync(catalogPath)).toBe(true);
     const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
     expect(catalog.providers).toBeTypeOf("object");
-    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ"];
+    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "OPENCODE"];
     for (const p of expected) {
-      expect(catalog.providers[p], `provider ${p} ausente`).toBeDefined();
-      expect(catalog.providers[p].baseUrl).toBeTypeOf("string");
-      expect(Array.isArray(catalog.providers[p].models)).toBe(true);
-      expect(catalog.providers[p].models.length, `${p}: sem modelos`).toBeGreaterThan(0);
-      expect(Array.isArray(catalog.providers[p].preferred)).toBe(true);
+      const entry = catalog.providers[p];
+      expect(entry, `provider ${p} ausente`).toBeDefined();
+      expect(entry.baseUrl).toBeTypeOf("string");
+      expect(Array.isArray(entry.models)).toBe(true);
+      if (entry.dynamic) expect(entry.models).toHaveLength(0);
+      else expect(entry.models.length, `${p}: sem modelos`).toBeGreaterThan(0);
+      expect(Array.isArray(entry.preferred)).toBe(true);
     }
   });
 
@@ -40,7 +42,7 @@ describe("Catálogo de modelos (server/models.json)", () => {
 
   it("catálogo cobre os providers ativos e legados", () => {
     const catalog = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "server", "models.json"), "utf8"));
-    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX"];
+    const expected = ["NVIDIA", "GOOGLE", "OPENAI", "ANTHROPIC", "MISTRAL", "OPENROUTER", "GROQ", "LOCAL_OLLAMA", "OLLAMA_CLOUD", "CODEX", "OPENCODE"];
     for (const p of expected) {
       expect(catalog.providers[p], `${p} ausente do catálogo`).toBeDefined();
     }
@@ -152,7 +154,7 @@ describe("Mock dos 8 provedores de IA", () => {
   ] as const;
 
   function mockResponseForProvider(provider: string) {
-    const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros"}';
+    const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros","fieldEvidence":{"companyNameLocation":"issuer_header","valorLocation":"document_total"}}';
     if (provider === "GOOGLE") {
       return { candidates: [{ content: { parts: [{ text: json }] } }] };
     }
@@ -240,7 +242,7 @@ describe("Mock dos 8 provedores de IA", () => {
         }
         if (urlStr.includes("localhost:11434/api/chat")) {
           capturedModel = init?.body ? JSON.parse(init.body).model : "";
-          const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros"}';
+          const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros","fieldEvidence":{"companyNameLocation":"issuer_header","valorLocation":"document_total"}}';
           return Promise.resolve(new Response(JSON.stringify({ message: { content: json } }), {
             status: 200,
             headers: { "Content-Type": "application/json" },
@@ -288,7 +290,7 @@ describe("Mock dos 8 provedores de IA", () => {
         }
         if (urlStr.includes("localhost:11434/api/chat")) {
           capturedModel = init?.body ? JSON.parse(init.body).model : "";
-          const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros"}';
+          const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros","fieldEvidence":{"companyNameLocation":"issuer_header","valorLocation":"document_total"}}';
           return Promise.resolve(new Response(JSON.stringify({ message: { content: json } }), {
             status: 200,
             headers: { "Content-Type": "application/json" },

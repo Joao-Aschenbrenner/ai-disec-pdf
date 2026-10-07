@@ -84,6 +84,7 @@ describe("Runtime model rotation integration", () => {
                   content: JSON.stringify({
                     classificationText: "DOCUMENTO ADMINISTRATIVO TESTE",
                     companyName: "Mock",
+                    fieldEvidence: { companyNameLocation: "issuer_header", valorLocation: "document_total" },
                     pessoaNome: null,
                     notaNumber: null,
                     valor: 100.50,

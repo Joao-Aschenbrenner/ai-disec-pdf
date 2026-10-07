@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
-import { startServer, stopServer } from "../server/server";
+import { extractJsonCandidate, startServer, stopServer } from "../server/server";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -8,6 +8,35 @@ const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const savedSettings = fs.existsSync(SETTINGS_FILE) ? fs.readFileSync(SETTINGS_FILE, "utf8") : null;
 const MOCK_API_KEY = "x".repeat(8);
+
+describe("parser de respostas JSON do modelo", () => {
+  it("mantém objeto NFS-e único quando visualEvidence contém cinco cabeçalhos em array", () => {
+    const response = JSON.stringify({
+      classificationText: "NOTA FISCAL DE SERVICOS ELETRONICA NFS-e PRESTADOR DE SERVICOS TOMADOR DE SERVICOS",
+      visualEvidence: {
+        layout: "single_form",
+        columnHeaders: ["NFS-e", "PRESTADOR", "TOMADOR", "VALOR DOS SERVICOS", "CODIGO DE VERIFICACAO"],
+        separateDocumentBlocks: 1,
+      },
+      fieldEvidence: { companyNameLocation: "issuer_header", valorLocation: "document_total" },
+      notaNumber: "123",
+      companyName: "Emitente de teste",
+      valor: 100.25,
+    });
+
+    const candidate = extractJsonCandidate(response);
+    expect(candidate).not.toBeNull();
+    const parsed = JSON.parse(candidate!);
+    expect(Array.isArray(parsed)).toBe(false);
+    expect(parsed.visualEvidence.columnHeaders).toHaveLength(5);
+    expect(parsed.classificationText).toContain("NOTA FISCAL DE SERVICOS ELETRONICA");
+  });
+
+  it("continua reconhecendo um array JSON no nível raiz", () => {
+    const candidate = extractJsonCandidate('[{"classificationText":"holerite A"},{"classificationText":"holerite B"}]');
+    expect(JSON.parse(candidate!)).toHaveLength(2);
+  });
+});
 
 describe("Servidor de Extração (API)", () => {
   const PORT = 3002;
@@ -52,7 +81,7 @@ describe("Mock dos provedores de IA (catálogo externalizado)", () => {
   ] as const;
 
   function mockResponseForProvider(provider: string) {
-    const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros"}';
+    const json = '{"isNotaFiscal":false,"companyName":"Mock","valor":100.50,"documentType":"outros","fieldEvidence":{"companyNameLocation":"issuer_header","valorLocation":"document_total"}}';
     if (provider === "GOOGLE") {
       return { candidates: [{ content: { parts: [{ text: json }] } }] };
     }

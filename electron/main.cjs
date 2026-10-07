@@ -14,6 +14,7 @@ try {
 
 let mainWindow = null;
 let autoUpdater = null;
+let openCodeProcess = null;
 try { autoUpdater = require("electron-updater").autoUpdater; } catch (e) { console.warn("[main] electron-updater not available:", e.message); }
 
 let processingBlockerId = null;
@@ -436,6 +437,112 @@ ipcMain.handle("ollama:pull-model", async (event, model) => {
     return { ok: false, error: `ollama pull saiu com código ${code}. Última linha: ${lastLine}` };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+});
+
+// ═══ OpenCode CLI — instalação opcional + serviço local de modelos ═══
+function findOpenCodePath() {
+  try {
+    const locator = process.platform === "win32" ? "where.exe" : "which";
+    const result = spawnSync(locator, ["opencode"], { encoding: "utf8", windowsHide: true, timeout: 5000 });
+    const located = result.status === 0
+      ? String(result.stdout || "").split(/\r?\n/).map(line => line.trim()).find(Boolean)
+      : null;
+    if (located) return located;
+    if (process.platform === "win32" && process.env.APPDATA) {
+      const npmShim = path.join(process.env.APPDATA, "npm", "opencode.cmd");
+      if (fs.existsSync(npmShim)) return npmShim;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isWindowsCommandShim(filePath) {
+  return process.platform === "win32" && /\.(?:cmd|bat)$/i.test(String(filePath || ""));
+}
+
+async function openCodeHealth(timeoutMs = 700) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch("http://127.0.0.1:4096/global/health", { signal: controller.signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+ipcMain.handle("opencode:status", async () => {
+  const executable = findOpenCodePath();
+  const health = await openCodeHealth();
+  let version = health?.version || null;
+  if (!version && executable) {
+    try {
+      const result = spawnSync(executable, ["--version"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5000,
+        shell: isWindowsCommandShim(executable),
+      });
+      if (result.status === 0) version = String(result.stdout || "").trim().split(/\r?\n/)[0] || null;
+    } catch {}
+  }
+  return { installed: Boolean(executable || health?.healthy), path: executable, running: Boolean(health?.healthy), version };
+});
+
+ipcMain.handle("opencode:install", async () => {
+  if (findOpenCodePath()) return { ok: true, alreadyInstalled: true };
+  return new Promise(resolve => {
+    try {
+      // Fixed package and arguments. Installation starts only from the user's
+      // explicit click in Settings; no renderer-provided command is executed.
+      const child = spawn("npm", ["install", "--global", "opencode-ai"], {
+        shell: process.platform === "win32",
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let stderr = "";
+      child.stderr?.on("data", chunk => { stderr += chunk.toString(); });
+      child.once("error", error => resolve({ ok: false, error: error.message }));
+      child.once("close", code => {
+        if (code === 0 && findOpenCodePath()) resolve({ ok: true });
+        else resolve({ ok: false, error: code === 0 ? "Instalação concluída; reinicie o app para atualizar o PATH." : (stderr.trim().slice(-700) || `npm terminou com código ${code}`) });
+      });
+    } catch (error) {
+      resolve({ ok: false, error: error.message });
+    }
+  });
+});
+
+ipcMain.handle("opencode:start", async () => {
+  const existingHealth = await openCodeHealth();
+  if (existingHealth?.healthy) return { ok: true, alreadyRunning: true, version: existingHealth.version };
+  const executable = findOpenCodePath();
+  if (!executable) return { ok: false, error: "OpenCode CLI não foi encontrado. Instale-o nesta tela e reinicie o app." };
+  try {
+    const child = spawn(executable, ["serve", "--hostname", "127.0.0.1", "--port", "4096"], {
+      windowsHide: true,
+      stdio: "ignore",
+      shell: isWindowsCommandShim(executable),
+      env: { ...process.env, OPENCODE_DISABLE_AUTOUPDATE: "true" },
+    });
+    child.once("error", error => console.error("[opencode] Falha ao iniciar serviço local:", error.message));
+    child.unref();
+    openCodeProcess = child;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const health = await openCodeHealth();
+      if (health?.healthy) return { ok: true, version: health.version };
+      if (child.exitCode !== null) break;
+    }
+    return { ok: false, error: "OpenCode CLI instalado, mas o serviço local não iniciou na porta 4096." };
+  } catch (error) {
+    return { ok: false, error: error.message || "Falha ao iniciar OpenCode." };
   }
 });
 

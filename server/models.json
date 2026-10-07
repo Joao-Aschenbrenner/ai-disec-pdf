@@ -240,6 +240,14 @@
       "preferred": [
         "qwen/qwen3.8-27b"
       ]
+    },
+    "OPENCODE": {
+      "_comment": "Modelos descobertos do serviço OpenCode local. O runtime aceita somente modalidade image explícita e custo de entrada/saída zero.",
+      "baseUrl": "http://127.0.0.1:4096",
+      "dynamic": true,
+      "models": [],
+      "preferred": [],
+      "visionKeywords": []
     }
   }
 }
