@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PDFDocument } from "pdf-lib";
 import { resolveSequence } from "../server/classification/sequenceResolver";
-import { routeDocumentV3 } from "../server/classification/v3Router";
+import { buildLayaClassificationEvidence, routeDocumentV3 } from "../server/classification/v3Router";
 import { splitPdfPageAtRatio } from "../src/utils/pageSegmenter";
 
 describe("Classification V3 SequenceResolver", () => {
@@ -114,6 +114,115 @@ describe("Classification V3 router", () => {
     expect(result.documentClass).toBe("NFE_DANFE");
     expect(result.source).toBe("hard-guard");
     expect(result.needsReview).toBe(false);
+  });
+});
+
+describe("Classification V3 structural Vision evidence", () => {
+  it("preserva rótulos NFS-e sanitizados no payload do Laya", () => {
+    const evidence = buildLayaClassificationEvidence({
+      classificationText: "",
+      visualEvidence: {
+        layout: "single_form",
+        keyLabels: ["NFS-e", "PRESTADOR", "TOMADOR", "VALOR LÍQUIDO", "ISS"],
+        separateDocumentBlocks: 1,
+        sharedGrid: false,
+      },
+      fieldEvidence: {
+        companyNameLocation: "issuer_header",
+        valorLocation: "document_total",
+        valorLabel: "VALOR LIQUIDO",
+        valorRelation: "same_box",
+      },
+    });
+
+    expect(evidence).toContain("NFS-E");
+    expect(evidence).toContain("PRESTADOR");
+    expect(evidence).toContain("VALOR LIQUIDO");
+    expect(evidence).toContain("rotulo_do_valor=VALOR LIQUIDO");
+    expect(evidence).toContain("relacao_rotulo_valor=same_box");
+  });
+
+  it("visual guard reconhece NFS mesmo quando classificationText perdeu os rótulos", async () => {
+    const result = await routeDocumentV3(
+      "",
+      undefined,
+      {
+        useLaya: false,
+        visualEvidence: {
+          layout: "single_form",
+          keyLabels: ["NFS-e", "PRESTADOR", "TOMADOR", "NUMERO NFS-E", "VALOR LIQUIDO"],
+          separateDocumentBlocks: 1,
+        },
+      }
+    );
+    expect(result.documentClass).toBe("NFS");
+    expect(result.source).toBe("visual-guard");
+    expect(result.needsReview).toBe(false);
+  });
+
+  it("dois formulários completos viram HOLERITE por estrutura", async () => {
+    const result = await routeDocumentV3(
+      "",
+      undefined,
+      {
+        useLaya: false,
+        visualEvidence: {
+          layout: "two_individual_forms",
+          keyLabels: ["FUNCIONARIO", "VENCIMENTOS", "DESCONTOS", "TOTAL PROVENTOS", "TOTAL DESCONTOS"],
+          separateDocumentBlocks: 2,
+          independentFormHeaders: 2,
+          independentTotals: 2,
+          sharedGrid: false,
+          regions: [
+            { position: "top", kind: "form", hasOwnHeader: true, hasEmployeeField: true, hasOwnTotals: true },
+            { position: "bottom", kind: "form", hasOwnHeader: true, hasEmployeeField: true, hasOwnTotals: true },
+          ],
+        },
+      }
+    );
+    expect(result.documentClass).toBe("HOLERITE");
+    expect(result.source).toBe("visual-guard");
+  });
+
+  it("grade compartilhada com pessoas é FOPAG e não dois holerites", async () => {
+    const result = await routeDocumentV3(
+      "",
+      undefined,
+      {
+        useLaya: false,
+        visualEvidence: {
+          layout: "multi_row_table",
+          keyLabels: ["NOME", "CPF", "AGENCIA/CONTA", "VALOR"],
+          columnHeaders: ["NOME", "CPF", "AGENCIA/CONTA", "VALOR"],
+          separateDocumentBlocks: 1,
+          repeatedPeopleRows: true,
+          sharedGrid: true,
+          independentFormHeaders: 0,
+          independentTotals: 0,
+        },
+      }
+    );
+    expect(result.documentClass).toBe("FOPAG_RESUMO");
+    expect(result.source).toBe("visual-guard");
+  });
+
+  it("ledger bancário com grade de lançamentos é EXTRATO_CC", async () => {
+    const result = await routeDocumentV3(
+      "",
+      undefined,
+      {
+        useLaya: false,
+        visualEvidence: {
+          layout: "bank_ledger",
+          keyLabels: ["AGENCIA", "CONTA", "HISTORICO", "SALDO"],
+          transactionLedgerRows: true,
+          sharedGrid: true,
+          separateDocumentBlocks: 1,
+        },
+      }
+    );
+    expect(result.documentClass).toBe("EXTRATO_CC");
+    expect(result.source).toBe("visual-guard");
   });
 });
 
