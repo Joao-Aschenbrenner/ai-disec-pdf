@@ -120,6 +120,18 @@ function classifyByVisualStructure(visualInput: Record<string, unknown> | undefi
     region?.hasEmployeeField === true &&
     region?.hasOwnTotals === true
   ).length;
+
+  if (
+    layout === "single_form" &&
+    blocks <= 1 &&
+    completePayrollRegions >= 1 &&
+    has("VENCIMENTOS", "DESCONTOS") &&
+    any("FUNCIONARIO", "MENSALISTA", "FOLHA MENSAL")
+  ) {
+    const cls: DocumentClass = labels.has("13 SALARIO") ? "HOLERITE_13" : "HOLERITE";
+    return { documentClass: cls, confidence: 0.95, evidence: ["visual:individual-payroll-form"] };
+  }
+
   if (
     layout === "two_individual_forms" &&
     blocks === 2 &&
@@ -480,7 +492,24 @@ export async function applyDocumentRoutingV3<T extends Record<string, any>>(
     result.isNotaFiscal = true;
     result.pessoaNome = null;
     result.companyName = fieldEvidence.companyNameLocation === "issuer_header" ? raw.companyName ?? null : null;
-    result.valor = fieldEvidence.valorLocation === "document_total" ? raw.valor ?? null : null;
+
+    const reportedValueLabel = String(fieldEvidence.valorLabel || "unknown");
+    const forbiddenFiscalValueLabel =
+      route.documentClass === "NFS" &&
+      ["BASE DE CALCULO", "ISS"].includes(reportedValueLabel);
+
+    result.valor =
+      fieldEvidence.valorLocation === "document_total" && !forbiddenFiscalValueLabel
+        ? raw.valor ?? null
+        : null;
+
+    if (forbiddenFiscalValueLabel) {
+      result.needsReview = true;
+      result.classificationEvidence = [
+        ...(result.classificationEvidence || []),
+        `rejected-value-label:${reportedValueLabel}`,
+      ];
+    }
   } else {
     result.isNotaFiscal = false;
     result.pessoaNome = null;
