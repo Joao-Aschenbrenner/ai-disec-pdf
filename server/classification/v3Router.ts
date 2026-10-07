@@ -16,7 +16,7 @@ export interface V3RoutingResult {
   documentClass: DocumentClass;
   documentType: string;
   confidence: number;
-  source: "hard-guard" | "signature+laya" | "laya" | "learning" | "sequence" | "signature" | "fallback";
+  source: "hard-guard" | "visual-guard" | "signature+laya" | "laya" | "learning" | "sequence" | "signature" | "fallback";
   evidence: string[];
   needsReview: boolean;
   layaChecked: boolean;
@@ -34,6 +34,14 @@ const SAFE_COLUMN_HEADERS = new Set([
   "COMPETENCIA", "MENSALISTA", "FOLHA MENSAL", "PIX", "TED",
 ]);
 
+const SAFE_VISUAL_LABELS = new Set([
+  ...SAFE_COLUMN_HEADERS,
+  "NFS-E", "NOTA FISCAL DE SERVICOS", "NUMERO NFS-E", "VALOR DOS SERVICOS",
+  "VALOR LIQUIDO", "BASE DE CALCULO", "ISS", "DANFE", "NF-E", "FUNCIONARIO",
+  "EMPREGADOR", "13 SALARIO", "TOTAL PROVENTOS", "TOTAL DESCONTOS",
+  "APLICACAO", "RESGATE",
+]);
+
 function normalizeHeader(value: unknown): string {
   return String(value || "")
     .normalize("NFD")
@@ -43,6 +51,112 @@ function normalizeHeader(value: unknown): string {
     .trim()
     .replace(/\s+/g, " ")
     .replace(/^AGENCIA CONTA$/, "AGENCIA/CONTA");
+}
+
+function canonicalSafeVisualLabel(value: unknown): string | null {
+  const normalized = normalizeHeader(value)
+    .replace(/^NFS E$/, "NFS-E")
+    .replace(/^NF E$/, "NF-E")
+    .replace(/^NUMERO DA NFS E$/, "NUMERO NFS-E")
+    .replace(/^NUMERO NFS E$/, "NUMERO NFS-E")
+    .replace(/^NOTA FISCAL DE SERVICOS ELETRONICA$/, "NOTA FISCAL DE SERVICOS")
+    .replace(/^13[Oº° ]+SALARIO$/, "13 SALARIO");
+  return SAFE_VISUAL_LABELS.has(normalized) ? normalized : null;
+}
+
+function collectSafeVisualLabels(visual: Record<string, any>): string[] {
+  const values: unknown[] = [];
+  if (Array.isArray(visual.keyLabels)) values.push(...visual.keyLabels);
+  if (Array.isArray(visual.columnHeaders)) values.push(...visual.columnHeaders);
+  if (Array.isArray(visual.regions)) {
+    for (const region of visual.regions.slice(0, 6)) {
+      if (Array.isArray(region?.labels)) values.push(...region.labels);
+    }
+  }
+  return [...new Set(values.map(canonicalSafeVisualLabel).filter((v): v is string => Boolean(v)))];
+}
+
+function classifyByVisualStructure(visualInput: Record<string, unknown> | undefined): {
+  documentClass: DocumentClass;
+  confidence: number;
+  evidence: string[];
+} | null {
+  const visual = visualInput && typeof visualInput === "object" ? visualInput as Record<string, any> : {};
+  const labels = new Set(collectSafeVisualLabels(visual));
+  const layout = String(visual.layout || "unknown");
+  const blocks = Number(visual.separateDocumentBlocks || 0);
+  const formHeaders = Number(visual.independentFormHeaders || 0);
+  const totals = Number(visual.independentTotals || 0);
+  const repeatedPeople = visual.repeatedPeopleRows === true;
+  const bankRows = visual.transactionLedgerRows === true;
+  const sharedGrid = visual.sharedGrid === true;
+  const regions = Array.isArray(visual.regions) ? visual.regions.slice(0, 6) : [];
+
+  const has = (...wanted: string[]) => wanted.every(label => labels.has(label));
+  const any = (...wanted: string[]) => wanted.some(label => labels.has(label));
+
+  if (
+    layout === "single_form" &&
+    blocks <= 1 &&
+    labels.has("NFS-E") &&
+    labels.has("PRESTADOR") &&
+    any("TOMADOR", "NUMERO NFS-E", "VALOR LIQUIDO", "VALOR DOS SERVICOS")
+  ) {
+    return { documentClass: "NFS", confidence: 0.97, evidence: ["visual:nfs-form", "visual:prestador"] };
+  }
+
+  if (
+    layout === "single_form" &&
+    blocks <= 1 &&
+    labels.has("DANFE") &&
+    labels.has("EMITENTE")
+  ) {
+    return { documentClass: "NFE_DANFE", confidence: 0.97, evidence: ["visual:danfe", "visual:emitente"] };
+  }
+
+  const completePayrollRegions = regions.filter((region: any) =>
+    region?.kind === "form" &&
+    region?.hasOwnHeader === true &&
+    region?.hasEmployeeField === true &&
+    region?.hasOwnTotals === true
+  ).length;
+  if (
+    layout === "two_individual_forms" &&
+    blocks === 2 &&
+    formHeaders >= 2 &&
+    totals >= 2 &&
+    completePayrollRegions >= 2 &&
+    has("VENCIMENTOS", "DESCONTOS")
+  ) {
+    const cls: DocumentClass = labels.has("13 SALARIO") ? "HOLERITE_13" : "HOLERITE";
+    return { documentClass: cls, confidence: 0.96, evidence: ["visual:two-independent-payroll-forms"] };
+  }
+
+  const payrollHeaders = ["NOME", "CPF", "AGENCIA/CONTA", "ACEITO", "TIPO", "VALOR"]
+    .filter(label => labels.has(label)).length;
+  if (
+    layout === "multi_row_table" &&
+    repeatedPeople &&
+    sharedGrid &&
+    formHeaders <= 1 &&
+    payrollHeaders >= 2
+  ) {
+    const cls: DocumentClass = labels.has("13 SALARIO") ? "FOPAG_13_RESUMO" : "FOPAG_RESUMO";
+    return { documentClass: cls, confidence: 0.93, evidence: ["visual:shared-payroll-grid"] };
+  }
+
+  const bankHeaders = ["AGENCIA", "CONTA", "HISTORICO", "SALDO", "PIX", "TED", "APLICACAO", "RESGATE"]
+    .filter(label => labels.has(label)).length;
+  if ((layout === "bank_ledger" || layout === "multi_row_table") && bankRows && bankHeaders >= 2) {
+    const investment = has("APLICACAO", "RESGATE");
+    return {
+      documentClass: investment ? "EXTRATO_INVESTIMENTO" : "EXTRATO_CC",
+      confidence: 0.93,
+      evidence: [investment ? "visual:investment-ledger" : "visual:bank-ledger"],
+    };
+  }
+
+  return null;
 }
 
 function safePageMarker(value: unknown): string | null {
@@ -58,6 +172,7 @@ export function buildLayaClassificationEvidence(raw: Record<string, any>): strin
   const headers = Array.isArray(visual.columnHeaders)
     ? [...new Set(visual.columnHeaders.map(normalizeHeader).filter((header: string) => SAFE_COLUMN_HEADERS.has(header)))]
     : [];
+  const visualLabels = collectSafeVisualLabels(visual);
   const layout = ["single_form", "multi_row_table", "bank_ledger", "two_individual_forms", "other", "unknown"].includes(visual.layout)
     ? visual.layout
     : "unknown";
@@ -73,17 +188,46 @@ export function buildLayaClassificationEvidence(raw: Record<string, any>): strin
     : "unknown";
   const bool = (value: unknown) => typeof value === "boolean" ? String(value) : "unknown";
   const pageMarker = safePageMarker(visual.pageMarker);
+  const formHeaders = Number.isInteger(Number(visual.independentFormHeaders))
+    ? Math.max(0, Math.min(6, Number(visual.independentFormHeaders)))
+    : "unknown";
+  const independentTotals = Number.isInteger(Number(visual.independentTotals))
+    ? Math.max(0, Math.min(6, Number(visual.independentTotals)))
+    : "unknown";
+  const safeValueLabels = new Set([
+    "VALOR LIQUIDO", "VALOR TOTAL", "VALOR DOS SERVICOS", "TOTAL A PAGAR", "BASE DE CALCULO", "ISS", "unknown"
+  ]);
+  const valueLabel = safeValueLabels.has(String(fields.valorLabel)) ? String(fields.valorLabel) : "unknown";
+  const safeRelations = new Set(["same_row", "below_label", "same_box", "nearby", "unknown"]);
+  const valueRelation = safeRelations.has(String(fields.valorRelation)) ? String(fields.valorRelation) : "unknown";
+  const safeRegionSummary = Array.isArray(visual.regions)
+    ? visual.regions.slice(0, 4).map((region: any) => {
+        const pos = ["top", "middle", "bottom", "full"].includes(region?.position) ? region.position : "unknown";
+        const kind = ["form", "table", "header", "totals", "other"].includes(region?.kind) ? region.kind : "other";
+        const labels = Array.isArray(region?.labels)
+          ? region.labels.map(canonicalSafeVisualLabel).filter(Boolean).slice(0, 8).join("+")
+          : "";
+        return `${pos}:${kind}:header=${bool(region?.hasOwnHeader)}:employee=${bool(region?.hasEmployeeField)}:totals=${bool(region?.hasOwnTotals)}:labels=${labels || "none"}`;
+      })
+    : [];
 
   return [
     "SINAIS VISUAIS PARA CLASSIFICACAO (sem nomes, CPFs, contas, transacoes ou valores):",
     `layout=${layout}`,
+    `rotulos_visuais=${visualLabels.join(" | ") || "nenhum"}`,
     `cabecalhos=${headers.join(" | ") || "nao identificados"}`,
     `blocos_de_documento=${blocks}`,
+    `grade_compartilhada=${bool(visual.sharedGrid)}`,
+    `cabecalhos_de_formularios_independentes=${formHeaders}`,
+    `totais_independentes=${independentTotals}`,
     `linhas_repetidas_de_pessoas=${bool(visual.repeatedPeopleRows)}`,
     `linhas_de_lancamentos_bancarios=${bool(visual.transactionLedgerRows)}`,
+    ...safeRegionSummary.map(region => `regiao=${region}`),
     `origem_campo_empresa=${safeLocation(fields.companyNameLocation)}`,
     `origem_campo_pessoa=${safeLocation(fields.pessoaNomeLocation)}`,
     `origem_campo_valor=${safeLocation(fields.valorLocation)}`,
+    `rotulo_do_valor=${valueLabel}`,
+    `relacao_rotulo_valor=${valueRelation}`,
     ...(pageMarker ? [`marcador_de_pagina=${pageMarker}`] : []),
     `rotulos_textuais_reconhecidos=${cueLabels.join(" | ") || "nenhum"}`,
   ].join("\n");
@@ -120,6 +264,25 @@ export async function routeDocumentV3(
       confidence: Math.max(0.98, sig.score),
       source: "hard-guard",
       evidence: [...sig.evidence, layaClass ? `laya:${layaClass}` : "laya:no-answer"],
+      needsReview: false,
+      layaChecked,
+      layaConfidence,
+    };
+  }
+
+  // Guard visual sanitizado: usado apenas quando a geometria + rótulos formam
+  // uma assinatura praticamente inequívoca. Não contém PII nem valores.
+  const visualGuard = classifyByVisualStructure(options.visualEvidence);
+  if (visualGuard) {
+    return {
+      documentClass: visualGuard.documentClass,
+      documentType: toLegacyDocumentType(visualGuard.documentClass),
+      confidence: visualGuard.confidence,
+      source: "visual-guard",
+      evidence: [
+        ...visualGuard.evidence,
+        ...(layaClass ? [`laya:${layaClass}`] : []),
+      ],
       needsReview: false,
       layaChecked,
       layaConfidence,
