@@ -212,6 +212,18 @@ describe("Classification V3 wiring", () => {
     expect(server).toContain("imageBytesApprox");
   });
 
+  it("logs de auditoria Vision não removem campos da resposta e não gravam conteúdo bruto", () => {
+    const server = read("server/server.ts");
+    expect(server).toContain("sanitizeRoutingMetadataForLog");
+    expect(server).toContain("return res.json(routedData)");
+    expect(server).toContain("return res.json(routedPage)");
+    expect(server).not.toContain("return res.json(sanitizeRoutingMetadataForLog");
+    expect(server).not.toContain('Resposta recebida:", responseText?.substring');
+    expect(server).toContain("conteúdo omitido do log");
+    expect(server).not.toContain('Sem JSON na resposta: ${responseText.substring');
+    expect(server).not.toContain('JSON inválido: ${jsonStr.substring');
+  });
+
   it("Electron não desacelera o processamento em background", () => {
     const main = read("electron/main.cjs");
     expect(main).toContain("backgroundThrottling: false");
