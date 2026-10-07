@@ -11,10 +11,22 @@ export interface ExtractedMetadata {
   /** Sinais visuais observados pela Vision e usados pelo Laya para classificar. */
   visualEvidence?: {
     layout?: "single_form" | "multi_row_table" | "bank_ledger" | "two_individual_forms" | "other" | "unknown";
+    keyLabels?: string[];
     columnHeaders?: string[];
     separateDocumentBlocks?: number | null;
     repeatedPeopleRows?: boolean;
     transactionLedgerRows?: boolean;
+    sharedGrid?: boolean;
+    independentFormHeaders?: number | null;
+    independentTotals?: number | null;
+    regions?: Array<{
+      position?: "top" | "middle" | "bottom" | "full";
+      kind?: "form" | "table" | "header" | "totals" | "other";
+      hasOwnHeader?: boolean;
+      hasEmployeeField?: boolean;
+      hasOwnTotals?: boolean;
+      labels?: string[];
+    }>;
     pageMarker?: string | null;
   };
   /** Indica em que região visual cada campo foi encontrado. */
@@ -22,6 +34,8 @@ export interface ExtractedMetadata {
     companyNameLocation?: "issuer_header" | "employer_field" | "institution_header" | "account_holder_header" | "transaction_row" | "unknown";
     pessoaNomeLocation?: "employee_field" | "report_employee_row" | "transaction_party" | "unknown";
     valorLocation?: "document_total" | "employee_row" | "transaction_row" | "unknown";
+    valorLabel?: "VALOR LIQUIDO" | "VALOR TOTAL" | "VALOR DOS SERVICOS" | "TOTAL A PAGAR" | "BASE DE CALCULO" | "ISS" | "unknown";
+    valorRelation?: "same_row" | "below_label" | "same_box" | "nearby" | "unknown";
   };
   classificationConfidence?: number;
   classificationSource?: string;

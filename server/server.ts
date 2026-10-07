@@ -888,6 +888,105 @@ async function logUpload(originalName: string, pageIndex: number, status: string
   }
 }
 
+function sanitizeRoutingMetadataForLog(value: any): any {
+  if (Array.isArray(value)) return value.slice(0, 4).map(sanitizeRoutingMetadataForLog);
+  if (!value || typeof value !== "object") return undefined;
+
+  const visual = value.visualEvidence && typeof value.visualEvidence === "object"
+    ? value.visualEvidence
+    : {};
+  const fields = value.fieldEvidence && typeof value.fieldEvidence === "object"
+    ? value.fieldEvidence
+    : {};
+
+  return {
+    documentClass: value.documentClass || "OUTRO",
+    documentType: value.documentType || "outros",
+    classificationConfidence: Number(value.classificationConfidence || 0),
+    classificationSource: value.classificationSource || "unknown",
+    needsReview: Boolean(value.needsReview),
+    layaChecked: Boolean(value.layaChecked),
+    layaConfidence: Number(value.layaConfidence || 0),
+    visualEvidence: {
+      layout: visual.layout || "unknown",
+      keyLabels: Array.isArray(visual.keyLabels) ? visual.keyLabels.slice(0, 24) : [],
+      columnHeaders: Array.isArray(visual.columnHeaders) ? visual.columnHeaders.slice(0, 24) : [],
+      separateDocumentBlocks: visual.separateDocumentBlocks ?? null,
+      repeatedPeopleRows: visual.repeatedPeopleRows ?? null,
+      transactionLedgerRows: visual.transactionLedgerRows ?? null,
+      sharedGrid: visual.sharedGrid ?? null,
+      independentFormHeaders: visual.independentFormHeaders ?? null,
+      independentTotals: visual.independentTotals ?? null,
+      regions: Array.isArray(visual.regions)
+        ? visual.regions.slice(0, 4).map((region: any) => ({
+            position: region?.position || "unknown",
+            kind: region?.kind || "other",
+            hasOwnHeader: region?.hasOwnHeader ?? null,
+            hasEmployeeField: region?.hasEmployeeField ?? null,
+            hasOwnTotals: region?.hasOwnTotals ?? null,
+            labels: Array.isArray(region?.labels) ? region.labels.slice(0, 12) : [],
+          }))
+        : [],
+    },
+    fieldEvidence: {
+      companyNameLocation: fields.companyNameLocation || "unknown",
+      pessoaNomeLocation: fields.pessoaNomeLocation || "unknown",
+      valorLocation: fields.valorLocation || "unknown",
+      valorLabel: fields.valorLabel || "unknown",
+      valorRelation: fields.valorRelation || "unknown",
+    },
+  };
+}
+
+function readJpegDimensionsFromBase64(base64: string): { width: number; height: number } | null {
+  try {
+    // SOF normalmente aparece antes dos dados comprimidos. Limitar o decode
+    // evita duplicar um JPEG inteiro na RAM só para telemetria.
+    const head = Buffer.from(base64.slice(0, 131072), "base64");
+    if (head.length < 4 || head[0] !== 0xff || head[1] !== 0xd8) return null;
+
+    let offset = 2;
+    const sofMarkers = new Set([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf]);
+    while (offset + 8 < head.length) {
+      if (head[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      while (offset < head.length && head[offset] === 0xff) offset += 1;
+      const marker = head[offset++];
+      if (marker === 0xd8 || marker === 0xd9) continue;
+      if (offset + 1 >= head.length) break;
+      const length = head.readUInt16BE(offset);
+      if (length < 2 || offset + length > head.length) break;
+      if (sofMarkers.has(marker) && length >= 7) {
+        return {
+          height: head.readUInt16BE(offset + 3),
+          width: head.readUInt16BE(offset + 5),
+        };
+      }
+      offset += length;
+    }
+  } catch {}
+  return null;
+}
+
+function buildVisionCallDiagnostics(
+  model: string,
+  latencyMs: number,
+  imageBase64: string,
+  modelTier: string
+) {
+  const dimensions = readJpegDimensionsFromBase64(imageBase64);
+  return {
+    model,
+    latencyMs,
+    imageWidth: dimensions?.width ?? null,
+    imageHeight: dimensions?.height ?? null,
+    imageBytesApprox: Math.floor((imageBase64.length * 3) / 4),
+    renderTier: modelTier,
+  };
+}
+
 function buildModelFailoverResponse(
   provider: string,
   pageKey: string,
@@ -1230,6 +1329,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
        // o modelo real é descoberto e rotacionado automaticamente.
        const modelTier = hintedTier;
        const pageFailoverKey = String(runtimePageId || `${originalName || "document"}::${pageIndex ?? 0}`);
+       const providerRequestStartedAt = Date.now();
        let requestModel = "";
        let aiResponse;
        try {
@@ -1555,6 +1655,15 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           }
 
           if (requestModel) {
+            const providerLatencyMs = Date.now() - providerRequestStartedAt;
+            await logUpload(
+              originalName,
+              pageIndex,
+              "vision-error",
+              provider,
+              "VISION_CALL_THROW",
+              buildVisionCallDiagnostics(requestModel, providerLatencyMs, imageBase64, modelTier)
+            );
             recordTelemetry(provider, requestModel, /abort|time.?out/i.test(message) ? "timeout" : "failure", 0);
             const failover = buildModelFailoverResponse(
               provider,
@@ -1568,6 +1677,16 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
           throw aiErr;
         }
+
+       const providerLatencyMs = Date.now() - providerRequestStartedAt;
+       await logUpload(
+         originalName,
+         pageIndex,
+         aiResponse.ok ? "vision" : "vision-error",
+         provider,
+         "VISION_CALL",
+         buildVisionCallDiagnostics(requestModel, providerLatencyMs, imageBase64, modelTier)
+       );
 
        if (!aiResponse.ok) {
          const errBody = await aiResponse.text();
@@ -1641,7 +1760,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           responseText = data.choices?.[0]?.message?.content || "";
         }
 
-        console.log("[AI OCR] Resposta recebida:", responseText?.substring(0, 200));
+        console.log(`[AI OCR] Resposta recebida (${responseText?.length || 0} caracteres; conteúdo omitido do log)`);
 
       if (!responseText) {
         if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
@@ -1677,13 +1796,13 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
         const routedTextData = await applyDocumentRoutingV3({ classificationText: trimmed }, v3Hint);
         markModelSemanticSuccess(provider, requestModel);
         resetPageFailoverCycle(provider, pageFailoverKey);
-        await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", routedTextData);
+        await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3 (fallback texto)", sanitizeRoutingMetadataForLog(routedTextData));
         return res.json(routedTextData);
       }
 
       const jsonCandidate = extractJsonCandidate(trimmed);
       if (!jsonCandidate) {
-        await logUpload(originalName, pageIndex, "error", provider, `Sem JSON na resposta: ${responseText.substring(0, 200)}`);
+        await logUpload(originalName, pageIndex, "error", provider, "Sem JSON utilizável na resposta do modelo");
         if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
         const failover = buildModelFailoverResponse(
           provider,
@@ -1707,7 +1826,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       }
       // Ultima tentativa: se ainda falhou e era multiplos objetos, tenta parsear cada um individualmente
       if (!parseSucceeded) {
-        await logUpload(originalName, pageIndex, "error", provider, `JSON inválido: ${jsonStr.substring(0, 500)}`);
+        await logUpload(originalName, pageIndex, "error", provider, "JSON inválido na resposta do modelo");
         if (requestModel) recordTelemetry(provider, requestModel, "failure", 0);
         const failover = buildModelFailoverResponse(
           provider,
@@ -1727,7 +1846,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           const routedDocuments = await Promise.all(extractedData.map((doc: any) => applyDocumentRoutingV3(doc, v3Hint)));
           markModelSemanticSuccess(provider, requestModel);
           resetPageFailoverCycle(provider, pageFailoverKey);
-          await logUpload(originalName, pageIndex, "success", provider, "Dois formulários completos confirmados na mesma página (CLASSIFICATION-V3)", routedDocuments);
+          await logUpload(originalName, pageIndex, "success", provider, "Dois formulários completos confirmados na mesma página (CLASSIFICATION-V3)", sanitizeRoutingMetadataForLog(routedDocuments));
           return res.json({ _multiple: true, documents: routedDocuments });
         }
 
@@ -1736,7 +1855,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           const routedPage = await applyDocumentRoutingV3(pageExtraction, v3Hint);
           markModelSemanticSuccess(provider, requestModel);
           resetPageFailoverCycle(provider, pageFailoverKey);
-          await logUpload(originalName, pageIndex, "success", provider, "Assinatura fiscal forte consolidada em um único documento da página (CLASSIFICATION-V3)", routedPage);
+          await logUpload(originalName, pageIndex, "success", provider, "Assinatura fiscal forte consolidada em um único documento da página (CLASSIFICATION-V3)", sanitizeRoutingMetadataForLog(routedPage));
           return res.json(routedPage);
         }
 
@@ -1746,7 +1865,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           const routedPage = await applyDocumentRoutingV3(collapsedPage, v3Hint);
           markModelSemanticSuccess(provider, requestModel);
           resetPageFailoverCycle(provider, pageFailoverKey);
-          await logUpload(originalName, pageIndex, "success", provider, "Array normalizado para documento único da página (CLASSIFICATION-V3)", routedPage);
+          await logUpload(originalName, pageIndex, "success", provider, "Array normalizado para documento único da página (CLASSIFICATION-V3)", sanitizeRoutingMetadataForLog(routedPage));
           return res.json(routedPage);
         }
 
@@ -1757,7 +1876,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
           const routedPage = await applyDocumentRoutingV3(pageExtraction, v3Hint);
           markModelSemanticSuccess(provider, requestModel);
           resetPageFailoverCycle(provider, pageFailoverKey);
-          await logUpload(originalName, pageIndex, "success", provider, "Array de extração consolidado em um documento da página (CLASSIFICATION-V3)", routedPage);
+          await logUpload(originalName, pageIndex, "success", provider, "Array de extração consolidado em um documento da página (CLASSIFICATION-V3)", sanitizeRoutingMetadataForLog(routedPage));
           return res.json(routedPage);
         }
       }
@@ -1765,7 +1884,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const routedData = await applyDocumentRoutingV3(extractedData, v3Hint);
       markModelSemanticSuccess(provider, requestModel);
       resetPageFailoverCycle(provider, pageFailoverKey);
-      await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", routedData);
+      await logUpload(originalName, pageIndex, "success", provider, "OK CLASSIFICATION-V3", sanitizeRoutingMetadataForLog(routedData));
       return res.json(routedData);
 
      } catch (error: any) {
