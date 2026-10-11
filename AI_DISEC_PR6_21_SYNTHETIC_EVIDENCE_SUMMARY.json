@@ -1,0 +1,235 @@
+{
+  "schemaVersion": "ai-disec.pr6-21.public-synthetic-evidence.v1",
+  "scope": "TEST_ONLY",
+  "fixture": {
+    "id": "pr6-18-multidoc",
+    "sha256": "CF5887A0281B1ABE931C2B8E1423B255EFACD2C6B518C40463C64291168C80EC",
+    "physicalPages": 1,
+    "fictionalDocuments": [
+      "Alice Sintética",
+      "Bruno Amostra"
+    ],
+    "syntheticProfileIsolated": true,
+    "municipalPdfProcessed": false,
+    "externalAiProviderCalls": 0
+  },
+  "uiRestoration": [
+    {
+      "cycle": 9,
+      "alice": "HUMAN_VERIFIED_TEST_ONLY",
+      "bruno": "NEEDS_REVIEW",
+      "sourceVerified": true
+    },
+    {
+      "cycle": 10,
+      "alice": "HUMAN_VERIFIED_TEST_ONLY",
+      "bruno": "HUMAN_VERIFIED_TEST_ONLY",
+      "sourceVerified": true
+    },
+    {
+      "cycle": 11,
+      "alice": "HUMAN_VERIFIED_TEST_ONLY",
+      "bruno": "HUMAN_VERIFIED_TEST_ONLY",
+      "sourceVerified": true,
+      "rendererCheckpoint": "PAUSED"
+    }
+  ],
+  "approvals": {
+    "automation": "SKY_CUA",
+    "ledgerScope": "TEST_ONLY",
+    "realHumanConfirmationAtUiAction": false,
+    "events": [
+      {
+        "subject": "Alice Sintética",
+        "before": "NEEDS_REVIEW",
+        "after": "HUMAN_VERIFIED_TEST_ONLY",
+        "independentFromBruno": true
+      },
+      {
+        "subject": "Bruno Amostra",
+        "before": "NEEDS_REVIEW",
+        "after": "HUMAN_VERIFIED_TEST_ONLY",
+        "independentFromAlice": true
+      }
+    ],
+    "laterUserReview": {
+      "subject": "Alice Sintética",
+      "reportedAfterAutomatedTest": true,
+      "originalTestLedgerChanged": false,
+      "countsAsGroundTruthForMunicipalDocuments": false,
+      "repeatedUiApproval": false
+    }
+  },
+  "sourcePageGeometryPoints": {
+    "width": 595.28,
+    "height": 841.89
+  },
+  "exportVerification": {
+    "verifier": "scripts/pr6-18-verify-multidoc-export.ts",
+    "result": "PASS_SYNTHETIC_CROP_AND_EXPORT_INTEGRITY",
+    "criteria": [
+      "uniqueExpectedIdentity",
+      "registration",
+      "competence",
+      "netAmount"
+    ],
+    "firstZip": {
+      "sha256": "9D50143E4F78C0B954D061F46D64AAD3422520DD73CEF9086E62F8FD2AB7F7B4",
+      "bytes": 138356,
+      "entries": 1,
+      "pendingBrunoExcluded": true,
+      "files": [
+        {
+          "name": "pag1_HOL_Alice_Sintetica.pdf",
+          "pages": 1,
+          "sha256": "4dde5afddf555503638f1f92eb66e533ac20538752ff4a2b711c2e0bd7579d1d",
+          "widthPoints": 595.28,
+          "heightPoints": 372.54,
+          "sourceHeightRatio": 0.4425,
+          "evidence": {
+            "uniqueExpectedIdentity": true,
+            "registration": true,
+            "competence": true,
+            "netAmount": true,
+            "otherPersonAbsent": true
+          }
+        }
+      ]
+    },
+    "secondZip": {
+      "sha256": "8C1576441F2883D4AE0F6647EE92701862406292931D0E04CE351E7F37D2CD25",
+      "bytes": 284992,
+      "entries": 2,
+      "files": [
+        {
+          "name": "pag1_HOL_Alice_Sintetica.pdf",
+          "pages": 1,
+          "sha256": "92c778160f6695202f9c324b4344958c96d6a91a3d2b3e6da3aeab2ea0317df9",
+          "widthPoints": 595.28,
+          "heightPoints": 372.54,
+          "sourceHeightRatio": 0.4425,
+          "evidence": {
+            "uniqueExpectedIdentity": true,
+            "registration": true,
+            "competence": true,
+            "netAmount": true,
+            "otherPersonAbsent": true
+          }
+        },
+        {
+          "name": "pag1_HOL_Bruno_Amostra.pdf",
+          "pages": 1,
+          "sha256": "da592319389d37e2e875f9d64beeeb93e36c16df8e93fdd8c56f8214f4dd05d3",
+          "widthPoints": 595.28,
+          "heightPoints": 469.35,
+          "sourceHeightRatio": 0.5575,
+          "evidence": {
+            "uniqueExpectedIdentity": true,
+            "registration": true,
+            "competence": true,
+            "netAmount": true,
+            "otherPersonAbsent": true
+          }
+        }
+      ],
+      "distinctEntries": true,
+      "mixedIdentityDetected": false,
+      "duplicateDocumentsDetected": false,
+      "clippedFieldsDetected": false,
+      "lostPagesDetected": false
+    },
+    "alicePdfByteIdenticalAcrossArchives": false,
+    "totalCropHeightMatchesSource": true,
+    "rawPdfArtifactsPublished": false
+  },
+  "serverCrashRecovery": {
+    "scope": "TEST_ONLY",
+    "injectedSignal": "SIGKILL",
+    "interruptedJob": "RUNNING",
+    "interruptedPage": "RUNNING",
+    "resultBeforeRestart": 404,
+    "recoveredJob": "PAUSED",
+    "recoveredPage": "PENDING",
+    "completedPages": 0,
+    "resultAfterRestart": 404,
+    "resumeWithoutReattachedInput": 409,
+    "startWithoutReattachedInput": 409,
+    "reattachInput": 202,
+    "restartAfterReattach": 202,
+    "finalJob": "COMPLETED",
+    "finalPage": "NEEDS_REVIEW",
+    "finalResults": 1,
+    "syntheticVisionCalls": 1,
+    "externalProviderHttpCalls": 0,
+    "stdoutBytesDrained": 249,
+    "stderrBytesDrained": 0,
+    "epipe": false,
+    "electronRendererAttachedToInjectedJob": false,
+    "result": "PASS_EXPLICIT_REATTACH_AND_RESUME_SYNTHETIC_ONLY"
+  },
+  "verification": {
+    "focusedTests": {
+      "files": 7,
+      "passed": 82
+    },
+    "fullSuite": {
+      "filesPassed": 46,
+      "testsPassed": 729,
+      "filesSkipped": 1,
+      "testsSkipped": 1
+    },
+    "lint": "PASS",
+    "typecheck": "PASS",
+    "isolatedRendererBuild": "PASS_WITH_EXISTING_WARNINGS",
+    "isolatedServerModuleBuild": "PASS_WITH_EXISTING_WARNINGS",
+    "gitDiffCheck": "PASS_WITH_EOL_NORMALIZATION_WARNINGS",
+    "memorySoakRetested": false
+  },
+  "gates": {
+    "stateRecovery": "PASS_SYNTHETIC_CONSTRAINED",
+    "multidocE2e": "PASS_SYNTHETIC",
+    "queueResilience": "PASS_SYNTHETIC_CONSTRAINED",
+    "automaticQuality": "NOT_CERTIFIED",
+    "orchestrationQuality": "NOT_CERTIFIED",
+    "security": "BLOCKED",
+    "release": "BLOCKED"
+  },
+  "publicationPrivacy": {
+    "includesRealDocuments": false,
+    "includesRawOcr": false,
+    "includesVaultOrLogs": false,
+    "includesCredentials": false,
+    "containsSyntheticFixtureHashOnly": true,
+    "localRawEvidencePublished": false,
+    "officialGitleaksPolicyAvailable": false,
+    "skySecurityGateAvailable": false,
+    "defaultGitleaksPublicationScan": "NO_FINDINGS_SUPPLEMENTAL",
+    "gitleaksVersion": "8.30.1",
+    "gitleaksRuleSet": "built-in default rules; supplemental only"
+  },
+  "limitations": [
+    "Bruno live preview was blank after restoration; source fixture and exported crop were checked instead.",
+    "Server crash was injected in an isolated compiled server module, not by killing the Electron main process.",
+    "The restarted Electron renderer showed PAUSED because the isolated server job was not attached to it.",
+    "Real municipal pages 5, 8, 9, and 11 remain without independent human ground truth.",
+    "Alice's regenerated PDF had a different binary hash in the second ZIP; semantic fields and geometry were independently checked."
+  ],
+  "expectedDocuments": [
+    {
+      "name": "Alice Sintética",
+      "employer": "Prefeitura Fictícia de Exemplo",
+      "competence": "12/2025",
+      "registration": "DEMO-101",
+      "syntheticNetAmount": "R$ 1.234,56",
+      "segment": "top"
+    },
+    {
+      "name": "Bruno Amostra",
+      "employer": "Prefeitura Fictícia de Exemplo",
+      "competence": "12/2025",
+      "registration": "DEMO-202",
+      "syntheticNetAmount": "R$ 987,65",
+      "segment": "bottom"
+    }
+  ]
+}
