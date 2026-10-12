@@ -1,0 +1,98 @@
+{
+  "audit": "AI_DISEC_PR6_22_HUMAN_GROUND_TRUTH_SESSION_AUDIT.md",
+  "date": "2026-10-11",
+  "repository": "Joao-Aschenbrenner/ai-disec-pdf",
+  "referenceAuditCommit": "f80c7b6373e3cedf5e2f14ebc20e741473c8f240",
+  "implementation": {
+    "branch": "fix/exhaustive-vision-failover",
+    "head": "91591a75ffd4e616f0a56633377e76efdfc408d1",
+    "workingTreeEntriesAtStart": 162,
+    "workingTreeEntriesAtEnd": 162,
+    "productCodeCommitted": false,
+    "currentSourceConfigFingerprint": "01506de5ef2cdeb05c322c4522dc186cc67780063dbc8223dca8b9fadf7f2172",
+    "fingerprintedFileCount": 147,
+    "fingerprintInventory": "Sorted repository-relative paths plus per-file SHA-256 for source text/code extensions in src, server, electron, shared, tests, scripts and explicit package/build config; excludes PDFs, images, OCR, vaults, logs, builds and tmp.",
+    "previousFollowupFingerprint": "9f5545c415db26e098add67f1a1b4a14f5e40c5b67df336f6b6df89b0326da73"
+  },
+  "annotationSession": {
+    "started": true,
+    "electronRendererLoaded": true,
+    "annotationOnlyMode": true,
+    "normalProfile": true,
+    "syntheticTestProfile": false,
+    "nativeWindowVisuallyInspected": false,
+    "vaultFilePresentBeforeSelection": false,
+    "vaultAvailabilityObserved": false,
+    "pdfSelected": false,
+    "sourcePdfHashCalculated": false,
+    "pagesOpened": 0,
+    "scope": "real-pages-5-8-9-11",
+    "fullPdfSplit": false,
+    "classificationStarted": false,
+    "externalProviderCallsTriggered": 0,
+    "networkCapturePerformed": false
+  },
+  "isolation": {
+    "providerSettingsFetched": false,
+    "providerCatalogRefreshSkipped": true,
+    "apiRoutesBlocked": true,
+    "layaAutostartSkipped": true,
+    "layaPortListening": false,
+    "rendererJobReattachSkipped": true,
+    "schedulerStartInvoked": false,
+    "runtimeLogMigrationSkipped": true,
+    "existingCheckpointContentInspected": false
+  },
+  "humanGroundTruth": {
+    "status": "PENDING_HUMAN_VALIDATION",
+    "pages": {
+      "5": "PENDING_HUMAN_VALIDATION",
+      "8": "PENDING_HUMAN_VALIDATION",
+      "9": "PENDING_HUMAN_VALIDATION",
+      "11": "PENDING_HUMAN_VALIDATION"
+    },
+    "confirmedPages": 0,
+    "confirmedFields": 0,
+    "ambiguitiesRecorded": 0,
+    "documentsOrCropsRecorded": 0,
+    "qualityMetrics": "NOT_MEASURED",
+    "pageLatency": null
+  },
+  "validation": {
+    "automatedTestsRun": false,
+    "lint": "PASS",
+    "isolatedRendererBuild": "PASS_WITH_EXISTING_CHUNK_WARNINGS",
+    "electronMainSyntax": "PASS",
+    "electronPreloadSyntax": "PASS",
+    "gitDiffCheck": "PASS_WITH_PREEXISTING_LINE_ENDING_WARNINGS",
+    "electronNativeVisualE2E": "E2E_BLOCKED_ENVIRONMENT"
+  },
+  "gates": {
+    "annotationMode": "RUNNING_LOCAL",
+    "normalProfile": "PASS_CONFIGURATION_ONLY",
+    "providerIsolation": "PASS_BY_MODE_CONFIGURATION_NO_NETWORK_CAPTURE",
+    "queueStart": "NOT_STARTED_BY_SESSION",
+    "vaultReady": "NOT_OBSERVED",
+    "electronVisual": "E2E_BLOCKED_ENVIRONMENT",
+    "humanGroundTruth": "PENDING_HUMAN_VALIDATION",
+    "documentQuality": "NOT_CERTIFIED",
+    "sessionRecovery": "NOT_TESTED",
+    "orchestrationQuality": "NOT_CERTIFIED",
+    "security": "BLOCKED",
+    "release": "BLOCKED"
+  },
+  "security": {
+    "officialDevkitGitleaksPolicy": "UNAVAILABLE",
+    "skySecurityGateVersion": "1.0.0_REQUIRED_UNAVAILABLE",
+    "evidenceContract": "SkySecurityGate Evidence v1 UNAVAILABLE",
+    "privateDocumentDataPublished": false,
+    "credentialsPublished": false,
+    "localDocumentHashesPublished": false
+  },
+  "publication": {
+    "scope": "TWO_SANITIZED_DOCUMENTS_ONLY",
+    "productCodeIncluded": false,
+    "merge": false,
+    "release": false
+  }
+}
