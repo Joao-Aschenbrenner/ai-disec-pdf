@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "ai-disec.pr6-22.real-validation-audit.v1",
+  "auditScope": "LOCAL_IMPLEMENTATION_AND_SANITIZED_PUBLICATION",
+  "sourceAuditCommit": "abe868f0b1c1e7e659b9e29d5af44abbd5d263c3",
+  "testedCode": {
+    "branch": "fix/exhaustive-vision-failover",
+    "head": "91591a75ffd4e616f0a56633377e76efdfc408d1",
+    "workingTreeWasDirty": true,
+    "workingTreeStatusEntriesAtFinalCheck": 160,
+    "sourceConfigFilesFingerprinted": 142,
+    "sourceTreeFingerprintSha256": "0273b9216902a8140e9f151c676ab9a66b0f2639b6236c5c82ac5a8fa8a46bd2",
+    "fingerprintExcludes": ["pdfs", "images", "vaults", "logs", "temporary-builds", "local-evidence"]
+  },
+  "implementation": {
+    "pdfJsCanvasPreview": "IMPLEMENTED_BUILD_VERIFIED_ELECTRON_VISUAL_NOT_VERIFIED",
+    "approvalRequiresSelectedRenderedCrop": "IMPLEMENTED_UNIT_VERIFIED",
+    "syntheticApprovalUiAndAudit": "TEST_ONLY_DISTINCT_FROM_HUMAN_VERIFIED",
+    "runtimeRecoveryMerge": "IDEMPOTENT_UNIT_VERIFIED",
+    "resumeWithoutInMemoryInputs": "BLOCKED_BY_UI",
+    "mainElectronProcessCrash": "NOT_TESTED",
+    "pendingZipBlocked": "EXISTING_CONTRACT_AND_TESTS_PASS"
+  },
+  "realDocumentValidation": {
+    "authorizedPhysicalPages": [5, 8, 9, 11],
+    "humanGroundTruthStatus": {
+      "5": "PENDING_HUMAN_VALIDATION",
+      "8": "PENDING_HUMAN_VALIDATION",
+      "9": "PENDING_HUMAN_VALIDATION",
+      "11": "PENDING_HUMAN_VALIDATION"
+    },
+    "automaticGroundTruthFill": false,
+    "classificationQualityMeasured": false,
+    "experimentalComparisonRun": false,
+    "fullMunicipalPdfProcessed": false,
+    "externalProviderCalls": 0,
+    "priorSyntheticZipsRepeated": false
+  },
+  "verification": {
+    "focusedTestFilesPassed": 7,
+    "focusedTestsPassed": 56,
+    "fullSuiteFilesPassed": 48,
+    "fullSuiteFilesSkipped": 1,
+    "fullSuiteTestsPassed": 736,
+    "fullSuiteTestsSkipped": 1,
+    "nvidiaIntegrationTest": "SKIPPED",
+    "typecheck": "PASS",
+    "isolatedRendererBuild": "PASS_WITH_CHUNK_AND_DYNAMIC_IMPORT_WARNINGS",
+    "isolatedServerModuleBuild": "PASS_WITH_IMPORT_META_CJS_WARNINGS",
+    "gitDiffCheck": "PASS_WITH_PREEXISTING_EOL_WARNINGS",
+    "electronVisualE2e": "NOT_RUN_NATIVE_UI_UNAVAILABLE"
+  },
+  "security": {
+    "gitleaksExecutableVersion": "8.30.1",
+    "officialDevkitPolicyAvailable": false,
+    "skySecurityGateAvailable": false,
+    "evidenceV1ContractAvailable": false,
+    "officialSecurityScan": "BLOCKED",
+    "publicationScan": "SUPPLEMENTAL_NO_FINDINGS_DEFAULT_RULES_SCOPE_STAGED_FILES"
+  },
+  "gates": {
+    "previewRestoration": "IMPLEMENTED_NOT_CERTIFIED",
+    "approvalRequiresVisibleCrop": "PASS_UNIT_BUILD_ONLY",
+    "testOnlyDistinction": "PASS_UNIT_BUILD_ONLY",
+    "rendererReattachment": "PASS_UNIT_CONSTRAINED",
+    "mainElectronProcessCrash": "NOT_TESTED",
+    "pendingZipBlock": "PASS_TEST_SUITE",
+    "humanGroundTruth": "PENDING_HUMAN_VALIDATION",
+    "automaticQuality": "NOT_CERTIFIED",
+    "orchestrationQuality": "NOT_CERTIFIED",
+    "security": "BLOCKED",
+    "release": "BLOCKED"
+  },
+  "publicationPrivacy": {
+    "containsRealDocumentContent": false,
+    "containsRawOcr": false,
+    "containsPersonalData": false,
+    "containsPrivateDocumentHash": false,
+    "containsVaultLogsScreenshotsOrDumps": false,
+    "containsCredentials": false
+  }
+}
