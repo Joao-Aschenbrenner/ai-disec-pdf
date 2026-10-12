@@ -1,0 +1,249 @@
+{
+  "schema": "ai-disec.pr6-23.audit-summary.v1",
+  "auditDate": "2026-10-12",
+  "decision": "EXPERIMENTAL_PIPELINE_DEMONSTRATED; REAL_QUALITY_NOT_CERTIFIED; QUEUE_RECOVERY_REJECT; SECURITY_BLOCKED; RELEASE_BLOCKED",
+  "publication": {
+    "repository": "https://github.com/Joao-Aschenbrenner/ai-disec-pdf",
+    "branch": "audit/pr6-23-local-layout-evidence",
+    "baseCommit": "37357fc418f629bc91358890c26f9e1a81e23247",
+    "scope": [
+      "AI_DISEC_PR6_23_LOCAL_LAYOUT_EVIDENCE_AUDIT.md",
+      "AI_DISEC_PR6_23_LOCAL_LAYOUT_EVIDENCE_SUMMARY.json"
+    ],
+    "containsPrivateDocumentData": false,
+    "containsPrivateDocumentHash": false,
+    "containsRawOcrOrImages": false,
+    "containsCredentialsOrLogs": false
+  },
+  "codeUnderTest": {
+    "repositoryBranch": "fix/exhaustive-vision-failover",
+    "head": "91591a75ffd4e616f0a56633377e76efdfc408d1",
+    "workingTreeWasDirty": true,
+    "sourceConfigFingerprint": "6b8e9f8402bd5d5764985b02412be774f7712f36e1216a4c2d4e2ff3ec923936",
+    "manifestFileCount": 160,
+    "pr622PublishedFingerprint": "9f5545c415db26e098add67f1a1b4a14f5e40c5b67df336f6b6df89b0326da73",
+    "matchesPr622Fingerprint": false,
+    "productionFeatureFlagDefault": "OFF",
+    "productionQueueIntegration": false
+  },
+  "implementationFiles": [
+    "shared/localLayoutEvidence.ts",
+    "server/classification/localLayoutPipeline.ts",
+    "server/classification/localOcr.ts",
+    "server/classification/paddleStructureWorker.ts",
+    "scripts/pr6-23-paddle-layout-worker.py",
+    "scripts/pr6-23-paddle-layout-only-worker.py",
+    "scripts/pr6-23-local-layout-benchmark.ts",
+    "src/utils/pdfToImage.server.ts",
+    "tests/fixtures/pr6-23-synthetic.ts",
+    "tests/local-layout-evidence.test.ts",
+    "tests/local-ocr-offline.test.ts",
+    "tests/paddle-structure-worker.test.ts",
+    "tests/pdfToImage.test.ts"
+  ],
+  "runtime": {
+    "os": "Windows",
+    "gpuUsed": false,
+    "logicalCpuCoresAvailable": 16,
+    "paddleCpuThreads": 4,
+    "workerMemoryLimitBytes": 1500000000,
+    "hostRamApproximateBytes": 32000000000,
+    "certifiesEightGbHardware": false,
+    "externalAiCalls": 0,
+    "networkBlockedInsidePaddleWorker": true,
+    "tesseractLanguageDataLocal": true,
+    "tesseractVersion": "7.0.0",
+    "paddleOcrVersion": "3.7.0",
+    "paddleVersion": "3.3.1",
+    "paddleXVersion": "3.7.2",
+    "layoutModel": "PP-DocLayout-S"
+  },
+  "privatePageObservation": {
+    "documentBytesLoadedIntoMemoryForPdfJs": true,
+    "pagesRasterizedAndAnalyzed": [5, 8, 9, 11],
+    "otherPagesRasterizedOrOcrProcessed": 0,
+    "rawTextOrMonetaryValuesPersisted": false,
+    "independentHumanGroundTruth": "PENDING",
+    "quality": "NOT_CERTIFIED_NO_INDEPENDENT_GROUND_TRUTH",
+    "latencyMs": {
+      "p50": 8231,
+      "p95": 11388
+    },
+    "pages": [
+      {
+        "page": 5,
+        "state": "ready_evidence_graph_only",
+        "pipelineMs": 11388,
+        "ocrMs": 6153,
+        "ocrLineCount": 70,
+        "layoutRegionCount": 1,
+        "documentCandidateCount": 1,
+        "monetaryRelationCandidates": 1,
+        "separatorCandidates": 0,
+        "workerPrivatePeakBytes": 316928000,
+        "workerRssPeakBytes": 412659712,
+        "nodeRssPeakBytes": 603402240,
+        "contentValidated": false
+      },
+      {
+        "page": 8,
+        "state": "needs_review",
+        "pipelineMs": 8130,
+        "ocrMs": 3135,
+        "ocrLineCount": 32,
+        "layoutRegionCount": 1,
+        "documentCandidateCount": 1,
+        "monetaryRelationCandidates": 0,
+        "separatorCandidates": 0,
+        "workerPrivatePeakBytes": 328572928,
+        "workerRssPeakBytes": 425218048,
+        "nodeRssPeakBytes": 447844352,
+        "contentValidated": false
+      },
+      {
+        "page": 9,
+        "state": "needs_review",
+        "pipelineMs": 8411,
+        "ocrMs": 2841,
+        "ocrLineCount": 60,
+        "layoutRegionCount": 0,
+        "documentCandidateCount": 2,
+        "monetaryRelationCandidates": 0,
+        "separatorCandidates": 1,
+        "workerPrivatePeakBytes": 318636032,
+        "workerRssPeakBytes": 415240192,
+        "nodeRssPeakBytes": 455196672,
+        "splitAndCropIntegrityValidated": false
+      },
+      {
+        "page": 11,
+        "state": "needs_review",
+        "pipelineMs": 8231,
+        "ocrMs": 3116,
+        "ocrLineCount": 56,
+        "layoutRegionCount": 0,
+        "documentCandidateCount": 2,
+        "monetaryRelationCandidates": 0,
+        "separatorCandidates": 1,
+        "workerPrivatePeakBytes": 316194816,
+        "workerRssPeakBytes": 411901952,
+        "nodeRssPeakBytes": 454733824,
+        "splitAndCropIntegrityValidated": false
+      }
+    ]
+  },
+  "syntheticBenchmark": {
+    "fixtureCount": 3,
+    "allFixtureCriteriaMet": true,
+    "automaticApprovals": 0,
+    "pipelineLatencyMs": {
+      "p50": 5515,
+      "p95": 6311
+    },
+    "cases": [
+      {
+        "fixture": "synthetic_invoice_multiple_labeled_values",
+        "expectedOcrFragments": 7,
+        "matchedOcrFragments": 7,
+        "documentCandidates": 1,
+        "expectedDocuments": 1,
+        "documentIoU": 1.0,
+        "expectedMoneyLinks": 3,
+        "matchedMoneyLinks": 3,
+        "pipelineMs": 6311,
+        "ocrMs": 621,
+        "layoutStartupMs": 144,
+        "layoutInferenceMs": 432,
+        "layoutRegionCount": 1,
+        "workerPrivatePeakBytes": 314609664,
+        "workerRssPeakBytes": 411209728,
+        "status": "ready_evidence_graph_only"
+      },
+      {
+        "fixture": "synthetic_payroll_roster_table",
+        "expectedOcrFragments": 4,
+        "matchedOcrFragments": 4,
+        "documentCandidates": 1,
+        "expectedDocuments": 1,
+        "documentIoU": 1.0,
+        "expectedMoneyLinks": 0,
+        "matchedMoneyLinks": 0,
+        "pipelineMs": 5515,
+        "ocrMs": 425,
+        "layoutStartupMs": 138,
+        "layoutInferenceMs": 430,
+        "layoutRegionCount": 4,
+        "workerPrivatePeakBytes": 327479296,
+        "workerRssPeakBytes": 445620224,
+        "status": "needs_review"
+      },
+      {
+        "fixture": "synthetic_two_stacked_payslips",
+        "expectedOcrFragments": 5,
+        "matchedOcrFragments": 5,
+        "documentCandidates": 2,
+        "expectedDocuments": 2,
+        "documentIoU": [0.945, 0.9478672986],
+        "expectedMoneyLinks": 2,
+        "matchedMoneyLinks": 2,
+        "noCrossIdentityAssociation": true,
+        "pipelineMs": 5335,
+        "ocrMs": 317,
+        "layoutStartupMs": 132,
+        "layoutInferenceMs": 422,
+        "layoutRegionCount": 1,
+        "workerPrivatePeakBytes": 328720384,
+        "workerRssPeakBytes": 446869504,
+        "status": "needs_review"
+      }
+    ],
+    "priorFullPpStructureSyntheticLatencyMs": {
+      "p50": 14073,
+      "p95": 15200
+    },
+    "medianLatencyReductionVsPriorFullPpStructure": 0.608,
+    "interpretation": "Controlled synthetic comparison only; not a production guarantee. Layout-only model did not identify two slips by itself."
+  },
+  "alternativeTools": {
+    "tesseractJs": "TESTED_BASELINE",
+    "paddleOcrPpStructureV3": "TESTED_SYNTHETIC; slower and duplicate OCR; real page 5 layout inference 41966ms; earlier generic failures on pages 8,9,11 not root-caused",
+    "paddleDocLayoutS": "TESTED_SYNTHETIC_AND_SELECTED_PAGES; layout-only candidate",
+    "docling": "NOT_TESTED; isolated runtime and quality benchmark absent",
+    "ocrmypdf": "NOT_TESTED; CLI unavailable; no source copy transformed",
+    "surya": "NOT_TESTED; CPU backend absent and model-weight license eligibility unconfirmed"
+  },
+  "validation": {
+    "focusedTests": {
+      "passed": 25,
+      "files": 4
+    },
+    "fullSuite": {
+      "passed": 751,
+      "skipped": 1,
+      "filesPassed": 52,
+      "filesSkipped": 1
+    },
+    "lintTypecheck": "PASS",
+    "isolatedBuild": "PASS; fresh tmp target; existing dist untouched",
+    "gitDiffCheck": "PASS; exit 0; three line-ending notices",
+    "workerFailureTests": "PASS; timeout/memory failure results are not accepted as complete output",
+    "privacyReview": "PENDING_STANDALONE_PUBLICATION_SCAN"
+  },
+  "gates": {
+    "LOCAL_LAYOUT_PIPELINE": "PASS_EXPERIMENTAL",
+    "EVIDENCE_CONTRACT": "PASS",
+    "SYNTHETIC_SEGMENTATION": "PASS",
+    "LABEL_VALUE_ASSOCIATION": "PASS_SYNTHETIC",
+    "CPU_MEMORY_BENCHMARK": "PASS_WITH_LIMITS_NOT_8GB_CERTIFIED",
+    "LAYA_EVIDENCE_ADAPTER": "PASS_CONTRACT_ONLY_NO_INFERENCE",
+    "QUEUE_RECOVERY": "REJECT_NOT_INTEGRATED_WITH_PRODUCTION_SCHEDULER",
+    "REAL_DOCUMENT_QUALITY": "NOT_CERTIFIED",
+    "SECURITY": "BLOCKED_OFFICIAL_DEVKIT_GITLEAKS_SKYSECURITYGATE_AND_EVIDENCE_V1_UNAVAILABLE",
+    "RELEASE": "BLOCKED"
+  },
+  "securityUnblockRequirements": [
+    "DevKit A3 maintainer provides the exact versioned DevKit-owned Gitleaks policy path, policy hash, and adapter invocation",
+    "DevKit A3 provides and runs SkySecurityGate 1.0.0 on the approved scope",
+    "DevKit A3 supplies the exact SkySecurityGate Evidence v1 schema and writer, and validated evidence is emitted"
+  ]
+}
