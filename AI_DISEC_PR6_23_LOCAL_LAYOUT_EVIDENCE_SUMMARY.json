@@ -1,7 +1,7 @@
 {
   "schema": "ai-disec.pr6-23.audit-summary.v1",
   "auditDate": "2026-10-12",
-  "decision": "EXPERIMENTAL_PIPELINE_DEMONSTRATED; REAL_QUALITY_NOT_CERTIFIED; QUEUE_RECOVERY_REJECT; SECURITY_BLOCKED; RELEASE_BLOCKED",
+  "decision": "EXPERIMENTAL_PIPELINE_DEMONSTRATED; QUEUE_FAILURE_CONTAINMENT_SYNTHETIC_PASS; REAL_QUALITY_NOT_CERTIFIED; SECURITY_BLOCKED; RELEASE_BLOCKED",
   "publication": {
     "repository": "https://github.com/Joao-Aschenbrenner/ai-disec-pdf",
     "branch": "audit/pr6-23-local-layout-evidence",
@@ -19,18 +19,20 @@
     "repositoryBranch": "fix/exhaustive-vision-failover",
     "head": "91591a75ffd4e616f0a56633377e76efdfc408d1",
     "workingTreeWasDirty": true,
-    "sourceConfigFingerprint": "6b8e9f8402bd5d5764985b02412be774f7712f36e1216a4c2d4e2ff3ec923936",
+    "sourceConfigFingerprint": "7c5af01e016fc6ecbb47607fd27bd1f218bcf4fc53d0f1234df0eaeebc1dc15d",
     "manifestFileCount": 160,
     "pr622PublishedFingerprint": "9f5545c415db26e098add67f1a1b4a14f5e40c5b67df336f6b6df89b0326da73",
     "matchesPr622Fingerprint": false,
     "productionFeatureFlagDefault": "OFF",
-    "productionQueueIntegration": false
+    "productionQueueIntegration": true,
+    "queueIntegrationMode": "OPT_IN_EXPERIMENTAL_OBSERVER; FEATURE_FLAG_DEFAULT_OFF"
   },
   "implementationFiles": [
     "shared/localLayoutEvidence.ts",
     "server/classification/localLayoutPipeline.ts",
     "server/classification/localOcr.ts",
     "server/classification/paddleStructureWorker.ts",
+    "server/runtimePageProcessor.ts",
     "scripts/pr6-23-paddle-layout-worker.py",
     "scripts/pr6-23-paddle-layout-only-worker.py",
     "scripts/pr6-23-local-layout-benchmark.ts",
@@ -39,6 +41,7 @@
     "tests/local-layout-evidence.test.ts",
     "tests/local-ocr-offline.test.ts",
     "tests/paddle-structure-worker.test.ts",
+    "tests/runtime-job-scheduler.test.ts",
     "tests/pdfToImage.test.ts"
   ],
   "runtime": {
@@ -214,20 +217,36 @@
   },
   "validation": {
     "focusedTests": {
-      "passed": 25,
+      "passed": 42,
       "files": 4
     },
     "fullSuite": {
-      "passed": 751,
+      "passed": 752,
       "skipped": 1,
       "filesPassed": 52,
       "filesSkipped": 1
     },
     "lintTypecheck": "PASS",
-    "isolatedBuild": "PASS; fresh tmp target; existing dist untouched",
+    "isolatedBuild": "PASS; tmp/pr6-23-isolated-build-r5-20261012; existing dist untouched",
     "gitDiffCheck": "PASS; exit 0; three line-ending notices",
     "workerFailureTests": "PASS; timeout/memory failure results are not accepted as complete output",
-    "privacyReview": "PENDING_STANDALONE_PUBLICATION_SCAN"
+    "syntheticQueueRecoveryE2E": {
+      "status": "PASS_EXPERIMENTAL_FAILURE_CONTAINED",
+      "queuedPages": 2,
+      "layoutEngineFailures": 2,
+      "transient503Responses": 1,
+      "mockedExtractionAttempts": 3,
+      "localObservations": 2,
+      "localObservationRepeatedAfterRetry": false,
+      "terminalPageStates": ["NEEDS_REVIEW", "NEEDS_REVIEW"],
+      "duplicatePageResults": 0,
+      "automaticApprovals": 0,
+      "externalProviderCalls": 0,
+      "ocrEvidenceStoredInQueueResult": false,
+      "electronProcessDeathTested": false,
+      "packagedRuntimeTested": false
+    },
+    "privacyReview": "PASS_STANDALONE_GITLEAKS_DEFAULT_RULES_AND_MANUAL_REVIEW; OFFICIAL_SECURITY_STILL_BLOCKED"
   },
   "gates": {
     "LOCAL_LAYOUT_PIPELINE": "PASS_EXPERIMENTAL",
@@ -236,10 +255,10 @@
     "LABEL_VALUE_ASSOCIATION": "PASS_SYNTHETIC",
     "CPU_MEMORY_BENCHMARK": "PASS_WITH_LIMITS_NOT_8GB_CERTIFIED",
     "LAYA_EVIDENCE_ADAPTER": "PASS_CONTRACT_ONLY_NO_INFERENCE",
-    "QUEUE_RECOVERY": "REJECT_NOT_INTEGRATED_WITH_PRODUCTION_SCHEDULER",
+    "QUEUE_RECOVERY": "PASS_EXPERIMENTAL_FAILURE_CONTAINED; SYNTHETIC_RUNTIME_QUEUE_E2E_ONLY",
     "REAL_DOCUMENT_QUALITY": "NOT_CERTIFIED",
     "SECURITY": "BLOCKED_OFFICIAL_DEVKIT_GITLEAKS_SKYSECURITYGATE_AND_EVIDENCE_V1_UNAVAILABLE",
-    "RELEASE": "BLOCKED"
+    "RELEASE": "BLOCKED_REAL_DOCUMENT_QUALITY_PACKAGED_RUNTIME_AND_OFFICIAL_SECURITY"
   },
   "securityUnblockRequirements": [
     "DevKit A3 maintainer provides the exact versioned DevKit-owned Gitleaks policy path, policy hash, and adapter invocation",

@@ -1,12 +1,12 @@
 # AI DISEC PDF — PR6.23 Local OCR, Layout & Evidence Audit
 
 **Audit date:** 2026-10-12
-**Decision:** experimental local pipeline demonstrated on synthetic fixtures; real-document quality remains **NOT CERTIFIED**; queue integration, official security, and release remain blocked.
+**Decision:** experimental local pipeline and synthetic queue failure containment demonstrated; real-document quality remains **NOT CERTIFIED**; official security and release remain blocked.
 **Publication scope:** this report and its sanitized JSON summary only. No product code, PDF, image, OCR text, personal data, private-document hash, credential, or raw log is included in the publication commit.
 
 ## A. Executive summary
 
-This follow-up completed an offline experiment combining Tesseract.js OCR, PaddleX PP-DocLayout-S layout detection, deterministic separator analysis, a normalized evidence graph, and a citation-checking adapter for Laya. The normal classifier and production routing remain unchanged; the experiment is opt-in and its feature flag defaults to `OFF`.
+This follow-up completed an offline experiment combining Tesseract.js OCR, PaddleX PP-DocLayout-S layout detection, deterministic separator analysis, a normalized evidence graph, and a citation-checking adapter for Laya. An opt-in observer is now connected to the server-owned page processor; the feature flag defaults to `OFF`, and the normal classifier path is unchanged while it is off. When enabled, the observer stores only sanitized counts/status/timing, forces review, and never submits its OCR evidence to an AI provider.
 
 The final synthetic benchmark passed the three fixtures:
 
@@ -20,9 +20,9 @@ Only physical pages 5, 8, 9, and 11 of the authorized municipal PDF were rendere
 
 Real-page outcomes are observations only. Page 5 produced one candidate monetary relation, page 8 produced one document candidate, and pages 9 and 11 produced two candidates each from repeated payroll headers plus a low-ink separator heuristic. Those last two pages had zero PP-DocLayout regions in the light model; their split was therefore driven by the independent OCR/pixel heuristic, not by Paddle recognizing two forms. No real value, identity, crop integrity, or classification was confirmed. `REAL_DOCUMENT_QUALITY=NOT_CERTIFIED`.
 
-The worker fallback and the existing page queue were tested separately. The experimental pipeline is not wired into the production scheduler, so an end-to-end queued-job recovery test using this new worker was **not** demonstrated. `QUEUE_RECOVERY=REJECT` for this experimental path. The feature must remain outside production routing until that gap is closed.
+An isolated E2E now runs the opt-in observer inside `RuntimeJobScheduler` on two synthetic pages. The injected layout engine fails on both pages; page 1 also receives one transient HTTP 503 from a mocked local extraction endpoint. The scheduler retries page 1 once, reuses its cached local observation rather than repeating OCR/layout, then finishes page 2. Both results end in `NEEDS_REVIEW`; there are three mocked extraction attempts and two local layout attempts, with no duplicate page results or automatic approval. The E2E makes no network/provider calls and does not test Electron process death or a packaged-user model installation. `QUEUE_RECOVERY=PASS_EXPERIMENTAL_FAILURE_CONTAINED`, limited to this synthetic runtime path.
 
-The full suite passed (`751` passed, `1` skipped), typecheck passed, and an isolated build passed without touching `dist`. The official DevKit Gitleaks policy, SkySecurityGate 1.0.0, and Evidence v1 writer/schema are unavailable. A standalone Gitleaks scan is publication hygiene only and does not authorize `SECURITY`; security and release remain blocked.
+The full suite passed (`752` passed, `1` skipped), typecheck passed, and an isolated build passed without touching `dist`. The official DevKit Gitleaks policy, SkySecurityGate 1.0.0, and Evidence v1 writer/schema are unavailable. A standalone Gitleaks scan is publication hygiene only and does not authorize `SECURITY`; security and release remain blocked.
 
 ## B. Repository and exact code fingerprint
 
@@ -31,7 +31,7 @@ The full suite passed (`751` passed, `1` skipped), typecheck passed, and an isol
 | Local branch | `fix/exhaustive-vision-failover` |
 | Local `HEAD` | `91591a75ffd4e616f0a56633377e76efdfc408d1` |
 | Working tree | Dirty before PR6.23 and remains dirty; pre-existing product changes, reports, fixtures, and temporary artifacts were preserved. |
-| Current source/config fingerprint | `6b8e9f8402bd5d5764985b02412be774f7712f36e1216a4c2d4e2ff3ec923936` |
+| Current source/config fingerprint | `7c5af01e016fc6ecbb47607fd27bd1f218bcf4fc53d0f1234df0eaeebc1dc15d` |
 | Manifest size | 160 source/config files |
 | PR6.22 published fingerprint | `9f5545c415db26e098add67f1a1b4a14f5e40c5b67df336f6b6df89b0326da73` (144 files) |
 | Fingerprint match | No. The tested local tree is not the published PR6.22 source snapshot. |
@@ -61,10 +61,11 @@ Relevant local source files:
 - `server/classification/localLayoutPipeline.ts` implements the opt-in OCR/layout observation, image limits, separator analysis, and safe review/unresolved fallback. Its default flag is `AI_DISEC_EXPERIMENTAL_LOCAL_LAYOUT=0`.
 - `server/classification/localOcr.ts` runs Tesseract.js in a bounded single worker and now sets `langPath` to the local cache with `gzip:false`. If cached language data is missing, the worker reads the local file path instead of using Tesseract.js's default CDN path. The real-document pass used `cacheMethod:"readOnly"`.
 - `server/classification/paddleStructureWorker.ts` isolates the Python worker, bounds image bytes/pixels, CPU threads, timeout, child memory, and stdout; it maps failures to fixed safe codes and never surfaces worker stderr or OCR output.
+- `server/runtimePageProcessor.ts` connects an opt-in local observer to the server-owned page processor. It reuses validated page OCR where available, otherwise requires an explicit local Tesseract cache; the Paddle runtime requires explicit Python and model-cache paths. A `WeakMap` reuses one observation across scheduler retries. The queue result receives only counts/status/timing, is always marked for review, and never stores the OCR graph or classifies the document from this experiment.
 - `scripts/pr6-23-paddle-layout-worker.py` runs reduced PP-StructureV3 offline for the comparison experiment. `scripts/pr6-23-paddle-layout-only-worker.py` runs PP-DocLayout-S via PaddleX's static CPU engine and does not perform OCR.
 - `scripts/pr6-23-local-layout-benchmark.ts` runs the synthetic benchmark and selected-page local observation. Page selection is restricted to `5,8,9,11`; it records metrics only, never OCR text or values.
 - `src/utils/pdfToImage.server.ts` adds selected-page PDF.js rasterization with page-number validation and pixel limits; unrelated pages are not rasterized.
-- `tests/fixtures/pr6-23-synthetic.ts`, `tests/local-layout-evidence.test.ts`, `tests/local-ocr-offline.test.ts`, `tests/paddle-structure-worker.test.ts`, and the selected-page PDF tests cover fixtures, provenance, worker failure, and offline configuration.
+- `tests/fixtures/pr6-23-synthetic.ts`, `tests/local-layout-evidence.test.ts`, `tests/local-ocr-offline.test.ts`, `tests/paddle-structure-worker.test.ts`, `tests/runtime-job-scheduler.test.ts`, and the selected-page PDF tests cover fixtures, provenance, worker failure, offline configuration, retry caching, and queue continuation.
 
 The adapter builds a structured proposal from evidence already present. The validator accepts only cited IDs from the same page/document scope and rejects unknown, duplicate, or cross-document references. It was tested with simulated Laya responses only; **no Laya inference or external model call occurred**. The adapter cannot mark data HUMAN_VERIFIED or approve a document.
 
@@ -134,21 +135,21 @@ No independent human reference was entered or inferred from OCR. The user's expl
 
 ## G. Failure handling and queue recovery
 
-- Tesseract failure returns an unresolved evidence object; layout failure preserves OCR evidence, returns a fixed failure code and routes the result to review rather than inventing a classification.
+- Tesseract failure returns an unresolved evidence object; layout failure preserves OCR evidence, returns a fixed failure code, and continues through the existing classifier for review rather than inventing a classification. When the experimental flag is on, all resulting documents are explicitly forced to review.
 - The isolated worker has a bounded timeout, abort support, 1.5 GB RSS ceiling, 20 MB image limit, 20 MP limit, and 8 MB stdout cap. Tests inject a hung worker and a memory-budget exit; neither partial output is accepted.
-- The existing scheduler tests include page deadline/retry exhaustion and continuation to later queue pages. The focused suite ran 49 tests before the final offline-configuration change and 25 relevant tests after it; the final full suite also passed.
-- **Gap:** the experimental layout worker is not called by `RuntimeJobScheduler` or `createRuntimePageProcessor`. Therefore, the tests prove isolated worker fallback and existing scheduler continuation separately, not an end-to-end page-queue retry/recovery using this worker. Do not claim queue integration or recovery PASS for the new engine.
+- The runtime observer is gated by `AI_DISEC_EXPERIMENTAL_LOCAL_LAYOUT=1`. Its Python/model paths are explicit environment configuration; absent configuration yields a fixed unresolved status and the established processor continues. Local observation results are memoized by page object across retries, avoiding repeat OCR/layout work after a provider retry.
+- The new synthetic scheduler E2E injected a layout failure for both queued pages and a transient 503 for page 1. The queue completed both pages in review, retried the extraction once, called the local observer once per page, and created no duplicate page result. This demonstrates failure containment and continuation for the experimental worker contract; it is not an Electron crash test, not a real-Paddle failure in the queue, and not a packaged-runtime test.
 
 ## H. Tests, lint, build, and repository hygiene
 
 | Check | Result |
 |---|---|
-| Focused evidence/worker/OCR/scheduler tests | `25 passed` across 4 files in the final focused run |
-| Full suite | `751 passed`, `1 skipped`; `52` files passed, `1` skipped |
+| Focused evidence/worker/OCR/scheduler tests | `42 passed` across 4 files in the final focused run |
+| Full suite | `752 passed`, `1 skipped`; `52` files passed, `1` skipped |
 | Typecheck / lint (`npm run lint`) | PASS (`tsc --noEmit`) |
 | Synthetic benchmark | PASS for fixture criteria in section D |
 | Selected-page real observation | Completed for pages `5,8,9,11`; quality not certified |
-| Isolated renderer + server build | PASS to a fresh `tmp/pr6-23-isolated-build-*` target; existing `dist` untouched |
+| Isolated renderer + server build | PASS to fresh `tmp/pr6-23-isolated-build-r5-20261012`; existing `dist` untouched |
 | Build warnings | Existing dynamic/static import chunk warning; large renderer chunk warning; esbuild CJS `import.meta` warnings. Build still succeeded. |
 | `git diff --check` | Exit `0`; three line-ending conversion notices, no whitespace error |
 | External AI/provider calls | `0` |
@@ -168,7 +169,7 @@ Official security gates remain unavailable on this host:
 
 A default-rules Gitleaks scan of the two files in this documentation commit and a manual privacy-pattern review are supplementary checks only; they cannot turn `SECURITY` into PASS. No private-document hash or data was placed in either file.
 
-Residual risks: model quality on real fiscal/payroll documents is unknown; the light model's two-slip boundary is heuristic; blank bands can occur inside a single document; the production job queue does not invoke this experiment; Docling/OCRmyPDF/Surya remain unbenchmarked; full PP-StructureV3 had unexplained real-page failures; no full-system 8 GB soak or official security decision was possible.
+Residual risks: model quality on real fiscal/payroll documents is unknown; the light model's two-slip boundary is heuristic; blank bands can occur inside a single document; the feature flag is off by default and the configured packaged-runtime path was not tested; Docling/OCRmyPDF/Surya remain unbenchmarked; full PP-StructureV3 had unexplained real-page failures; no full-system 8 GB soak or official security decision was possible.
 
 ## J. Final gate decisions
 
@@ -180,14 +181,14 @@ Residual risks: model quality on real fiscal/payroll documents is unknown; the l
 | `LABEL_VALUE_ASSOCIATION` | `PASS_SYNTHETIC` | 3/3 invoice links and 2/2 synthetic payslip links match fixture expectations; no real values verified. |
 | `CPU_MEMORY_BENCHMARK` | `PASS_WITH_LIMITS` | Four CPU threads and 1.5 GB child cap enforced; measured values recorded. Not an 8 GB hardware certification. |
 | `LAYA_EVIDENCE_ADAPTER` | `PASS_CONTRACT_ONLY` | Local request builder and citation validator tested with simulated responses; no Laya inference. |
-| `QUEUE_RECOVERY` | `REJECT` | New layout worker is not integrated into the production page queue; component and scheduler tests were not a combined E2E. |
+| `QUEUE_RECOVERY` | `PASS_EXPERIMENTAL_FAILURE_CONTAINED` | Synthetic scheduler E2E covered a layout-worker failure on two pages, one transient 503/retry, review-only results, one local observation per page, and continuation without duplicate page results. Electron process death and packaged runtime remain untested. |
 | `REAL_DOCUMENT_QUALITY` | `NOT_CERTIFIED` | No independent human ground truth; observations only. |
 | `SECURITY` | `BLOCKED` | Official DevKit Gitleaks policy, SkySecurityGate 1.0.0, and Evidence v1 missing. |
-| `RELEASE` | `BLOCKED` | Queue integration, independent real references, and official security gates remain open. |
+| `RELEASE` | `BLOCKED` | Real-document quality is not certified, packaged opt-in runtime has not been validated, and official security gates remain unavailable. |
 
 ## K. Next actions, by priority
 
-1. Keep the experiment disabled by default. If product use is requested, integrate the bounded worker behind the feature flag with the server scheduler and test cancellation, timeout, continuation, idempotency, fallback, and no false approval end to end.
+1. Keep the experiment disabled by default. Before enabling it in a packaged user profile, provision the local OCR/model caches, validate the configured worker paths, and run a synthetic packaged-runtime check for timeout, cancellation, and memory-limit behavior. Keep all outputs in review until separately validated.
 2. Obtain independent real-document references through the protected local review workflow. The reviewer, not OCR, must verify the page-5 label/value region, page-8 person/value associations, and the four slip boundaries/identities/integrity across pages 9 and 11. No personal data should be entered into this public repository or chat.
 3. After references exist, evaluate false approvals, review rate, class, association, boundary IoU, and latency on the four selected pages only. Keep unverified fields unresolved.
 4. If layout alternatives are still needed, run Docling on the same synthetic fixtures in an isolated environment. Evaluate OCRmyPDF only on duplicate copies and compare visual loss. Do not install Surya weights until the CPU backend and model license are cleared.
