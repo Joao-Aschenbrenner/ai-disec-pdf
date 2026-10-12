@@ -1,0 +1,76 @@
+{
+  "audit": "AI_DISEC_PR6_22_CERTIFICATION_FOLLOWUP_AUDIT.md",
+  "date": "2026-10-11",
+  "repository": "Joao-Aschenbrenner/ai-disec-pdf",
+  "referenceAuditCommit": "dac27452f6c33d2848d123696c1d804fa7c80233",
+  "testedCode": {
+    "branch": "fix/exhaustive-vision-failover",
+    "head": "91591a75ffd4e616f0a56633377e76efdfc408d1",
+    "workingTreeInitiallyDirty": true,
+    "sourceConfigFiles": 144,
+    "fingerprintAtStart": "0273b9216902a8140e9f151c676ab9a66b0f2639b6236c5c82ac5a8fa8a46bd2",
+    "fingerprintAfterFollowup": "9f5545c415db26e098add67f1a1b4a14f5e40c5b67df336f6b6df89b0326da73",
+    "fingerprintExcludes": ["private documents", "images", "OCR", "vaults", "logs", "builds", "temporary evidence"]
+  },
+  "changes": {
+    "syntheticProfileCheck": "SHARED_MAIN_PRELOAD_VALIDATION_UNIT_TESTED_RUNTIME_NOT_VERIFIED",
+    "humanTruthScope": "FOUR_PAGES_5_8_9_11_SEPARATE_ENCRYPTED_SCOPE",
+    "legacyEightPageScope": "PRESERVED",
+    "scopedDeletion": "REMOVES_ONLY_SELECTED_GROUND_TRUTH_SCOPE",
+    "sourceDocumentOpened": false,
+    "externalProviderCalls": 0,
+    "fullPdfProcessed": false,
+    "productCodeCommitted": false
+  },
+  "electron": {
+    "nativeControlAvailable": false,
+    "visualE2E": "E2E_BLOCKED_ENVIRONMENT",
+    "canvasPreview": "NOT_VERIFIED_ELECTRON",
+    "syntheticApprovalPersistence": "NOT_RUN_NATIVE_UI_UNAVAILABLE",
+    "rendererReloadWithLiveScheduler": "NOT_TESTED_RUNTIME",
+    "mainElectronProcessCrash": "NOT_TESTED",
+    "stateRecovery": "NOT_CERTIFIED"
+  },
+  "humanValidation": {
+    "pages": {
+      "5": "PENDING_HUMAN_VALIDATION",
+      "8": "PENDING_HUMAN_VALIDATION",
+      "9": "PENDING_HUMAN_VALIDATION",
+      "11": "PENDING_HUMAN_VALIDATION"
+    },
+    "automaticMetrics": "NOT_MEASURED",
+    "localEncryptedSessionPrepared": true,
+    "humanConfirmed": false
+  },
+  "tests": {
+    "focused": {"filesPassed": 3, "testsPassed": 21},
+    "fullSuite": {"filesPassed": 49, "filesSkipped": 1, "testsPassed": 740, "testsSkipped": 1},
+    "lint": "PASS",
+    "isolatedRendererBuild": "PASS_WITH_EXISTING_CHUNK_WARNINGS",
+    "electronJavaScriptSyntax": "PASS",
+    "gitDiffCheck": "PASS_WITH_PREEXISTING_LINE_ENDING_WARNINGS",
+    "nvidiaIntegration": "SKIPPED"
+  },
+  "security": {
+    "gitleaksHostVersion": "8.30.1",
+    "officialDevkitGitleaksPolicy": "UNAVAILABLE",
+    "skySecurityGateVersion": "1.0.0_REQUIRED_UNAVAILABLE",
+    "evidenceContract": "SkySecurityGate Evidence v1 UNAVAILABLE",
+    "gate": "BLOCKED"
+  },
+  "gates": {
+    "sourceFingerprint": "RECORDED",
+    "electronVisual": "E2E_BLOCKED_ENVIRONMENT",
+    "previewRestoration": "NOT_CERTIFIED",
+    "syntheticProfileIsolation": "PASS_UNIT_ONLY_RUNTIME_UNVERIFIED",
+    "humanGroundTruth": "PENDING_HUMAN_VALIDATION",
+    "rendererReattachment": "UNIT_CONTRACT_ONLY",
+    "mainElectronProcessCrash": "NOT_TESTED",
+    "multidocE2E": "NOT_RECERTIFIED_THIS_FOLLOWUP",
+    "queueResilience": "NOT_TESTED_RUNTIME",
+    "automaticQuality": "NOT_CERTIFIED",
+    "orchestrationQuality": "NOT_CERTIFIED",
+    "security": "BLOCKED",
+    "release": "BLOCKED"
+  }
+}
