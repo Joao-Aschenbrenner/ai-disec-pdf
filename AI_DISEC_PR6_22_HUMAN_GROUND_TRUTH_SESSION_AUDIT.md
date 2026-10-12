@@ -111,7 +111,7 @@ Os gates oficiais continuam indisponíveis, conforme a auditoria de referência.
 | SkySecurityGate 1.0.0 | `BLOCKED` | O responsável pelo DevKit deve disponibilizar a ferramenta/adaptador versionado e executá-lo no repositório autorizado. |
 | SkySecurityGate Evidence v1 | `BLOCKED` | O responsável pelo DevKit deve fornecer o contrato e writer v1 e produzir evidência sanitizada válida. |
 
-Uma instalação isolada do Gitleaks padrão não substitui a política oficial e não autoriza o gate `SECURITY`. Nenhum segredo, documento, imagem, OCR, nome, identificador, valor, caminho privado ou hash do PDF real foi incluído nesta publicação.
+Gitleaks 8.30.1, com regras padrão, examinou somente cópias temporárias desses dois documentos e encontrou **zero candidatos**. Isso é uma checagem complementar de publicação: não substitui a política DevKit e não autoriza o gate `SECURITY`. Nenhum segredo, documento, imagem, OCR, nome, identificador, valor, caminho privado ou hash do PDF real foi incluído nesta publicação.
 
 ## J. Decisões por gate
 

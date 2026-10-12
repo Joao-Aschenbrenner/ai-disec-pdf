@@ -82,6 +82,13 @@
     "release": "BLOCKED"
   },
   "security": {
+    "supplementalGitleaks": {
+      "version": "8.30.1",
+      "rules": "DEFAULT_ONLY",
+      "scannedPublicationDocuments": 2,
+      "candidateCount": 0,
+      "officialGateSubstitution": false
+    },
     "officialDevkitGitleaksPolicy": "UNAVAILABLE",
     "skySecurityGateVersion": "1.0.0_REQUIRED_UNAVAILABLE",
     "evidenceContract": "SkySecurityGate Evidence v1 UNAVAILABLE",
