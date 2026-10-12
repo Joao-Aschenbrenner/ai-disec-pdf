@@ -1,0 +1,222 @@
+{
+  "schema": "ai-disec.pr6-24-segmentation-laya-audit-summary.v1",
+  "auditDate": "2026-10-12",
+  "repository": {
+    "url": "https://github.com/Joao-Aschenbrenner/ai-disec-pdf",
+    "localBranch": "fix/exhaustive-vision-failover",
+    "head": "91591a75ffd4e616f0a56633377e76efdfc408d1",
+    "workingTreeWasDirtyBeforeAudit": true,
+    "localBranchBehindUpstreamByCommits": 24,
+    "testedSourceFileCount": 172,
+    "testedSourceFingerprintSha256": "edff2c8213ad26615ab187819e2b66ddbc960cc084aef06c9501b70e640c2dd5",
+    "pr623SourceFingerprintSha256": "7c5af01e016fc6ecbb47607fd27bd1f218bcf4fc53d0f1234df0eaeebc1dc15d",
+    "fingerprintMatchesPr623": false
+  },
+  "experiment": {
+    "productionFeatureFlag": "AI_DISEC_EXPERIMENTAL_LOCAL_LAYOUT",
+    "default": "OFF",
+    "fullMunicipalPdfProcessed": false,
+    "municipalPagesRenderedAndProcessed": [5, 8, 9, 11],
+    "privateInputMethod": "PDF read locally; selected page renders held in memory; no separate private PDF/raster copy written",
+    "externalProviderCallsWithPrivateDocuments": 0,
+    "ocrCacheModeForPrivatePages": "readOnly",
+    "networkBlockedForLayoutWorkers": true
+  },
+  "syntheticSegmentation": {
+    "fixtureCount": 14,
+    "developmentCount": 4,
+    "holdoutCount": 10,
+    "holdoutScorableCount": 7,
+    "holdoutConfusion": {
+      "truePositiveSplit": 6,
+      "falsePositiveSplit": 0,
+      "falseNegativeSplit": 0,
+      "trueNegativeSingle": 1
+    },
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "holdoutAbstentions": 3,
+    "holdoutAbstentionRate": 0.3,
+    "allFixtureAbstentions": 5,
+    "allFixtureAbstentionRate": 0.3571428571,
+    "singleDocumentFixtureCount": 7,
+    "falseAutomaticSplitsOnSingleDocumentFixtures": 0,
+    "minimumKnownCropBoxIoU": 0.917,
+    "fixtureCoverage": [
+      "stacked payslips with/without blank band",
+      "thin rule and side-by-side documents",
+      "internal whitespace and repeated payroll table headers",
+      "invoice with multiple monetary values",
+      "scan noise, small rotation, reduced resolution, partial illegibility",
+      "similar sections and repeated identity"
+    ],
+    "referenceAuthoredIndependentlyOfOcrAndSegmenter": true,
+    "tableContinuityOutcome": "single_or_needs_review; no automatic split in single-document fixtures",
+    "limitations": [
+      "Only seven holdout cases were scorable for automatic split/single decisions.",
+      "Three ambiguous holdout cases abstained and are not counted as correct automatic decisions.",
+      "Synthetic results do not certify real-document accuracy."
+    ]
+  },
+  "publicLayoutBenchmark": {
+    "dataset": "DocLayNet v1.2 test split",
+    "sampleSize": 20,
+    "groundTruthRegions": 248,
+    "groundTruthClasses": 11,
+    "matching": {
+      "sameCanonicalClassRequired": true,
+      "boxIoUThreshold": 0.5
+    },
+    "engines": {
+      "doclingLayoutHeron": {
+        "version": "2.138.0",
+        "precision": 0.9545454545,
+        "recall": 0.1693548387,
+        "f1": 0.2876712329,
+        "meanMatchedIoU": 0.9685263925,
+        "groundTruthRegions": 248,
+        "predictedRegions": 44,
+        "truePositive": 42,
+        "falsePositive": 2,
+        "falseNegative": 206,
+        "classes": {
+          "table": {"tp": 26, "fp": 1, "fn": 2},
+          "picture": {"tp": 16, "fp": 1, "fn": 3},
+          "text": {"tp": 0, "fp": 0, "fn": 124},
+          "pageHeader": {"tp": 0, "fp": 0, "fn": 19}
+        },
+        "latencyMs": {"coldSingleImageSmoke": 4916.9, "meanIncludingFirstLoad": 888.9, "p50": 642.8, "p95": 898.7},
+        "pythonProcessRssPeakBytes": 1141817344,
+        "pythonProcessCurrentRssBytes": 1064337408,
+        "pythonCpuTimeMs": 131187.5,
+        "modelArtifactCacheBytes": 342991211,
+        "documentIteratorItems": 44,
+        "readingOrderAccuracyScored": false,
+        "device": "CPU",
+        "configuredThreads": 4,
+        "ocrEnabled": false,
+        "tableFormerEnabled": false,
+        "remoteServices": false,
+        "runtimeFailures": 0
+      },
+      "paddlePpDocLayoutS": {
+        "paddleVersion": "3.3.1",
+        "paddleXVersion": "3.7.2",
+        "precisionOnMappedClasses": 0.7868852459,
+        "recallOnMappedClasses": 0.3870967742,
+        "f1OnMappedClasses": 0.5189189189,
+        "meanMatchedIoUOnMappedClasses": 0.8814324325,
+        "groundTruthRegions": 248,
+        "scoredPredictions": 122,
+        "rawPredictions": 128,
+        "unmappedPredictionsExcludedFromClassScore": 6,
+        "unmappedLabelCounts": {"content": 5, "number": 1},
+        "truePositive": 96,
+        "falsePositive": 26,
+        "falseNegative": 152,
+        "classes": {
+          "table": {"tp": 15, "fp": 3, "fn": 13},
+          "pageHeader": {"tp": 1, "fp": 4, "fn": 18},
+          "text": {"tp": 67, "fp": 8, "fn": 57}
+        },
+        "latencyMs": {"mean": 3653.9, "p50": 3533.1, "p95": 4044.3},
+        "workerPrivateBytesPeak": 256147456,
+        "workerRssPeakBytes": 355160064,
+        "workerCpuTimeMsAcross20Images": 31984,
+        "workerModelCacheBytes": 18326236,
+        "device": "CPU",
+        "configuredThreads": 4,
+        "oneIsolatedWorkerPerImage": true,
+        "networkBlocked": true,
+        "ocrEnabled": false,
+        "runtimeFailures": 0,
+        "readingOrderEvaluated": false
+      }
+    },
+    "cordV2": {
+      "sampleSize": 20,
+      "completed": 20,
+      "failed": 0,
+      "layoutQualityScored": false,
+      "reason": "public word/semantic labels do not supply layout-class or multi-document boundary ground truth"
+    },
+    "comparisonLimits": [
+      "PP-DocLayout-S labels were mapped only where directly or semantically equivalent to DocLayNet classes.",
+      "Six unmatched PP labels were reported separately and excluded from the mapped-class score.",
+      "Docling used a resident converter while PP used a fresh isolated Python worker per image; wall latency reflects these different tested lifecycles.",
+      "Neither public dataset measures multi-document segmentation accuracy."
+    ]
+  },
+  "privatePageObservation": [
+    {"page": 5, "status": "NEEDS_REVIEW", "ocrLineCount": 70, "layoutRegionCount": 1, "candidateCount": 1, "moneyRelationshipCount": 1, "elapsedMs": 10312, "failureCode": null},
+    {"page": 8, "status": "NEEDS_REVIEW", "ocrLineCount": 32, "layoutRegionCount": 1, "candidateCount": 1, "moneyRelationshipCount": 0, "elapsedMs": 7312, "failureCode": null},
+    {"page": 9, "status": "NEEDS_REVIEW", "ocrLineCount": 60, "layoutRegionCount": 0, "candidateCount": 2, "moneyRelationshipCount": 0, "elapsedMs": 6886, "failureCode": null},
+    {"page": 11, "status": "NEEDS_REVIEW", "ocrLineCount": 56, "layoutRegionCount": 0, "candidateCount": 1, "moneyRelationshipCount": 0, "elapsedMs": 7153, "failureCode": null}
+  ],
+  "localLayaContract": {
+    "endToEndFixture": true,
+    "advisor": "mock",
+    "networkCalls": 0,
+    "candidatesSent": 2,
+    "candidateScopedMoneyRelationships": 2,
+    "invalidOrCrossDocumentCitationsRejected": true,
+    "approvalLikeResponseRejected": true,
+    "advisorFailureBecomesNeedsReview": true,
+    "humanVerificationEstablished": false,
+    "realLayaAccuracyCertified": false
+  },
+  "testsAndBuild": {
+    "focusedSegmentationAndEvidenceTests": {"passed": 46, "files": 5},
+    "workerAndSchedulerFailureTests": {"passed": 20, "files": 2},
+    "fullSuite": {"passed": 759, "skipped": 1, "filesPassed": 54, "filesSkipped": 1},
+    "typescriptLint": "PASS",
+    "isolatedClientBuild": "PASS_WITH_WARNINGS",
+    "isolatedServerBundles": "PASS_WITH_CJS_IMPORT_META_WARNINGS",
+    "isolatedModelCatalogCopy": "PASS",
+    "gitDiffCheck": "PASS_WITH_LINE_ENDING_WARNINGS",
+    "electronPackagedRuntimeTested": false,
+    "fullPdfProcessed": false,
+    "providerCalls": false
+  },
+  "resources": {
+    "privatePageNodeRssPeakBytes": 589332480,
+    "privatePagePaddleWorkerPrivateBytesPeak": 263745536,
+    "privatePagePaddleWorkerRssPeakBytes": 342601728,
+    "globalEightGbMemoryCapCertified": false,
+    "electronMemoryMeasured": false,
+    "partialDefaultCacheMetadataFilesPreserved": 15,
+    "partialDefaultCacheMetadataBytes": 106976,
+    "pythonEnvironmentDiskFootprintMeasured": false,
+    "fullDoclingArtifactsIsolatedAndPreserved": true,
+    "existingPaddleArtifactsReused": true
+  },
+  "gates": {
+    "SEGMENTATION_HOLDOUT": {"status": "PASS", "limits": "7 scorable holdout cases; 3 ambiguous holdouts abstained"},
+    "TABLE_PROTECTION": {"status": "PASS", "limits": "synthetic only; no false split among 7 one-document fixtures"},
+    "CROP_GEOMETRY": {"status": "PASS", "limits": "synthetic minimum IoU 0.917; private crop PDFs not validated"},
+    "EVIDENCE_PROVENANCE": {"status": "PASS", "limits": "validated against injected local/mock evidence"},
+    "LAYA_CONTRACT_E2E": {"status": "PASS", "limits": "mocked advisor; no real service accuracy claim"},
+    "QUEUE_RESILIENCE": {"status": "PASS", "limits": "targeted tests, no production soak in this audit"},
+    "CPU_MEMORY": {"status": "PASS_WITH_LIMITS", "limits": "four-thread CPU measurements; no global 8 GB or Electron certification"},
+    "REAL_DOCUMENT_QUALITY": {"status": "NOT_CERTIFIED", "limits": "no independent human truth; all selected pages remain in review"},
+    "SECURITY": {"status": "BLOCKED", "limits": "official DevKit Gitleaks policy, SkySecurityGate 1.0.0, and Evidence v1 unavailable"},
+    "RELEASE": {"status": "BLOCKED", "limits": "security, real-document quality, and packaged-runtime certification remain open"}
+  },
+  "decision": "EXPERIMENTAL_ONLY_NO_PRODUCTION_PROMOTION",
+  "privacy": {
+    "privateOcrOrImagePublished": false,
+    "privateDocumentHashPublished": false,
+    "personalFieldsOrAmountsPublished": false,
+    "privateDocumentSentToExternalProvider": false,
+    "temporaryArtifactsRemainLocal": true
+  },
+  "sources": [
+    "https://huggingface.co/datasets/docling-project/DocLayNet-v1.2",
+    "https://huggingface.co/docling-project/docling-layout-heron/tree/main",
+    "https://github.com/docling-project/docling/blob/main/docs/reference/cli.md",
+    "https://github.com/docling-project/docling/blob/main/docs/usage/advanced_options.md",
+    "https://github.com/clovaai/cord/blob/master/LICENSE-CC-BY",
+    "https://github.com/PaddlePaddle/PaddleX/blob/release/3.2/docs/module_usage/tutorials/ocr_modules/layout_detection.md"
+  ]
+}
