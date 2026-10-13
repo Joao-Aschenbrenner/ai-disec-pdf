@@ -1,0 +1,122 @@
+{
+  "audit": "AI DISEC PDF packaged runtime certification after PR6.25",
+  "date": "2026-10-13",
+  "scope": "isolated Windows Electron package; synthetic fixture only",
+  "repository": "https://github.com/Joao-Aschenbrenner/ai-disec-pdf",
+  "tested_checkout": {
+    "branch": "fix/exhaustive-vision-failover",
+    "head": "91591a75ffd4e616f0a56633377e76efdfc408d1",
+    "working_tree": "dirty before smoke; local OCR preflight change and test remain uncommitted",
+    "referenced_pr625_commit_available_locally": false,
+    "referenced_pr625_source_fingerprint": "1792982c28cf09977f5540a1e9078f39be5894cfea3c7f2931659e56191a6730",
+    "tested_package_manifest_sha256": "e9ba93efde5c94e88e7aa2f7eef59674631811a04f7b07676ebfde05b8d08d5e",
+    "manifest_method": "deterministic SHA-256 manifest of 16 package files: executable, Electron main/preload/helper, package metadata, model catalog and complete dist; test profile excluded",
+    "server_bundle_sha256": "e0e9c6c650f87057672a9a4db248f41e22a867c25e11f62ca65ed309867182b8",
+    "renderer_bundle_sha256": "065c9ec5066ff5ae916407c502237f4db2ba74ee75631cff8c11cf4286bddc9b"
+  },
+  "synthetic_only": {
+    "fixture": "PR6-18 synthetic multidocument fixture",
+    "external_provider_calls": 0,
+    "municipal_pdf_processed": false,
+    "test_approvals_created": 0,
+    "zip_files_created": 0
+  },
+  "startup": {
+    "electron_started": true,
+    "renderer_accessible": true,
+    "embedded_server_bind": "127.0.0.1",
+    "readiness_endpoint": "/health",
+    "readiness_http_status": 200,
+    "pdfjs_canvas_rendered": true,
+    "cold_start_readiness_seconds_observed": 7.2,
+    "startup_gate": "PASS",
+    "server_readiness_gate": "PASS"
+  },
+  "ocr": {
+    "local_language_models_present": [],
+    "required_local_language_models": [
+      "por",
+      "eng"
+    ],
+    "preflight_error_code": "OCR_LOCAL_LANGUAGE_DATA_MISSING",
+    "post_fix_ocr_http_status": 503,
+    "post_fix_ocr_latency_ms": 7,
+    "initial_missing_model_request_observation": "pending_over_one_minute_then_cancelled",
+    "offline_ocr_gate": "REJECT"
+  },
+  "layout": {
+    "feature_flag_enabled": false,
+    "packaged_workers_present": false,
+    "python_runtime_and_model_available": false,
+    "offline_layout_gate": "REJECT"
+  },
+  "classification_and_export": {
+    "pages_detected": 1,
+    "synthetic_result": "generic OUTRO",
+    "review_state": "NEEDS_REVIEW",
+    "distinct_document_cards": 1,
+    "two_document_visualization_certified": false,
+    "synthetic_export_gate": "REJECT",
+    "no_approval_or_zip_was_performed": true
+  },
+  "recovery": {
+    "graceful_electron_restart_tested": true,
+    "health_after_restart_http_status": 200,
+    "checkpoint_restored": "COMPLETED, 1/1",
+    "result_and_card_restored": false,
+    "source_reopen_needed": true,
+    "reopen_triggered_new_job_or_extract_call": false,
+    "renderer_transport_disconnect_tested": true,
+    "main_electron_process_crash_tested": false,
+    "python_worker_termination_tested": false,
+    "ocr_timeout_with_models_present_tested": false,
+    "process_recovery_gate": "REJECT"
+  },
+  "memory": {
+    "host_logical_processors": 8,
+    "host_ram_gib": 32,
+    "target_certified": false,
+    "sample_count": 10,
+    "electron_process_group_count": 4,
+    "peak_aggregate_working_set_mib": 1138.9,
+    "peak_aggregate_private_mib": 192.1,
+    "python_worker_included": false,
+    "memory_target_gate": "NOT_CERTIFIED"
+  },
+  "engineering_validation": {
+    "focused_tests_passed": 3,
+    "full_suite_passed": 765,
+    "full_suite_skipped": 1,
+    "test_files": 56,
+    "lint": "PASS",
+    "isolated_build": "PASS_WITH_WARNINGS",
+    "original_checkout_git_diff_check": "PASS_EXIT_CODE_0"
+  },
+  "packaging": {
+    "asar": false,
+    "risk": "external scripts and resources are accessible; tamper resistance is reduced",
+    "configuration_changed": false,
+    "automatic_model_download": false
+  },
+  "security_and_release": {
+    "devkit_gitleaks_policy_available": false,
+    "sky_security_gate_1_0_0_available": false,
+    "evidence_v1_contract_available": false,
+    "security_gate": "BLOCKED",
+    "real_document_quality_gate": "NOT_CERTIFIED",
+    "release_gate": "BLOCKED",
+    "supplementary_secret_scan": "Gitleaks 8.30.1 default rules; exact publication worktree; no findings; not official DevKit policy"
+  },
+  "decisions": {
+    "PACKAGED_STARTUP": "PASS",
+    "SERVER_READINESS": "PASS",
+    "OFFLINE_OCR": "REJECT",
+    "OFFLINE_LAYOUT": "REJECT",
+    "SYNTHETIC_EXPORT": "REJECT",
+    "PROCESS_RECOVERY": "REJECT",
+    "MEMORY_TARGET": "NOT_CERTIFIED",
+    "REAL_DOCUMENT_QUALITY": "NOT_CERTIFIED",
+    "SECURITY": "BLOCKED",
+    "RELEASE": "BLOCKED"
+  }
+}
