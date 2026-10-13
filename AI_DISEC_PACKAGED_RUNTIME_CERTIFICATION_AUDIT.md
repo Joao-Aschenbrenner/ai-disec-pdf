@@ -36,7 +36,7 @@ O fingerprint identifica o artefato e permite distinguir o pacote testado. Não 
 |---|---|---|
 | Electron main | Processo do executável observado no perfil isolado | Iniciou |
 | Servidor embutido | Listener observado em 127.0.0.1, porta definida pelo perfil de smoke | Iniciou |
-| Readiness | GET http://127.0.0.1:<porta>/health | HTTP 200 |
+| Readiness | GET /health em 127.0.0.1 na porta isolada do smoke | HTTP 200 |
 | Renderer | DOM/CDP local acessível; título do app presente | Iniciou |
 | PDF.js | Worker local carregado e canvas renderizado | Funcionou para fixture sintético |
 | Modelos | Refresh no perfil sintético foi ignorado pelo guard local | Nenhuma consulta externa |
