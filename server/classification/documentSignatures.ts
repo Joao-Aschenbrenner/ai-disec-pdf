@@ -149,8 +149,28 @@ const signatures: Signature[] = [
   }
 ];
 
+const PAYROLL_REPORT_TITLE = /RELATORIO\s+(?:DA\s+)?FOLHA\s+(?:DE\s+)?PAGAMENTOS?/;
+const PAYROLL_ROSTER_HEADER = /NOME\s+CPF\s+AGENCIA\s*\/?\s*CONTA\s+ACEITO\s+TIPO\s+VALOR/;
+const THIRTEENTH_PAYROLL = /(?:13(?:O|º|°)?\s*SALARIO|PGTO\s*13|PAGAMENTO\s+13)/;
+
 export function classifyBySignatures(input: string): SignatureResult {
   const text = normalize(input);
+  const hasPayrollTitle = PAYROLL_REPORT_TITLE.test(text);
+  const hasPayrollRoster = PAYROLL_ROSTER_HEADER.test(text);
+  if (hasPayrollTitle || hasPayrollRoster) {
+    const isThirteenth = THIRTEENTH_PAYROLL.test(text);
+    const documentClass: DocumentClass = isThirteenth ? "FOPAG_13_RESUMO" : "FOPAG_RESUMO";
+    return {
+      documentClass,
+      score: 0.99,
+      evidence: [
+        hasPayrollTitle ? "hard:payroll-report-title" : "hard:payroll-roster-column-header",
+        ...(isThirteenth ? ["13-salary-report"] : []),
+      ],
+      hardGuard: true,
+    };
+  }
+
   let best: SignatureResult = { documentClass: "OUTRO", score: 0, evidence: [], hardGuard: false };
 
   for (const sig of signatures) {
@@ -174,4 +194,16 @@ export function classifyBySignatures(input: string): SignatureResult {
   }
 
   return best;
+}
+
+/** Return only fixed, non-sensitive signature labels that can be sent to Laya. */
+export function classificationCueLabels(input: string): string[] {
+  const signature = classifyBySignatures(input);
+  const labels = signature.evidence.map(item => {
+    if (item === "hard:payroll-report-title") return "RELATORIO FOLHA PAGAMENTOS";
+    if (item === "hard:payroll-roster-column-header") return "NOME CPF AGENCIA/CONTA ACEITO TIPO VALOR";
+    if (item === "13-salary-report") return "13 SALARIO";
+    return item.replace(/^hard:/, "");
+  });
+  return [...new Set(labels)];
 }

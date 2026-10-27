@@ -128,6 +128,13 @@ export function generatePageFilename(
   if (opts.showPageNumber) parts.push(`pag${index + 1}`);
   if (opts.showType) parts.push(typeLabel(metadata));
 
+  const isPayrollSummary =
+    metadata.documentClass === "FOPAG_RESUMO" ||
+    metadata.documentClass === "FOPAG_13_RESUMO";
+  const isStatement =
+    metadata.documentClass === "EXTRATO_CC" ||
+    metadata.documentClass === "EXTRATO_INVESTIMENTO";
+
   if (isInvoice && opts.showNotaNumber && metadata.notaNumber) {
     parts.push(shortEntity(metadata.notaNumber));
   }
@@ -135,12 +142,20 @@ export function generatePageFilename(
   if (opts.showCompanyName && metadata.documentType !== "nao_identificado") {
     let name = "";
     if (
-      (metadata.documentClass === "HOLERITE" || metadata.documentClass === "HOLERITE_13" || metadata.documentType === "folha_pagamento") &&
+      (metadata.documentClass === "HOLERITE" || metadata.documentClass === "HOLERITE_13" || (!metadata.documentClass && metadata.documentType === "folha_pagamento")) &&
       opts.showPessoaNome &&
       metadata.pessoaNome
     ) {
       name = shortEntity(metadata.pessoaNome);
-    } else if (metadata.companyName) {
+    } else if (isPayrollSummary && metadata.fieldEvidence?.companyNameLocation === "employer_field" && metadata.companyName) {
+      name = shortEntity(metadata.companyName);
+    } else if (
+      isStatement &&
+      ["institution_header", "account_holder_header"].includes(metadata.fieldEvidence?.companyNameLocation || "") &&
+      metadata.companyName
+    ) {
+      name = shortEntity(metadata.companyName);
+    } else if (!isPayrollSummary && !isStatement && metadata.companyName) {
       name = shortEntity(metadata.companyName);
     }
     if (name) parts.push(name);
@@ -151,7 +166,7 @@ export function generatePageFilename(
     metadata.documentClass === "HOLERITE_13" ||
     (!metadata.documentClass && metadata.documentType === "folha_pagamento");
 
-  if (opts.showValor && !isIndividualPayroll) {
+  if (opts.showValor && !isIndividualPayroll && !isPayrollSummary && !isStatement) {
     parts.push(metadata.valor !== null && metadata.valor !== undefined
       ? parseFloat(metadata.valor.toString()).toFixed(2)
       : "sem_valor");
@@ -167,6 +182,13 @@ export function generateCombinedFilename(
 ): string {
   const opts = { ...DEFAULT_FILENAME_OPTIONS, ...options };
   const parts: string[] = [];
+  const firstClass = docs[0]?.documentClass;
+  const homogeneous = docs.length > 0 && docs.every(doc => doc.documentClass === firstClass);
+  if (homogeneous && ["FOPAG_RESUMO", "FOPAG_13_RESUMO", "EXTRATO_CC", "EXTRATO_INVESTIMENTO"].includes(firstClass || "")) {
+    if (opts.showPageNumber) parts.push(`pag${index + 1}`);
+    if (opts.showType) parts.push(typeLabel(docs[0]));
+    return finalizeFilename(parts);
+  }
 
   if (opts.showPageNumber) parts.push(`pag${index + 1}`);
   parts.push(String(docs.length));

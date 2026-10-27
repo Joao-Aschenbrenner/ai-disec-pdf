@@ -4,7 +4,7 @@ import os from "os";
 import crypto from "crypto";
 import { DocumentClass } from "./documentTaxonomy";
 
-const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
+const DATA_DIR = process.env.AI_DISEC_DATA_DIR || path.join(os.homedir(), ".ai-disec-pdf");
 const STORE_FILE = path.join(DATA_DIR, "learning-store.json");
 const MAX_EXAMPLES = 3000;
 

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -6,13 +6,13 @@ import { startServer, stopServer } from "../server/server";
 
 const PORT = 3018;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
-const DATA_DIR = path.join(os.homedir(), ".ai-disec-pdf");
+const DATA_DIR = process.env.AI_DISEC_DATA_DIR || path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 const savedSettings = fs.existsSync(SETTINGS_FILE)
   ? fs.readFileSync(SETTINGS_FILE, "utf8")
   : null;
 
-describe("Falhas transitórias só rotacionam após repetição na sessão", () => {
+describe("Falha de modelo avança imediatamente para o próximo Vision", () => {
   let originalFetch: typeof globalThis.fetch;
   let testImageBase64 = "";
   const usedModels: string[] = [];
@@ -29,6 +29,12 @@ describe("Falhas transitórias só rotacionam após repetição na sessão", () 
 
     await startServer(PORT, false);
     testImageBase64 = Buffer.from("fake-jpeg-fixture").toString("base64");
+  });
+
+  beforeEach(async () => {
+    usedModels.length = 0;
+    await originalFetch(`${BASE_URL}/api/test/clear-runtime`, { method: "POST" }).catch(() => {});
+    vi.restoreAllMocks();
 
     vi.spyOn(globalThis as any, "fetch").mockImplementation(
       (url: string | URL, init?: any) => {
@@ -41,8 +47,9 @@ describe("Falhas transitórias só rotacionam após repetição na sessão", () 
         if (urlStr.includes("integrate.api.nvidia.com/v1/models")) {
           return Promise.resolve(new Response(JSON.stringify({
             data: [
-              { id: "fixture-vision-rot-novo", created: 200, modalities: ["text", "image"] },
-              { id: "fixture-vision-rot-antigo", created: 100, modalities: ["text", "image"] },
+              { id: "fixture-vision-a", created: 300, modalities: ["text", "image"] },
+              { id: "fixture-vision-b", created: 200, modalities: ["text", "image"] },
+              { id: "fixture-vision-c", created: 100, modalities: ["text", "image"] },
             ],
           }), { status: 200, headers: { "Content-Type": "application/json" } }));
         }
@@ -51,7 +58,7 @@ describe("Falhas transitórias só rotacionam após repetição na sessão", () 
           const body = init?.body ? JSON.parse(init.body) : {};
           usedModels.push(body.model);
 
-          if (body.model === "fixture-vision-rot-novo") {
+          if (body.model === "fixture-vision-a") {
             if (behavior === "timeout") {
               return Promise.resolve(new Response(JSON.stringify({
                 error: { message: "upstream timeout" },
@@ -76,6 +83,7 @@ describe("Falhas transitórias só rotacionam após repetição na sessão", () 
                   pessoaNome: null,
                   notaNumber: null,
                   valor: 100.5,
+                  fieldEvidence: { companyNameLocation: "issuer_header", valorLocation: "document_total" },
                 }),
               },
             }],
@@ -88,8 +96,6 @@ describe("Falhas transitórias só rotacionam após repetição na sessão", () 
         }));
       }
     );
-
-    await new Promise(resolve => setTimeout(resolve, 100));
   });
 
   afterAll(() => {
@@ -104,11 +110,9 @@ describe("Falhas transitórias só rotacionam após repetição na sessão", () 
     { key: "empty" as const, name: "resposta vazia" },
     { key: "invalid" as const, name: "formato incompatível" },
   ]) {
-    it(`${scenario.name}: 1ª falha mantém modelo; 2ª consecutiva rotaciona`, async () => {
+    it(`${scenario.name}: A falha -> B é usado imediatamente na MESMA página`, async () => {
       behavior = scenario.key;
-      usedModels.length = 0;
 
-      await fetch(`${BASE_URL}/api/test/clear-runtime`, { method: "POST" });
       const refresh = await fetch(`${BASE_URL}/api/models/runtime/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -116,40 +120,44 @@ describe("Falhas transitórias só rotacionam após repetição na sessão", () 
       });
       expect(refresh.status).toBe(200);
 
+      const runtimePageId = `page-${scenario.key}`;
+
       const first = await fetch(`${BASE_URL}/api/extract`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
+        body: JSON.stringify({
+          pdfBase64: testImageBase64,
+          originalName: "fixture.pdf",
+          pageIndex: 0,
+          runtimePageId,
+        }),
       });
 
-      expect(first.status).toBe(scenario.key === "timeout" ? 504 : 503);
+      expect(first.status).toBe(503);
       const firstBody = await first.json();
       expect(firstBody.retryable).toBe(true);
-      expect(firstBody.modelRotated).toBeUndefined();
-      expect(usedModels[0]).toBe("fixture-vision-rot-novo");
+      expect(firstBody.modelRotated).toBe(true);
+      expect(firstBody.modelExhausted).toBe(false);
+      expect(firstBody.modelsTried).toBe(1);
+      expect(firstBody.candidateCount).toBeGreaterThanOrEqual(2);
+      expect(firstBody.providerPressure).toBe(scenario.key === "timeout");
+      expect(usedModels[0]).toBe("fixture-vision-a");
 
       const second = await fetch(`${BASE_URL}/api/extract`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
+        body: JSON.stringify({
+          pdfBase64: testImageBase64,
+          originalName: "fixture.pdf",
+          pageIndex: 0,
+          runtimePageId,
+        }),
       });
 
-      expect(second.status).toBe(503);
+      expect(second.status).toBe(200);
       const secondBody = await second.json();
-      expect(secondBody.retryable).toBe(true);
-      expect(secondBody.modelRotated).toBe(true);
-      expect(usedModels[1]).toBe("fixture-vision-rot-novo");
-
-      const third = await fetch(`${BASE_URL}/api/extract`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdfBase64: testImageBase64, originalName: "fixture.pdf", pageIndex: 0 }),
-      });
-
-      expect(third.status).toBe(200);
-      const thirdBody = await third.json();
-      expect(thirdBody.companyName).toBe("Mock");
-      expect(usedModels[2]).toBe("fixture-vision-rot-antigo");
+      expect(secondBody.companyName).toBe("Mock");
+      expect(usedModels[1]).toBe("fixture-vision-b");
     });
   }
 });

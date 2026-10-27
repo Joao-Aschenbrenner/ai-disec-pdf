@@ -21,6 +21,25 @@ describe("Laya desktop integration", () => {
     expect(main).toContain('app.on("before-quit"');
   });
 
+  it("encerra o serviço OpenCode iniciado pelo app ao sair", () => {
+    const main = read("electron/main.cjs");
+    expect(main).toContain("function stopOpenCodeService()");
+    expect(main).toContain('execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"]');
+    const quitHandler = main.slice(main.indexOf('app.on("before-quit"'));
+    expect(quitHandler).toContain("stopOpenCodeService();");
+  });
+
+  it("inicia OpenCode e instala seu CLI sem shell de comandos", () => {
+    const main = read("electron/main.cjs");
+    expect(main).toContain("function resolveWindowsNpmCommand()");
+    expect(main).toContain("function resolveOpenCodeCommand(executable)");
+    expect(main).toContain('spawn(npmCommand.executable, [...npmCommand.argsPrefix, "install", "--global", "opencode-ai"]');
+    expect(main).toContain("spawn(command.executable, [...command.argsPrefix, \"serve\"");
+    expect(main).toContain("shell: false");
+    expect(main).not.toContain("shell: isWindowsCommandShim(executable)");
+    expect(main).not.toContain('shell: process.platform === "win32"');
+  });
+
   it("preload expoe somente IPCs necessários do Laya", () => {
     const preload = read("electron/preload.cjs");
     expect(preload).toContain('layaStatus: () => ipcRenderer.invoke("laya:status")');

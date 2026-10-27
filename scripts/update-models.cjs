@@ -79,7 +79,7 @@ function pruneTiers(entry, models) {
 }
 
 async function fetchJson(url, headers) {
-  const res = await fetch(url, { headers });
+  const res = await fetch(url, { headers, redirect: "error" });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);

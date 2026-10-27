@@ -15,6 +15,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { AdaptivePipeline } from "../src/utils/adaptivePipeline";
 import { pdfBufferToPngBase64 } from "../src/utils/pdfToImage.server";
+import { fetchNoRedirect } from "../noRedirectFetch";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -48,7 +49,7 @@ async function main() {
 
   // 0. Health: Laya obrigatório
   const healthStart = Date.now();
-  const healthRes = await fetch(`${API_URL}/api/classification/health`);
+  const healthRes = await fetchNoRedirect(`${API_URL}/api/classification/health`);
   const health = await healthRes.json().catch(() => ({} as any));
   const layaTime = Date.now() - healthStart;
   if (!healthRes.ok || !health?.laya?.healthy) {
@@ -97,7 +98,7 @@ async function main() {
     text: localTexts[i] || "",
     needsReview: true,
   }));
-  const prepassRes = await fetch(`${API_URL}/api/classification/sequence`, {
+  const prepassRes = await fetchNoRedirect(`${API_URL}/api/classification/sequence`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ pages: pagesPayload }),
@@ -160,13 +161,15 @@ async function main() {
         if (!image) throw new Error("imagem já liberada");
         const requestStart = Date.now();
         try {
-          const res = await fetch(`${API_URL}/api/extract`, {
+          // nosemgrep: typescript.react.security.react-insecure-request.react-insecure-request -- API_URL is fixed to 127.0.0.1; this is a local app-to-server request, not network transport.
+          const res = await fetchNoRedirect(`${API_URL}/api/extract`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               pdfBase64: image,
               originalName: "benchmark.pdf",
               pageIndex: p.index,
+              runtimePageId: `index:${p.index}`,
               v3Hint: v3Hints.get(p.index),
             }),
           });
@@ -180,6 +183,10 @@ async function main() {
               statusCode: res.status,
               retryable: typeof errJson.retryable === "boolean" ? errJson.retryable : [408, 429, 500, 502, 503, 504, 529].includes(res.status),
               modelRotated: errJson.modelRotated === true,
+              modelExhausted: errJson.modelExhausted === true,
+              candidateCount: Number(errJson.candidateCount || 0),
+              modelsTried: Number(errJson.modelsTried || 0),
+              modelsRemaining: Number(errJson.modelsRemaining || 0),
               error: String(errJson.error || `HTTP ${res.status}`),
               providerTimeMs,
               pageIndex: p.index,
@@ -258,7 +265,7 @@ async function main() {
     }));
   let sequenceTime = 0;
   if (finalSequenceInput.length > 1) {
-    const seqRes = await fetch(`${API_URL}/api/classification/sequence`, {
+    const seqRes = await fetchNoRedirect(`${API_URL}/api/classification/sequence`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ pages: finalSequenceInput }),

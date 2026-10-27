@@ -13,19 +13,27 @@ describe("Runtime model automation", () => {
     expect(server).toContain('app.post("/api/models/runtime/refresh-all"');
     expect(server).toContain("RUNTIME_SESSION_STARTED_AT");
     expect(server).toContain("refreshedAt < RUNTIME_SESSION_STARTED_AT");
-    expect(app).toContain('fetch("/api/models/runtime/refresh-all", { method: "POST" })');
+    expect(app).toContain('import { fetchNoRedirect } from "../noRedirectFetch";');
+
+    const refreshAllCalls = app.match(/\b(?:fetchNoRedirect|fetch)\("\/api\/models\/runtime\/refresh-all", \{ method: "POST" \}\)/g) || [];
+    expect(refreshAllCalls).toEqual([
+      'fetchNoRedirect("/api/models/runtime/refresh-all", { method: "POST" })',
+      'fetchNoRedirect("/api/models/runtime/refresh-all", { method: "POST" })',
+    ]);
+    expect(read("noRedirectFetch.ts")).toContain('return fetch(url, { ...init, redirect: "error" });');
   });
 
-  it("seleciona o candidato mais recente e rotaciona quando necessário", () => {
+  it("faz failover exaustivo por página entre candidatos Vision", () => {
     const server = read("server/server.ts");
 
     expect(server).toContain("activeIndex: 0");
-    expect(server).toContain("rotateRuntimeModel(provider");
-    expect(server).toContain("shouldRotateModel(aiResponse.status, errBody, provider)");
-    // Resposta vazia/saída incompatível só rotaciona na 2ª ocorrência consecutiva.
-    expect(server).toContain('rotateRuntimeModel(provider, "empty-response-repeated")');
-    expect(server).toContain('rotateRuntimeModel(provider, "invalid-json-output-repeated")');
-    expect(server).toContain("modelRotated: true");
+    expect(server).toContain("type PageFailoverCycle");
+    expect(server).toContain("failoverRuntimeModel");
+    expect(server).toContain("buildModelFailoverResponse");
+    expect(server).toContain("modelExhausted: true");
+    expect(server).toContain("modelsRemaining");
+    expect(server).toContain('app.post("/api/models/runtime/reset-page-failover"');
+    expect(server).toContain("shouldExhaustiveFailover");
   });
 
   it("usa metadados de modalidade quando disponíveis", () => {

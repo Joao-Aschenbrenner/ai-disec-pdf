@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     return () => ipcRenderer.removeListener("ollama:pull-progress", cb);
   },
 
+  // OpenCode CLI (opt-in): global install and loopback server lifecycle
+  openCodeStatus: () => ipcRenderer.invoke("opencode:status"),
+  openCodeInstall: () => ipcRenderer.invoke("opencode:install"),
+  openCodeStart: () => ipcRenderer.invoke("opencode:start"),
+
   // Laya local: instalação isolada + lifecycle
   layaStatus: () => ipcRenderer.invoke("laya:status"),
   layaInstall: () => ipcRenderer.invoke("laya:install"),

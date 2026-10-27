@@ -1,4 +1,5 @@
 import { CLASS_LABELS, DocumentClass } from "./documentTaxonomy";
+import { fetchNoRedirect } from "../../noRedirectFetch";
 
 export interface LayaDecision {
   available: boolean;
@@ -41,7 +42,7 @@ export async function classifyWithLaya(text: string, timeoutMs = 2500): Promise<
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(`${baseUrl}/v1/systemone`, {
+    const response = await fetchNoRedirect(`${baseUrl}/v1/systemone`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -95,7 +96,7 @@ export async function getLayaHealth(timeoutMs = 500): Promise<{ healthy: boolean
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`${baseUrl}/health`, { signal: controller.signal });
+    const response = await fetchNoRedirect(`${baseUrl}/health`, { signal: controller.signal });
     const payload: any = response.ok ? await response.json().catch(() => null) : null;
     return { healthy: response.ok && payload?.status === "ok", url: baseUrl };
   } catch {

@@ -2,7 +2,7 @@ const { app, BrowserWindow, Menu, ipcMain, powerSaveBlocker, powerMonitor, shell
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { execSync, spawn, spawnSync } = require("child_process");
+const { execFileSync, execSync, spawn, spawnSync } = require("child_process");
 
 // Carrega .env antes de qualquer coisa
 try {
@@ -14,6 +14,7 @@ try {
 
 let mainWindow = null;
 let autoUpdater = null;
+let openCodeProcess = null;
 try { autoUpdater = require("electron-updater").autoUpdater; } catch (e) { console.warn("[main] electron-updater not available:", e.message); }
 
 let processingBlockerId = null;
@@ -439,6 +440,197 @@ ipcMain.handle("ollama:pull-model", async (event, model) => {
   }
 });
 
+// ═══ OpenCode CLI — instalação opcional + serviço local de modelos ═══
+function findOpenCodePath() {
+  try {
+    const locator = process.platform === "win32" ? "where.exe" : "which";
+    const result = spawnSync(locator, ["opencode"], { encoding: "utf8", windowsHide: true, timeout: 5000 });
+    const located = result.status === 0
+      ? String(result.stdout || "").split(/\r?\n/).map(line => line.trim()).find(Boolean)
+      : null;
+    if (located) return located;
+    if (process.platform === "win32" && process.env.APPDATA) {
+      const npmShim = path.join(process.env.APPDATA, "npm", "opencode.cmd");
+      if (fs.existsSync(npmShim)) return npmShim;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function isWindowsCommandShim(filePath) {
+  return process.platform === "win32" && /\.(?:cmd|bat)$/i.test(String(filePath || ""));
+}
+
+function findWindowsCommandPath(name) {
+  if (process.platform !== "win32") return null;
+  try {
+    const result = spawnSync("where.exe", [name], { encoding: "utf8", windowsHide: true, timeout: 5000 });
+    return result.status === 0
+      ? String(result.stdout || "").split(/\r?\n/).map(line => line.trim()).find(Boolean) || null
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveWindowsNpmCommand() {
+  const npmPath = findWindowsCommandPath("npm");
+  const nodePath = findWindowsCommandPath("node");
+  if (!npmPath || !nodePath) return null;
+  const cliPath = path.join(path.dirname(npmPath), "node_modules", "npm", "bin", "npm-cli.js");
+  if (!fs.existsSync(cliPath)) return null;
+  return { executable: nodePath, argsPrefix: [cliPath] };
+}
+
+function resolveOpenCodeCommand(executable) {
+  if (!executable) return null;
+  if (!isWindowsCommandShim(executable)) return { executable, argsPrefix: [] };
+
+  const npmBinDirectory = path.join(app.getPath("appData"), "npm");
+  const expectedShim = path.join(npmBinDirectory, "opencode.cmd");
+  if (String(executable).toLowerCase() !== expectedShim.toLowerCase()) return null;
+
+  const packageRoot = path.join(npmBinDirectory, "node_modules", "opencode-ai");
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  if (!fs.existsSync(packageJsonPath)) return null;
+
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+    const binEntry = typeof packageJson.bin === "string" ? packageJson.bin : packageJson.bin?.opencode;
+    if (typeof binEntry !== "string" || binEntry.replace(/\\/g, "/") !== "bin/opencode.exe") return null;
+    const entrypoint = path.join(packageRoot, "bin", "opencode.exe");
+    if (!fs.existsSync(entrypoint)) return null;
+    return { executable: entrypoint, argsPrefix: [] };
+  } catch {
+    return null;
+  }
+}
+
+function stopOpenCodeService() {
+  const child = openCodeProcess;
+  openCodeProcess = null;
+  if (!child?.pid || child.exitCode !== null || child.signalCode !== null) return false;
+
+  try {
+    if (process.platform === "win32") {
+      // OpenCode may be launched through npm's .cmd shim. Kill that exact
+      // process tree so the detached server cannot outlive the desktop app.
+      execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+        timeout: 5000,
+      });
+    } else {
+      child.kill("SIGTERM");
+    }
+    return true;
+  } catch (error) {
+    try { child.kill(); } catch {}
+    console.warn("[opencode] Não foi possível encerrar o serviço local:", error.message);
+    return false;
+  }
+}
+
+async function openCodeHealth(timeoutMs = 700) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch("http://127.0.0.1:4096/global/health", { signal: controller.signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+ipcMain.handle("opencode:status", async () => {
+  const executable = findOpenCodePath();
+  const health = await openCodeHealth();
+  let version = health?.version || null;
+  if (!version && executable) {
+    try {
+      const command = resolveOpenCodeCommand(executable);
+      const result = command && spawnSync(command.executable, [...command.argsPrefix, "--version"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5000,
+        shell: false,
+      });
+      if (result.status === 0) version = String(result.stdout || "").trim().split(/\r?\n/)[0] || null;
+    } catch {}
+  }
+  return { installed: Boolean(executable || health?.healthy), path: executable, running: Boolean(health?.healthy), version };
+});
+
+ipcMain.handle("opencode:install", async () => {
+  if (findOpenCodePath()) return { ok: true, alreadyInstalled: true };
+  return new Promise(resolve => {
+    try {
+      // Fixed package and arguments. Installation starts only from the user's
+      // explicit click in Settings; no renderer-provided command is executed.
+      const npmCommand = process.platform === "win32"
+        ? resolveWindowsNpmCommand()
+        : { executable: "npm", argsPrefix: [] };
+      if (!npmCommand) {
+        resolve({ ok: false, error: "Não foi possível localizar Node.js e npm com segurança. Instale o Node.js e tente novamente." });
+        return;
+      }
+      const child = spawn(npmCommand.executable, [...npmCommand.argsPrefix, "install", "--global", "opencode-ai"], {
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        shell: false,
+        env: {
+          ...process.env,
+          ...(process.platform === "win32" ? { npm_config_prefix: path.join(app.getPath("appData"), "npm") } : {}),
+        },
+      });
+      let stderr = "";
+      child.stderr?.on("data", chunk => { stderr += chunk.toString(); });
+      child.once("error", error => resolve({ ok: false, error: error.message }));
+      child.once("close", code => {
+        if (code === 0 && findOpenCodePath()) resolve({ ok: true });
+        else resolve({ ok: false, error: code === 0 ? "Instalação concluída; reinicie o app para atualizar o PATH." : (stderr.trim().slice(-700) || `npm terminou com código ${code}`) });
+      });
+    } catch (error) {
+      resolve({ ok: false, error: error.message });
+    }
+  });
+});
+
+ipcMain.handle("opencode:start", async () => {
+  const existingHealth = await openCodeHealth();
+  if (existingHealth?.healthy) return { ok: true, alreadyRunning: true, version: existingHealth.version };
+  const executable = findOpenCodePath();
+  if (!executable) return { ok: false, error: "OpenCode CLI não foi encontrado. Instale-o nesta tela e reinicie o app." };
+  const command = resolveOpenCodeCommand(executable);
+  if (!command) return { ok: false, error: "Não foi possível resolver o executável do OpenCode com segurança. Reinstale o CLI e tente novamente." };
+  try {
+    const child = spawn(command.executable, [...command.argsPrefix, "serve", "--hostname", "127.0.0.1", "--port", "4096"], {
+      windowsHide: true,
+      stdio: "ignore",
+      shell: false,
+      env: { ...process.env, OPENCODE_DISABLE_AUTOUPDATE: "true" },
+    });
+    child.once("error", error => console.error("[opencode] Falha ao iniciar serviço local:", error.message));
+    child.unref();
+    openCodeProcess = child;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      const health = await openCodeHealth();
+      if (health?.healthy) return { ok: true, version: health.version };
+      if (child.exitCode !== null) break;
+    }
+    stopOpenCodeService();
+    return { ok: false, error: "OpenCode CLI instalado, mas o serviço local não iniciou na porta 4096." };
+  } catch (error) {
+    return { ok: false, error: error.message || "Falha ao iniciar OpenCode." };
+  }
+});
+
 // ═══ Codex OAuth login — Sign in with ChatGPT ═══
 // Fluxo oficial: abre browser para login ChatGPT, callback em localhost:1455,
 // salva token em ~/.codex/auth.json (mesmo formato do Codex CLI).
@@ -688,6 +880,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("before-quit", () => {
+  stopOpenCodeService();
   stopLayaService();
 });
 
