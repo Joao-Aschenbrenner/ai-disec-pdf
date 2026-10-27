@@ -142,8 +142,27 @@ export function tryExtractLocalMetadata(input: LocalFastPathInput): ExtractedMet
     classificationSource: `local-fast-path:${hint?.source || "unknown"}`,
     classificationEvidence: ["local-fast-path", "embedded-pdf-text", "hard-guard"],
     needsReview: false,
-    layaChecked: true,
+    layaChecked: hint?.layaChecked === true,
     sequenceAdjusted: false,
     requiresVision: false,
   };
+}
+
+export type LocalMetadataFastPathRoute<TFallback> =
+  | { kind: "local"; metadata: ExtractedMetadata }
+  | { kind: "fallback"; fallback: TFallback };
+
+/**
+ * Shared routing seam for production and tests. The fallback is returned, not
+ * executed, so callers can preserve prerequisite work (such as page rendering)
+ * before dispatching the existing visual extraction request.
+ */
+export function routeLocalMetadataFastPath<TFallback>(
+  input: LocalFastPathInput,
+  fallback: TFallback,
+): LocalMetadataFastPathRoute<TFallback> {
+  const metadata = tryExtractLocalMetadata(input);
+  return metadata
+    ? { kind: "local", metadata }
+    : { kind: "fallback", fallback };
 }

@@ -133,11 +133,18 @@ describe("Classification V3 wiring", () => {
     const extractor = read("src/utils/localMetadataExtractor.ts");
     const types = read("src/types.ts");
 
-    expect(app).toContain("tryExtractLocalMetadata");
+    expect(app).toContain("routeLocalMetadataFastPath");
+    expect(app).toContain("const p1 = pass1ByIndex.get(page.sourcePageIndex ?? page.index) || {};");
+    expect(app).toContain("hint: page.v3Hint");
     expect(app).toContain("requiresVision: p1.requiresVision !== false");
     expect(app).toContain("page.v3Hint?.requiresVision !== false");
+    expect(app).toContain("layaChecked: p1.layaChecked === true");
+    expect(app).toContain("layaChecked: page.v3Hint?.layaChecked === true");
     expect(types).toContain("requiresVision?: boolean");
+    expect(types).toContain("layaChecked?: boolean");
     expect(extractor).toContain('hint?.source !== "hard-guard"');
+    expect(extractor).toContain("tryExtractLocalMetadata(input)");
+    expect(extractor).toContain("layaChecked: hint?.layaChecked === true");
     expect(extractor).toContain("confidence < 0.96");
     expect(extractor).toContain('["NFS", "NFE_DANFE", "DARF"]');
     expect(extractor).toContain("if (valor === null || !companyName) return null");

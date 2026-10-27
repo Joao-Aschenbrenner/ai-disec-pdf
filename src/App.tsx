@@ -85,7 +85,7 @@ declare global {
 import { sanitizeFilename, generatePageFilename, generateCombinedFilename, makeWindowsSafeFilename, resolveFilenameConflict } from "./utils/fileHelpers";
 import { pdfBase64ToJpeg } from "./utils/pdfToImage";
 import { extractEmbeddedPdfText, hasUsefulEmbeddedText } from "./utils/pdfLocalText";
-import { tryExtractLocalMetadata } from "./utils/localMetadataExtractor";
+import { routeLocalMetadataFastPath } from "./utils/localMetadataExtractor";
 import { detectStackedDocumentSeparator, splitPdfPageAtRatio } from "./utils/pageSegmenter";
 import { AdaptivePipeline } from "./utils/adaptivePipeline";
 import { runAutoRetryCycles } from "./utils/autoRetry";
@@ -1141,18 +1141,22 @@ export default function App() {
       // obrigatórios da classe foram extraídos por rótulos explícitos.
       // Holerites, scans, correções manuais e qualquer dúvida continuam no
       // fluxo visual atual — precisão vence velocidade.
-      if (!correction && page.segmentIndex === undefined) {
-        const localMetadata = tryExtractLocalMetadata({
-          text: page.localText,
-          hint: page.v3Hint,
-        });
-        if (localMetadata) {
-          console.info(
-            `[local-fast-path] página ${(page.sourcePageIndex ?? page.index) + 1} resolvida sem VLM (${localMetadata.documentClass})`
-          );
-          updatePageStage(id, "confirming", 94);
-          return buildProcessedPage(id, page, localMetadata);
-        }
+      const requestVisualExtraction = (imageBase64: string) =>
+        requestExtraction(imageBase64, page, correction);
+      const localFastPathRoute = !correction && page.segmentIndex === undefined
+        ? routeLocalMetadataFastPath({
+            text: page.localText,
+            hint: page.v3Hint,
+          }, requestVisualExtraction)
+        : { kind: "fallback" as const, fallback: requestVisualExtraction };
+
+      if (localFastPathRoute.kind === "local") {
+        const localMetadata = localFastPathRoute.metadata;
+        console.info(
+          `[local-fast-path] página ${(page.sourcePageIndex ?? page.index) + 1} resolvida sem VLM (${localMetadata.documentClass})`
+        );
+        updatePageStage(id, "confirming", 94);
+        return buildProcessedPage(id, page, localMetadata);
       }
 
       const detailedVisualClasses = new Set([
@@ -1193,7 +1197,7 @@ export default function App() {
       }
 
       updatePageStage(id, "extracting", 62);
-      const result = await requestExtraction(imageBase64, page, correction);
+      const result = await localFastPathRoute.fallback(imageBase64);
       updatePageStage(id, "validating", 82);
 
       // Se o VLM encontrou dois documentos, materializa dois PDFs. Tenta usar o
@@ -1438,6 +1442,7 @@ export default function App() {
           documentClass: p1.documentClass,
           confidence: Number(p1.confidence || 0),
           source: p1.source || "no-local-text",
+          layaChecked: p1.layaChecked === true,
           sequenceAdjusted: false,
           requiresVision: p1.requiresVision !== false,
         },
@@ -1488,6 +1493,7 @@ export default function App() {
           source: seq.source || page.v3Hint?.source,
           previousClass: previous?.documentClass || null,
           nextClass: next?.documentClass || null,
+          layaChecked: page.v3Hint?.layaChecked === true,
           sequenceAdjusted: Boolean(seq.sequenceAdjusted),
           sequenceReason: seq.sequenceReason || null,
           requiresVision: Boolean(seq.sequenceAdjusted)
