@@ -1,3 +1,4 @@
+import { fetchNoRedirect } from "../noRedirectFetch";
 import { useState, useRef, useEffect, ChangeEvent, DragEvent } from "react";
 import { PDFDocument } from "pdf-lib";
 import JSZip from "jszip";
@@ -213,7 +214,7 @@ function OllamaAutoSetup() {
       if (!pulled.ok) throw new Error(pulled.error || "Falha ao preparar modelo local.");
       setReady(true);
       setMessage("Ollama Local pronto. O app selecionará e rotacionará o modelo automaticamente.");
-      fetch("/api/models/runtime/refresh", {
+      fetchNoRedirect("/api/models/runtime/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: "LOCAL_OLLAMA" }),
@@ -269,7 +270,7 @@ function OpenCodeSetup({ model, setModel }: { model: string; setModel: (model: s
     try {
       const started = await api?.openCodeStart?.();
       if (!started?.ok) throw new Error(started?.error || "Não foi possível iniciar OpenCode.");
-      const response = await fetch("/api/opencode/models");
+      const response = await fetchNoRedirect("/api/opencode/models");
       const result = await response.json();
       const available = Array.isArray(result.models) ? result.models as string[] : [];
       setModels(available);
@@ -653,7 +654,7 @@ export default function App() {
 
   // Carrega settings ao montar
   useEffect(() => {
-    fetch("/api/settings").then(async sRes => {
+    fetchNoRedirect("/api/settings").then(async sRes => {
       const s = await sRes.json();
       const provider = VISIBLE_PROVIDERS.has(String(s.provider || "").toUpperCase())
         ? String(s.provider).toUpperCase()
@@ -672,7 +673,7 @@ export default function App() {
         // Provider legado/oculto: busca a chave correta do fallback visível,
         // sem reutilizar a credencial do provider anterior.
         try {
-          const keyRes = await fetch(`/api/settings?provider=${provider}`);
+          const keyRes = await fetchNoRedirect(`/api/settings?provider=${provider}`);
           const keyData = await keyRes.json();
           setSettingsApiKey(typeof keyData.apiKey === "string" ? keyData.apiKey : "");
         } catch {
@@ -681,10 +682,10 @@ export default function App() {
       }
 
       // Todo início de sessão atualiza os catálogos dos providers configurados.
-      fetch("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
+      fetchNoRedirect("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
     }).catch(() => {
       setTimeout(() => setShowFirstTimeWarning(true), 800);
-      fetch("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
+      fetchNoRedirect("/api/models/runtime/refresh-all", { method: "POST" }).catch(() => {});
     });
   }, []);
 
@@ -1001,7 +1002,7 @@ export default function App() {
     else runSignal?.addEventListener("abort", abortFromRun, { once: true });
 
     try {
-      const response = await fetch("/api/extract", {
+      const response = await fetchNoRedirect("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: requestController.signal,
@@ -1327,7 +1328,7 @@ export default function App() {
 
   const resetPageModelFailover = async (page: SplitPage) => {
     try {
-      await fetch("/api/models/runtime/reset-page-failover", {
+      await fetchNoRedirect("/api/models/runtime/reset-page-failover", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1384,7 +1385,7 @@ export default function App() {
   };
 
   const runV3Prepasses = async (pages: SplitPage[], signal?: AbortSignal): Promise<SplitPage[]> => {
-  const healthRes = await fetch("/api/classification/health", { signal });
+  const healthRes = await fetchNoRedirect("/api/classification/health", { signal });
     const health = await healthRes.json().catch(() => ({}));
     if (!healthRes.ok || !health?.laya?.healthy) {
       const error: any = new Error("Classification V3 exige Laya ativo. Abra Configurações e inicie o Laya.");
@@ -1414,7 +1415,7 @@ export default function App() {
     });
     setSplitPages(withText);
 
-    const pass1Res = await fetch("/api/classification/pass1", {
+    const pass1Res = await fetchNoRedirect("/api/classification/pass1", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1451,7 +1452,7 @@ export default function App() {
     setSplitPages(prelim);
 
     // PASSAGEM 2: usa anterior/atual/próxima para páginas sem cabeçalho.
-    const seqRes = await fetch("/api/classification/sequence", {
+    const seqRes = await fetchNoRedirect("/api/classification/sequence", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1514,7 +1515,7 @@ export default function App() {
 
     // Laya é requisito explícito da V3.
     try {
-      const healthRes = await fetch("/api/classification/health");
+      const healthRes = await fetchNoRedirect("/api/classification/health");
       const health = await healthRes.json().catch(() => ({}));
       if (!healthRes.ok || !health?.laya?.healthy) {
         setShowSettings(true);
@@ -1694,7 +1695,7 @@ export default function App() {
             : page
         ));
 
-        const seqRes = await fetch("/api/classification/sequence", {
+        const seqRes = await fetchNoRedirect("/api/classification/sequence", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pages: finalSequenceInput }),
@@ -2009,7 +2010,7 @@ export default function App() {
     const nextClass = splitPages[index + 1]?.metadata?.documentClass || splitPages[index + 1]?.v3Hint?.documentClass || null;
 
     try {
-      const res = await fetch("/api/learning/confirm", {
+      const res = await fetchNoRedirect("/api/learning/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2050,11 +2051,11 @@ export default function App() {
     setSettingsApiKey("");
     setSettingsModel("");
     try {
-      const res = await fetch(`/api/settings?provider=${encodeURIComponent(provider)}`);
+      const res = await fetchNoRedirect(`/api/settings?provider=${encodeURIComponent(provider)}`);
       const data = await res.json();
       setSettingsApiKey(typeof data.apiKey === "string" ? data.apiKey : "");
       setSettingsModel(typeof data.model === "string" ? data.model : "");
-      fetch("/api/models/runtime/refresh", {
+      fetchNoRedirect("/api/models/runtime/refresh", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider }),
@@ -2068,14 +2069,14 @@ export default function App() {
   const saveSettings = async () => {
     setSavingSettings(true);
     try {
-      const res = await fetch("/api/settings", {
+      const res = await fetchNoRedirect("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider: settingsProvider, apiKey: settingsApiKey, model: settingsProvider === "OPENCODE" ? settingsModel : "", modelTier: "auto" }),
       });
       if (res.ok) {
         setCurrentProvider(settingsProvider);
-        fetch("/api/models/runtime/refresh", {
+        fetchNoRedirect("/api/models/runtime/refresh", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ provider: settingsProvider }),

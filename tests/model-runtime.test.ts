@@ -13,7 +13,14 @@ describe("Runtime model automation", () => {
     expect(server).toContain('app.post("/api/models/runtime/refresh-all"');
     expect(server).toContain("RUNTIME_SESSION_STARTED_AT");
     expect(server).toContain("refreshedAt < RUNTIME_SESSION_STARTED_AT");
-    expect(app).toContain('fetch("/api/models/runtime/refresh-all", { method: "POST" })');
+    expect(app).toContain('import { fetchNoRedirect } from "../noRedirectFetch";');
+
+    const refreshAllCalls = app.match(/\b(?:fetchNoRedirect|fetch)\("\/api\/models\/runtime\/refresh-all", \{ method: "POST" \}\)/g) || [];
+    expect(refreshAllCalls).toEqual([
+      'fetchNoRedirect("/api/models/runtime/refresh-all", { method: "POST" })',
+      'fetchNoRedirect("/api/models/runtime/refresh-all", { method: "POST" })',
+    ]);
+    expect(read("noRedirectFetch.ts")).toContain('return fetch(url, { ...init, redirect: "error" });');
   });
 
   it("faz failover exaustivo por página entre candidatos Vision", () => {

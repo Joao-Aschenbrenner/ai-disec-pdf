@@ -11,6 +11,7 @@ import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { collapsePayrollRoster, collapseStatementTransactions } from "./classification/payrollRoster";
 import { isConfirmedTwoDocumentArray, isStrongSingleInvoiceArray, mergeExtractionArray } from "./classification/extractionArray";
 import { getLayaHealth } from "./classification/layaClient";
+import { fetchNoRedirect } from "../noRedirectFetch";
 
 dotenv.config();
 
@@ -543,7 +544,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
   if (provider === "LOCAL_OLLAMA") {
     const localUrl = "http://localhost:11434";
     assertSafeProviderUrl(`${localUrl}/api/tags`, provider);
-    const res = await fetch(`${localUrl}/api/tags`);
+    const res = await fetchNoRedirect(`${localUrl}/api/tags`);
     if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`);
     const data = await res.json() as any;
     return Array.from(new Set(
@@ -565,7 +566,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
-      const response = await fetch(endpoint, { headers, signal: controller.signal });
+      const response = await fetchNoRedirect(endpoint, { headers, signal: controller.signal });
       if (!response.ok) throw new Error(`OpenCode HTTP ${response.status}`);
       const data = await response.json() as any;
       return filterOpenCodeVisionFreeModels(data);
@@ -612,7 +613,7 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    const res = await fetch(url, { headers, signal: controller.signal });
+    const res = await fetchNoRedirect(url, { headers, signal: controller.signal });
     if (!res.ok) throw new Error(`${provider} model-list HTTP ${res.status}`);
     const data = await res.json() as any;
 
@@ -1264,7 +1265,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              : {};
 
            try {
-             return await fetch(endpoint, {
+             return await fetchNoRedirect(endpoint, {
                method: "POST",
                headers: { "Content-Type": "application/json", "Authorization": `Bearer ${config.apiKey}` },
                body: JSON.stringify({
@@ -1290,7 +1291,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             assertSafeProviderUrl(googleUrl, provider);
             console.log(`[AI] Enviando para Google Gemini (${googleModel})...`);
             const startTime = Date.now();
-            aiResponse = await fetch(googleUrl, {
+            aiResponse = await fetchNoRedirect(googleUrl, {
              method: "POST",
              headers: { "Content-Type": "application/json" },
              body: JSON.stringify({
@@ -1305,7 +1306,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             console.log(`[AI] Enviando para OpenAI (${openaiModel})...`);
             const startTime = Date.now();
             assertSafeProviderUrl("https://api.openai.com/v1/chat/completions", provider);
-            aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+            aiResponse = await fetchNoRedirect("https://api.openai.com/v1/chat/completions", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
               body: JSON.stringify({
@@ -1324,7 +1325,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             console.log(`[AI] Enviando para Anthropic Claude (${anthropicModel})...`);
             const startTime = Date.now();
             assertSafeProviderUrl("https://api.anthropic.com/v1/messages", provider);
-            aiResponse = await fetch("https://api.anthropic.com/v1/messages", {
+            aiResponse = await fetchNoRedirect("https://api.anthropic.com/v1/messages", {
               method: "POST",
               headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
               body: JSON.stringify({
@@ -1343,7 +1344,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             // depois classifica o texto com um modelo de texto (mistral-small-latest).
             const startTime = Date.now();
             assertSafeProviderUrl("https://api.mistral.ai/v1/ocr", provider);
-            const ocrRes = await fetch("https://api.mistral.ai/v1/ocr", {
+            const ocrRes = await fetchNoRedirect("https://api.mistral.ai/v1/ocr", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
               body: JSON.stringify({
@@ -1362,7 +1363,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
             const extractedText = (ocrData.pages || []).map((p: any) => p.markdown || "").join("\n");
             console.log(`[AI] Mistral OCR extraiu ${extractedText.length} chars, classificando...`);
             // 2º passo: classificar o texto extraído com modelo de texto
-            const classifyRes = await fetch("https://api.mistral.ai/v1/chat/completions", {
+            const classifyRes = await fetchNoRedirect("https://api.mistral.ai/v1/chat/completions", {
               method: "POST",
               headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
               body: JSON.stringify({
@@ -1417,7 +1418,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              let sessionId = "";
              console.log(`[AI] Enviando para OpenCode (${providerId}/${modelId})...`);
              try {
-               const sessionResponse = await fetch(`${baseUrl}/session`, {
+               const sessionResponse = await fetchNoRedirect(`${baseUrl}/session`, {
                  method: "POST",
                  headers: openCodeHeaders,
                  body: JSON.stringify({ title: "AI Disec PDF - classificação de página" }),
@@ -1429,7 +1430,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                  const session = await sessionResponse.json() as any;
                  sessionId = String(session.id || "");
                  if (!sessionId) throw new Error("OpenCode não retornou uma sessão válida.");
-                 const messageResponse = await fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/message`, {
+                 const messageResponse = await fetchNoRedirect(`${baseUrl}/session/${encodeURIComponent(sessionId)}/message`, {
                    method: "POST",
                    headers: openCodeHeaders,
                    body: JSON.stringify({
@@ -1458,7 +1459,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                clearTimeout(timeout);
                unlinkClientAbort();
                if (sessionId) {
-                 fetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}`, {
+                 fetchNoRedirect(`${baseUrl}/session/${encodeURIComponent(sessionId)}`, {
                    method: "DELETE",
                    headers: openCodeHeaders,
                  }).catch(() => {});
@@ -1474,7 +1475,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
               // Verifica se o modelo está baixado antes de chamar /api/chat
               try {
-                const tagsRes = await fetch(`${ollamaConfig.baseUrl}/api/tags`, { method: "GET", signal: requestAbortController.signal });
+                const tagsRes = await fetchNoRedirect(`${ollamaConfig.baseUrl}/api/tags`, { method: "GET", signal: requestAbortController.signal });
                 if (tagsRes.ok) {
                   const tagsData = await tagsRes.json() as any;
                   const installed = (tagsData.models || []).map((m: any) => m.name || m.model);
@@ -1492,7 +1493,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
 
               const startTime = Date.now();
               assertSafeProviderUrl(`${ollamaConfig.baseUrl}/api/chat`, provider);
-              aiResponse = await fetch(`${ollamaConfig.baseUrl}/api/chat`, {
+              aiResponse = await fetchNoRedirect(`${ollamaConfig.baseUrl}/api/chat`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
