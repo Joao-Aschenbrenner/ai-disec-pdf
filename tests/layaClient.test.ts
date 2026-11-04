@@ -2,50 +2,61 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyWithLaya, getLayaHealth } from "../server/classification/layaClient";
 
 const originalLayaUrl = process.env.LAYA_URL;
+const originalLayaApiKey = process.env.LAYA_API_KEY;
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   if (originalLayaUrl === undefined) delete process.env.LAYA_URL;
   else process.env.LAYA_URL = originalLayaUrl;
+  if (originalLayaApiKey === undefined) delete process.env.LAYA_API_KEY;
+  else process.env.LAYA_API_KEY = originalLayaApiKey;
 });
 
-describe("Laya URL safety", () => {
-  it("rejects non-loopback URLs before making a request", async () => {
-    process.env.LAYA_URL = "http://169.254.169.254/latest/meta-data";
-    const fetchMock = vi.fn();
+describe("Laya HTTP fail-closed policy", () => {
+  it("does not POST text or accept a healthy response from an unverified loopback listener", async () => {
+    process.env.LAYA_URL = "http://127.0.0.1:8123";
+    process.env.LAYA_API_KEY = "synthetic-laya-key-do-not-send";
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: "ok",
+        answers: { document_class: { choice: "HOLERITE", confidence: 0.99 } },
+      }),
+    });
     vi.stubGlobal("fetch", fetchMock);
 
-    const decision = await classifyWithLaya("texto administrativo suficientemente longo para teste");
+    const decision = await classifyWithLaya("SYNTHETIC: texto de holerite para validar a política");
     const health = await getLayaHealth();
 
-    expect(decision.available).toBe(false);
-    expect(decision.reason).toContain("loopback");
-    expect(health.healthy).toBe(false);
-    expect(health.url).toBe("http://127.0.0.1:8000");
+    expect(decision).toMatchObject({
+      available: false,
+      code: "LOCAL_SERVICE_IDENTITY_UNVERIFIED",
+    });
+    expect(health).toMatchObject({
+      healthy: false,
+      url: "http://127.0.0.1:8000",
+      code: "LOCAL_SERVICE_IDENTITY_UNVERIFIED",
+    });
+    expect(JSON.stringify({ decision, health })).not.toContain("synthetic-laya-key-do-not-send");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("allows the configured loopback service", async () => {
-    process.env.LAYA_URL = "http://127.0.0.1:8123";
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          answers: { document_class: { choice: "HOLERITE", confidence: 0.9 } },
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ status: "ok" }),
-      });
+  it("cannot be unlocked by LAYA_URL, LAYA_API_KEY, or repeated attempts", async () => {
+    process.env.LAYA_URL = "http://localhost:9999/custom-path";
+    process.env.LAYA_API_KEY = "synthetic-laya-key-do-not-send";
+    const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const decision = await classifyWithLaya("texto administrativo suficientemente longo para teste");
-    const health = await getLayaHealth();
+    const outcomes = await Promise.all([
+      classifyWithLaya("SYNTHETIC: texto administrativo de tamanho suficiente"),
+      classifyWithLaya("SYNTHETIC: texto administrativo de tamanho suficiente", 1),
+      getLayaHealth(1),
+    ]);
 
-    expect(decision).toMatchObject({ available: true, documentClass: "HOLERITE" });
-    expect(health).toEqual({ healthy: true, url: "http://127.0.0.1:8123" });
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "http://127.0.0.1:8123/v1/systemone", expect.any(Object));
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:8123/health", expect.any(Object));
+    expect(outcomes[0]).toMatchObject({ available: false, code: "LOCAL_SERVICE_IDENTITY_UNVERIFIED" });
+    expect(outcomes[1]).toMatchObject({ available: false, code: "LOCAL_SERVICE_IDENTITY_UNVERIFIED" });
+    expect(outcomes[2]).toMatchObject({ healthy: false, code: "LOCAL_SERVICE_IDENTITY_UNVERIFIED" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

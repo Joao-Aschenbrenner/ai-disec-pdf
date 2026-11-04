@@ -201,7 +201,7 @@ describe("payroll report and visual evidence guards", () => {
     expect(isConfirmedTwoDocumentArray(forms)).toBe(true);
   });
 
-  it("envia ao Laya somente rótulos estruturais, sem PII nem valores das linhas", async () => {
+  it("não transmite documento, valores nem PII ao Laya enquanto a identidade não é verificada", async () => {
     const secretName = "NOME PESSOA TESTE";
     const secretAmount = "987654.32";
     const raw = {
@@ -220,6 +220,8 @@ describe("payroll report and visual evidence guards", () => {
       fieldEvidence: { companyNameLocation: "employer_field" },
     };
 
+    // Proteção preservada: os rótulos estruturais enviáveis continuam livres
+    // de PII e de valores — função pura, verificada independentemente do transporte.
     const evidence = buildLayaClassificationEvidence(raw);
     expect(evidence).toContain("layout=multi_row_table");
     expect(evidence).toContain("AGENCIA/CONTA");
@@ -227,6 +229,9 @@ describe("payroll report and visual evidence guards", () => {
     expect(evidence).not.toContain(secretName);
     expect(evidence).not.toContain(secretAmount);
 
+    // Política fail-closed (P0.41): nenhum POST HTTP pode ocorrer. O mock
+    // registra qualquer tentativa para PROVAR ausência de transmissão —
+    // um erro/503 não seria evidência suficiente.
     const calls: Array<{ url: string; body: string }> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       calls.push({ url: String(input), body: String(init?.body || "") });
@@ -236,18 +241,27 @@ describe("payroll report and visual evidence guards", () => {
     }));
 
     const routed = await applyDocumentRoutingV3(raw);
-    const body = JSON.parse(calls[0].body);
-    expect(calls[0].url).toContain("/v1/systemone");
-    expect(body.state.body).toContain("layout=multi_row_table");
-    expect(body.state.body).not.toContain(secretName);
-    expect(body.state.body).not.toContain(secretAmount);
-    expect(routed).toMatchObject({ documentClass: "FOPAG_RESUMO", pessoaNome: null, valor: null });
+    expect(calls).toHaveLength(0);
+    for (const call of calls) {
+      expect(call.body).not.toContain(secretName);
+      expect(call.body).not.toContain(secretAmount);
+    }
+    // Nenhuma decisão/confiança pode provir do transporte não verificado:
+    // o roteamento cai no fluxo local autorizado (hard guard de folha).
+    expect(routed).toMatchObject({
+      documentClass: "FOPAG_RESUMO",
+      classificationSource: "hard-guard",
+      layaConfidence: 0,
+      pessoaNome: null,
+      valor: null,
+    });
   });
 
-  it("usa layout bank_ledger para validar resposta Laya de extrato com 84%", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+  it("layout bank_ledger sem Laya verificado usa o fallback autorizado e ignora a confiança HTTP", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       answers: { document_class: { choice: "EXTRATO_CC", answer_confidence: 0.84 } },
-    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
 
     const routed = await applyDocumentRoutingV3({
       classificationText: "DATA DESCRICAO VALOR SALDO",
@@ -255,12 +269,15 @@ describe("payroll report and visual evidence guards", () => {
       fieldEvidence: { valorLocation: "transaction_row" },
       valor: null,
     });
+    // Nenhum POST é realizado e a resposta fictícia de 84% nunca é utilizada:
+    // comportamento demonstrado no P0.44A (contrato fail-closed aprovado).
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(routed).toMatchObject({
-      documentClass: "EXTRATO_CC",
-      documentType: "extrato",
-      classificationSource: "laya",
-      needsReview: false,
-      layaConfidence: 0.84,
+      documentClass: "OUTRO",
+      documentType: "outros",
+      classificationSource: "fallback",
+      needsReview: true,
+      layaConfidence: 0,
       valor: null,
       pessoaNome: null,
     });

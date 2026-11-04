@@ -102,12 +102,25 @@ describe("fetchNoRedirect", () => {
 });
 
 describe("redirect policy wiring", () => {
-  it("routes server and Laya HTTP calls through the shared guard", () => {
-    for (const relativePath of ["server/server.ts", "server/classification/layaClient.ts", "src/App.tsx", "scripts/benchmark-adaptive.ts"]) {
+  it("routes HTTP-bearing components through the shared guard", () => {
+    for (const relativePath of ["server/server.ts", "src/App.tsx", "scripts/benchmark-adaptive.ts"]) {
       const source = readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
       expect(source).toContain("fetchNoRedirect(");
       expect(source).not.toMatch(/\bfetch\s*\(/);
     }
+  });
+
+  it("Laya client has no HTTP transport while its identity is unverified", () => {
+    // P0.41 (política fail-closed): o transporte HTTP do Laya foi removido de
+    // propósito. Esta inspeção textual não prova sozinha a ausência de todos
+    // os caminhos de rede possíveis — essa propriedade é também demonstrada
+    // pelos testes comportamentais de tests/layaClient.test.ts (fetch mockado,
+    // zero chamadas) e tests/openCodeFailClosed.test.ts.
+    const client = readFileSync(path.resolve(process.cwd(), "server/classification/layaClient.ts"), "utf8");
+    expect(client).not.toMatch(/\bfetch\s*\(/);
+    expect(client).not.toContain("/v1/systemone");
+    expect(client).not.toContain("LAYA_API_KEY");
+    expect(client).toContain('getLocalHttpDenial("LAYA_HTTP")');
   });
 
   it("preserves the benchmark nosemgrep annotation", () => {

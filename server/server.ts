@@ -11,6 +11,7 @@ import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { collapsePayrollRoster, collapseStatementTransactions } from "./classification/payrollRoster";
 import { isConfirmedTwoDocumentArray, isStrongSingleInvoiceArray, mergeExtractionArray } from "./classification/extractionArray";
 import { getLayaHealth } from "./classification/layaClient";
+import { assertLocalHttpTrusted, getLocalHttpDenial } from "./classification/localHttpTrust";
 import { fetchNoRedirect } from "../noRedirectFetch";
 
 dotenv.config();
@@ -18,6 +19,11 @@ dotenv.config();
 const DEFAULT_PORT = 3001;
 const DATA_DIR = process.env.AI_DISEC_DATA_DIR || path.join(os.homedir(), ".ai-disec-pdf");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
+
+export async function runOpenCodeHttp<T>(operation: () => Promise<T>): Promise<T> {
+  assertLocalHttpTrusted("OPENCODE_HTTP");
+  return operation();
+}
 
 // Mapeia falhas do provedor de IA para status/mensagem amigáveis.
 // Erros de rede (fetch failed, ENOTFOUND etc.) não devem chegar crus ao usuário.
@@ -249,6 +255,8 @@ function getPageFailoverCycle(provider: string, pageKey: string): PageFailoverCy
  * houver e ainda existir no catálogo; senão o candidato ativo global.
  */
 async function getRequestModel(provider: string, apiKey: string, pageKey: string, preferredModel = ""): Promise<string> {
+  if (provider === "OPENCODE") assertLocalHttpTrusted("OPENCODE_HTTP");
+
   // Garante que a página congele a lista de candidatos já indisponíveis no
   // momento em que começa. Um modelo que falhar NESTA página ainda conta como
   // tentativa real dela; páginas futuras já o excluem.
@@ -536,7 +544,9 @@ export function filterOpenCodeVisionFreeModels(data: any): string[] {
   return [...new Set(candidates)];
 }
 
-async function fetchLiveModelCandidates(provider: string, apiKey: string): Promise<string[]> {
+export async function fetchLiveModelCandidates(provider: string, apiKey: string): Promise<string[]> {
+  if (provider === "OPENCODE") assertLocalHttpTrusted("OPENCODE_HTTP");
+
   const catalog = loadModelsCatalog();
   const entry = catalog.providers[provider];
   if (!entry) return catalogCandidates(provider);
@@ -555,24 +565,26 @@ async function fetchLiveModelCandidates(provider: string, apiKey: string): Promi
   }
 
   if (provider === "OPENCODE") {
-    const endpoint = "http://127.0.0.1:4096/provider";
-    assertSafeProviderUrl(endpoint, provider);
-    const headers: Record<string, string> = {};
-    const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
-    if (serverPassword) {
-      const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
-      headers.Authorization = `Basic ${Buffer.from(`${username}:${serverPassword}`).toString("base64")}`;
-    }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    try {
-      const response = await fetchNoRedirect(endpoint, { headers, signal: controller.signal });
-      if (!response.ok) throw new Error(`OpenCode HTTP ${response.status}`);
-      const data = await response.json() as any;
-      return filterOpenCodeVisionFreeModels(data);
-    } finally {
-      clearTimeout(timeout);
-    }
+    return runOpenCodeHttp(async () => {
+      const endpoint = "http://127.0.0.1:4096/provider";
+      assertSafeProviderUrl(endpoint, provider);
+      const headers: Record<string, string> = {};
+      const serverPassword = process.env.OPENCODE_SERVER_PASSWORD;
+      if (serverPassword) {
+        const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
+        headers.Authorization = `Basic ${Buffer.from(`${username}:${serverPassword}`).toString("base64")}`;
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      try {
+        const response = await fetchNoRedirect(endpoint, { headers, signal: controller.signal });
+        if (!response.ok) throw new Error(`OpenCode HTTP ${response.status}`);
+        const data = await response.json() as any;
+        return filterOpenCodeVisionFreeModels(data);
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
   }
 
   const credential = providerCredential(provider, apiKey);
@@ -679,7 +691,9 @@ function initCandidateTelemetry(): CandidateTelemetry {
   };
 }
 
-async function refreshRuntimeModels(provider: string, apiKey: string): Promise<RuntimeModelState> {
+export async function refreshRuntimeModels(provider: string, apiKey: string): Promise<RuntimeModelState> {
+  if (provider === "OPENCODE") assertLocalHttpTrusted("OPENCODE_HTTP");
+
   const fallback = catalogCandidates(provider);
   let live: string[] = [];
 
@@ -1194,6 +1208,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
       const settings = getSettings();
       const apiKey = settings.apiKey || "";
       const providerSetting = (settings.provider || "NVIDIA").toUpperCase();
+      if (providerSetting === "OPENCODE") {
+        const denial = getLocalHttpDenial("OPENCODE_HTTP");
+        return res.status(503).json({ error: denial.message, code: denial.code, retryable: false });
+      }
       // LOCAL_OLLAMA e CODEX (com OAuth) não precisam de apiKey das settings
       if (!apiKey && providerSetting !== "LOCAL_OLLAMA" && providerSetting !== "CODEX" && providerSetting !== "OPENCODE") {
         return res.status(401).json({
@@ -1390,6 +1408,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              aiResponse = await callOpenAICompatible({ provider: "GROQ", model: groqModel, apiKey }, imageBase64, prompt);
              recordTelemetry(provider, groqModel, aiResponse.ok ? "success" : "failure", Date.now() - startTime);
            } else if (provider === "OPENCODE") {
+             assertLocalHttpTrusted("OPENCODE_HTTP");
              requestModel = await getRequestModel("OPENCODE", "", pageFailoverKey, settings.model);
              if (!requestModel) {
                return res.status(503).json({
@@ -1405,12 +1424,15 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              const modelId = requestModel.slice(separator + 1);
              const baseUrl = "http://127.0.0.1:4096";
              assertSafeProviderUrl(`${baseUrl}/session`, provider);
-             const openCodeHeaders: Record<string, string> = { "Content-Type": "application/json" };
-             const openCodePassword = process.env.OPENCODE_SERVER_PASSWORD;
-             if (openCodePassword) {
-               const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
-               openCodeHeaders.Authorization = `Basic ${Buffer.from(`${username}:${openCodePassword}`).toString("base64")}`;
-             }
+             const createOpenCodeHeaders = () => {
+               const headers: Record<string, string> = { "Content-Type": "application/json" };
+               const openCodePassword = process.env.OPENCODE_SERVER_PASSWORD;
+               if (openCodePassword) {
+                 const username = process.env.OPENCODE_SERVER_USERNAME || "opencode";
+                 headers.Authorization = `Basic ${Buffer.from(`${username}:${openCodePassword}`).toString("base64")}`;
+               }
+               return headers;
+             };
              const controller = new AbortController();
              const unlinkClientAbort = linkClientAbort(controller);
              const timeout = setTimeout(() => controller.abort(), 120_000);
@@ -1418,21 +1440,21 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
              let sessionId = "";
              console.log(`[AI] Enviando para OpenCode (${providerId}/${modelId})...`);
              try {
-               const sessionResponse = await fetchNoRedirect(`${baseUrl}/session`, {
+               const sessionResponse = await runOpenCodeHttp(() => fetchNoRedirect(`${baseUrl}/session`, {
                  method: "POST",
-                 headers: openCodeHeaders,
+                 headers: createOpenCodeHeaders(),
                  body: JSON.stringify({ title: "AI Disec PDF - classificação de página" }),
                  signal: controller.signal,
-               });
+               }));
                if (!sessionResponse.ok) {
                  aiResponse = sessionResponse;
                } else {
                  const session = await sessionResponse.json() as any;
                  sessionId = String(session.id || "");
                  if (!sessionId) throw new Error("OpenCode não retornou uma sessão válida.");
-                 const messageResponse = await fetchNoRedirect(`${baseUrl}/session/${encodeURIComponent(sessionId)}/message`, {
+                 const messageResponse = await runOpenCodeHttp(() => fetchNoRedirect(`${baseUrl}/session/${encodeURIComponent(sessionId)}/message`, {
                    method: "POST",
-                   headers: openCodeHeaders,
+                   headers: createOpenCodeHeaders(),
                    body: JSON.stringify({
                      model: { providerID: providerId, modelID: modelId },
                      parts: [
@@ -1441,7 +1463,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                      ],
                    }),
                    signal: controller.signal,
-                 });
+                 }));
                  if (!messageResponse.ok) {
                    aiResponse = messageResponse;
                  } else {
@@ -1459,10 +1481,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                clearTimeout(timeout);
                unlinkClientAbort();
                if (sessionId) {
-                 fetchNoRedirect(`${baseUrl}/session/${encodeURIComponent(sessionId)}`, {
+                 runOpenCodeHttp(() => fetchNoRedirect(`${baseUrl}/session/${encodeURIComponent(sessionId)}`, {
                    method: "DELETE",
-                   headers: openCodeHeaders,
-                 }).catch(() => {});
+                   headers: createOpenCodeHeaders(),
+                 })).catch(() => {});
                }
                recordTelemetry(provider, requestModel, aiResponse?.ok ? "success" : "failure", Date.now() - startTime);
              }
@@ -1790,6 +1812,10 @@ app.post("/api/models/runtime/refresh", async (req, res) => {
   try {
     const settings = getSettings();
     const provider = String(req.body?.provider || settings.provider || "NVIDIA").toUpperCase();
+    if (provider === "OPENCODE") {
+      const denial = getLocalHttpDenial("OPENCODE_HTTP");
+      return res.status(503).json({ error: denial.message, code: denial.code, retryable: false });
+    }
     const apiKey = provider === settings.provider
       ? settings.apiKey
       : (fs.existsSync(SETTINGS_FILE)
@@ -1816,6 +1842,18 @@ app.post("/api/models/runtime/refresh", async (req, res) => {
 
 app.get("/api/models/runtime/status", (req, res) => {
   const provider = String(req.query.provider || getSettings().provider || "NVIDIA").toUpperCase();
+  if (provider === "OPENCODE") {
+    const denial = getLocalHttpDenial("OPENCODE_HTTP");
+    return res.json({
+      provider,
+      ready: false,
+      candidateCount: 0,
+      activeCandidate: 0,
+      refreshedAt: null,
+      code: denial.code,
+      unavailableReason: denial.message,
+    });
+  }
   const state = runtimeModels[provider];
   return res.json({
     provider,
@@ -1866,6 +1904,10 @@ app.post("/api/models/runtime/refresh-all", async (_req, res) => {
     const results: Record<string, { status: string; candidateCount: number }> = {};
 
     await Promise.all(providers.map(async provider => {
+      if (provider === "OPENCODE") {
+        results[provider] = { status: "unavailable", candidateCount: 0 };
+        return;
+      }
       const key = typeof apiKeys[provider] === "string" ? apiKeys[provider] : "";
       const shouldRefresh = Boolean(key) || provider === "LOCAL_OLLAMA" || provider === "CODEX" ||
         (provider === "OPENCODE" && String(data.provider || "").toUpperCase() === "OPENCODE");
@@ -1906,8 +1948,9 @@ app.post("/api/classification/pass1", async (req, res) => {
     const laya = await getLayaHealth(1500);
     if (!laya.healthy) {
       return res.status(503).json({
-        error: "Laya obrigatório para Classification V3. Inicie o Laya em Configurações.",
-        code: "LAYA_REQUIRED"
+        error: laya.reason || "Laya indisponível: identidade do serviço HTTP local não verificada.",
+        code: "LAYA_REQUIRED",
+        serviceCode: laya.code || "LOCAL_SERVICE_IDENTITY_UNVERIFIED",
       });
     }
 
@@ -2092,24 +2135,13 @@ app.get("/api/models", (req, res) => {
 });
 
 app.get("/api/opencode/models", async (_req, res) => {
-  try {
-    const models = await fetchLiveModelCandidates("OPENCODE", "");
-    if (!models.length) {
-      return res.json({
-        available: false,
-        models: [],
-        message: "Conecte um provedor no OpenCode que declare entrada por imagem e custo de entrada/saída igual a zero.",
-      });
-    }
-    return res.json({ available: true, models });
-  } catch (error: any) {
-    return res.status(503).json({
-      available: false,
-      models: [],
-      message: "Inicie o serviço local do OpenCode e conecte um provedor antes de atualizar a lista.",
-      error: error?.message || "OpenCode indisponível",
-    });
-  }
+  const denial = getLocalHttpDenial("OPENCODE_HTTP");
+  return res.status(503).json({
+    available: false,
+    models: [],
+    message: denial.message,
+    code: denial.code,
+  });
 });
 
 // ─── Upload Logs API ──────────────────────────────────
