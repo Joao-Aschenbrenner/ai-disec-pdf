@@ -26,11 +26,21 @@ Use esse contexto SOMENTE para saber quais campos ler. NAO altere a classe.
 
 Sua tarefa é apenas LER e EXTRAIR. Retorne SOMENTE JSON, sem markdown e sem explicações.
 
+IMPORTANTE (resposta curta e completa): comece o JSON pelos CAMPOS (notaNumber, companyName, pessoaNome, valor, fieldEvidence) e escreva classificationText por ÚLTIMO, com no máximo 300 caracteres. Respostas longas são cortadas e perdem os campos.
+
 ${context}
 
-FORMATO:
+FORMATO (nesta ordem exata):
 {
-  "classificationText": "somente titulos, cabecalhos, rotulos e nomes das colunas; nunca copie conteudo de linhas, nomes, documentos, contas, descricoes ou valores",
+  "notaNumber": "numero da nota/documento ou null",
+  "companyName": "prestador/emitente/empregador/titular da conta no cabecalho correto ou null",
+  "pessoaNome": "nome do funcionario em holerite individual ou null",
+  "valor": 1234.56,
+  "fieldEvidence": {
+    "companyNameLocation": "issuer_header | employer_field | institution_header | account_holder_header | transaction_row | unknown",
+    "pessoaNomeLocation": "employee_field | report_employee_row | transaction_party | unknown",
+    "valorLocation": "document_total | employee_row | transaction_row | unknown"
+  },
   "visualEvidence": {
     "layout": "single_form | multi_row_table | bank_ledger | two_individual_forms | other | unknown",
     "columnHeaders": ["rotulos de coluna visiveis, sem dados das linhas"],
@@ -39,21 +49,13 @@ FORMATO:
     "transactionLedgerRows": false,
     "pageMarker": "Pagina 2 de 3 ou null"
   },
-  "fieldEvidence": {
-    "companyNameLocation": "issuer_header | employer_field | institution_header | account_holder_header | transaction_row | unknown",
-    "pessoaNomeLocation": "employee_field | report_employee_row | transaction_party | unknown",
-    "valorLocation": "document_total | employee_row | transaction_row | unknown"
-  },
-  "notaNumber": "numero da nota/documento ou null",
-  "companyName": "prestador/emitente/empregador/titular da conta no cabecalho correto ou null",
-  "pessoaNome": "nome do funcionario em holerite individual ou null",
-  "valor": 1234.56
+  "classificationText": "somente titulos, cabecalhos e rotulos; MAXIMO 300 caracteres; nunca copie conteudo de linhas, nomes, documentos, contas, descricoes ou valores"
 }
 
 REGRAS:
 1. NAO escolha documentType e NAO escolha documentClass.
 2. NAO invente. Campo ilegivel = null.
-3. classificationText deve conter somente titulos, cabecalhos e rotulos visiveis. Nao inclua valores de campos nem texto das linhas de tabela; o Laya recebe esses sinais estruturais para decidir a classe.
+3. classificationText deve conter somente titulos, cabecalhos e rotulos visiveis, com no maximo 300 caracteres. Nao inclua valores de campos nem texto das linhas de tabela; o Laya recebe esses sinais estruturais para decidir a classe.
 3a. visualEvidence descreve o formato da pagina, nao o conteudo das pessoas/operacoes: use multi_row_table para tabela com varias linhas; bank_ledger para extrato com grade de lancamentos; two_individual_forms somente para dois formularios completos e fisicamente separados; separateDocumentBlocks conta formularios completos, nao linhas da tabela.
 4. NFS-e: companyName = valor do bloco PRESTADOR/EMITENTE; marque issuer_header. Nunca use TOMADOR.
 5. NFS-e: textos grandes de PREFEITURA, MUNICIPIO, SECRETARIA, DEPARTAMENTO ou nome da cidade NAO sao empresa, salvo se estiverem explicitamente dentro do campo PRESTADOR/EMITENTE.

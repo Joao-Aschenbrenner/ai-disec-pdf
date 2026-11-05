@@ -142,6 +142,10 @@ export function tryExtractLocalMetadata(input: LocalFastPathInput): ExtractedMet
     classificationSource: `local-fast-path:${hint?.source || "unknown"}`,
     classificationEvidence: ["local-fast-path", "embedded-pdf-text", "hard-guard"],
     needsReview: false,
+    // P0.51: o fast path só retorna quando TODOS os campos obrigatórios foram
+    // extraídos por rótulos explícitos — especialização completa por contrato.
+    specializationStatus: "COMPLETE",
+    missingFields: [],
     layaChecked: hint?.layaChecked === true,
     sequenceAdjusted: false,
     requiresVision: false,

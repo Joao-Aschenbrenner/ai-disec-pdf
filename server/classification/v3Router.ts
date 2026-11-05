@@ -261,6 +261,32 @@ export async function routeDocumentV3(
   };
 }
 
+/**
+ * P0.51 — campos obrigatórios da especialização por classe documental.
+ * Classes sem itens na lista (OUTRO/PLANILHA) não exigem campos específicos.
+ * Valores que a própria classe proíbe (ex.: valor de holerite) não são exigidos.
+ */
+export function expectedSpecializationFields(documentClass: string): string[] {
+  switch (documentClass) {
+    case "NFS":
+    case "NFE_DANFE":
+      return ["companyName", "notaNumber", "valor"];
+    case "HOLERITE":
+    case "HOLERITE_13":
+      return ["pessoaNome"];
+    case "FOPAG_RESUMO":
+    case "FOPAG_13_RESUMO":
+      return ["companyName"];
+    case "DARF":
+      return ["companyName", "valor"];
+    case "EXTRATO_CC":
+    case "EXTRATO_INVESTIMENTO":
+      return ["companyName"];
+    default:
+      return [];
+  }
+}
+
 export async function applyDocumentRoutingV3<T extends Record<string, any>>(
   raw: T,
   hint?: V3RoutingHint
@@ -327,6 +353,44 @@ export async function applyDocumentRoutingV3<T extends Record<string, any>>(
       : null;
     result.valor = fieldEvidence.valorLocation === "document_total" ? raw.valor ?? null : null;
   }
+
+  // P0.51 — contrato de especialização separado da classificação.
+  // A confiança da classe NUNCA substitui a extração de campos: um documento
+  // classificado com 0.99 sem os campos obrigatórios sai como PARTIAL ou
+  // CLASSIFICATION_ONLY com needsReview, nunca como sucesso silencioso.
+  const expectedFields = expectedSpecializationFields(route.documentClass);
+  const rawProvidedAnyField = [raw.notaNumber, raw.companyName, raw.pessoaNome, raw.valor]
+    .some(v => v !== undefined && v !== null);
+  const missingFields = expectedFields.filter(name => result[name] === null || result[name] === undefined);
+  // Descarte explícito (proteção necessária): o modelo forneceu o valor, mas a
+  // localização não confere com o campo correto da classe. Nunca é silencioso.
+  const evidenceList: string[] = Array.isArray(result.classificationEvidence)
+    ? [...result.classificationEvidence]
+    : [];
+  for (const name of expectedFields) {
+    const rawValue = raw[name];
+    if (rawValue !== undefined && rawValue !== null && (result[name] === null || result[name] === undefined)) {
+      evidenceList.push(`field-discarded:${name}:location-unverified`);
+    }
+  }
+  let specializationStatus: "COMPLETE" | "PARTIAL" | "CLASSIFICATION_ONLY";
+  if (!rawProvidedAnyField) {
+    specializationStatus = "CLASSIFICATION_ONLY";
+  } else if (expectedFields.length > 0 && missingFields.length === 0) {
+    specializationStatus = "COMPLETE";
+  } else {
+    specializationStatus = "PARTIAL";
+  }
+  result.specializationStatus = specializationStatus;
+  result.missingFields = missingFields;
+  // Classes sem campos obrigatórios (OUTRO/PLANILHA) não forçam revisão.
+  if (expectedFields.length > 0 && specializationStatus !== "COMPLETE") {
+    result.needsReview = true;
+  }
+  if (specializationStatus !== "COMPLETE") {
+    evidenceList.push(`specialization:${specializationStatus}`);
+  }
+  result.classificationEvidence = evidenceList;
 
   return result;
 }

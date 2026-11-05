@@ -2712,6 +2712,39 @@ export default function App() {
                                   </>
                                 )}
                               </div>
+                              {/* P0.51: ESPECIALIZAÇÃO separada da classificação — estado explícito,
+                                  nunca apresentando resposta só-de-classificação como sucesso. */}
+                              {page.metadata.specializationStatus && (
+                                <div className="flex items-center gap-2 flex-wrap mb-3">
+                                  <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                                    Especialização:
+                                  </span>
+                                  {page.metadata.specializationStatus === "COMPLETE" ? (
+                                    <span className="text-[9px] font-bold px-2 py-1 rounded bg-emerald-950/50 border border-emerald-900/30 text-emerald-400">
+                                      campos completos
+                                    </span>
+                                  ) : page.metadata.specializationStatus === "CLASSIFICATION_ONLY" ? (
+                                    <span
+                                      className="text-[9px] font-bold px-2 py-1 rounded bg-amber-950/50 border border-amber-800/30 text-amber-300"
+                                      title="O documento foi classificado, mas nenhum campo foi extraído. Re-processe a página ou edite os campos abaixo."
+                                    >
+                                      somente classificação — campos não extraídos
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className="text-[9px] font-bold px-2 py-1 rounded bg-amber-950/50 border border-amber-800/30 text-amber-300"
+                                      title="Alguns campos obrigatórios da classe não foram extraídos. Confira/edite abaixo."
+                                    >
+                                      especialização parcial — revisar
+                                    </span>
+                                  )}
+                                  {(page.metadata.missingFields || []).map(f => (
+                                    <span key={f} className="text-[9px] px-2 py-1 rounded bg-rose-950/40 border border-rose-900/30 text-rose-300">
+                                      ausente: {f}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
                               {page.metadataList && page.metadataList.length > 1 ? (
                                 <>
                                   <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-800">

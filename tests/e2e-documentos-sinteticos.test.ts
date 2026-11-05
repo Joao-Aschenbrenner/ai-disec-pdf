@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, beforeAll, afterAll, vi } from "vitest";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { startServer, stopServer } from "../server/server";
 import { clearLocalHttpTrust } from "../server/classification/localHttpTrust";
 
@@ -20,7 +21,6 @@ function buildIdentityMock(privateKeyPem: string, expectedFingerprint: string) {
     if (url.includes("/v1/identity?nonce=")) {
       const nonceMatch = url.match(/[?&]nonce=([^&]+)/);
       const nonce = nonceMatch ? decodeURIComponent(nonceMatch[1]) : "";
-      const { sign } = await import("node:crypto");
       const signature = sign("SHA256", Buffer.from(nonce, "base64"), privateKeyPem);
       return {
         ok: true,
@@ -106,7 +106,6 @@ describe("E2E: documentos sintéticos + classificação V3 (fail-closed)", () =>
   });
 
   it("classifica documentos sintéticos após handshake Laya válido", async () => {
-    const { generateKeyPairSync, createHash, sign } = await import("node:crypto");
     const { publicKey, privateKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
       publicKeyEncoding: { type: "spki", format: "pem" },
@@ -173,10 +172,10 @@ describe("E2E: documentos sintéticos + classificação V3 (fail-closed)", () =>
   });
 
   it("não classifica quando o fingerprint Laya está divergente", async () => {
-    const { generateKeyPairSync, createHash } = await import("node:crypto");
     const { publicKey } = generateKeyPairSync("rsa", {
       modulusLength: 2048,
       publicKeyEncoding: { type: "spki", format: "pem" },
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
     });
     const publicKeyPem = publicKey as string;
 

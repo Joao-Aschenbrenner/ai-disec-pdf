@@ -1282,7 +1282,10 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
            }
            assertSafeProviderUrl(endpoint, config.provider);
            const imageDetail = modelTier === "fast" ? "low" : "high";
-           const tokenBudget = modelTier === "fast" ? 640 : 1024;
+           // P0.51: 640/1024 truncavam o JSON antes dos campos especializados
+           // (evidência runtime: 0 fieldEvidence em 133 respostas). O prompt
+           // agora emite os campos primeiro; orçamento cobre campos + evidência.
+           const tokenBudget = modelTier === "fast" ? 1024 : 2048;
            const controller = new AbortController();
            const unlinkClientAbort = linkClientAbort(controller);
            const timeout = setTimeout(() => controller.abort(), config.provider === "NVIDIA" ? 120_000 : 75_000);
@@ -1343,7 +1346,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 model: openaiModel,
                messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}`, detail: modelTier === "fast" ? "low" : "high" } }, { type: "text", text: prompt }] }],
                temperature: 0.1,
-               max_tokens: modelTier === "fast" ? 640 : 1024,
+               max_tokens: modelTier === "fast" ? 1024 : 2048,
                top_p: 0.9
              }),
              signal: requestAbortController.signal,
@@ -1360,7 +1363,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
               headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
               body: JSON.stringify({
                 model: anthropicModel,
-               max_tokens: 1024,
+               max_tokens: 2048,
                messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: imageBase64 } }, { type: "text", text: prompt }] }]
              }),
              signal: requestAbortController.signal,
@@ -1400,7 +1403,7 @@ export async function startServer(port: number = DEFAULT_PORT, isDev: boolean = 
                 model: "mistral-small-latest",
                 messages: [{ role: "user", content: prompt + "\n\n--- TEXTO EXTRAÍDO DO DOCUMENTO ---\n" + extractedText }],
                 temperature: 0.1,
-                max_tokens: 1024,
+                max_tokens: 2048,
             }),
             signal: requestAbortController.signal,
             });

@@ -27,6 +27,13 @@ export interface ExtractedMetadata {
   classificationSource?: string;
   classificationEvidence?: string[];
   needsReview?: boolean;
+  /** P0.51: contrato de especialização separado da classificação.
+   *  COMPLETE = campos obrigatórios da classe validados; PARTIAL = alguns campos;
+   *  CLASSIFICATION_ONLY = só classificação, sem campos; FAILED/UNAVAILABLE =
+   *  extração não concluída. Nunca apresentar CLASSIFICATION_ONLY como sucesso. */
+  specializationStatus?: "COMPLETE" | "PARTIAL" | "CLASSIFICATION_ONLY" | "RUNNING" | "NOT_STARTED" | "FAILED" | "UNAVAILABLE";
+  /** Campos obrigatórios da classe que ficaram ausentes na especialização. */
+  missingFields?: string[];
   /** Classification V3 */
   layaChecked?: boolean;
   layaConfidence?: number;
