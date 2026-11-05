@@ -391,7 +391,26 @@ function LayaSetup() {
       }
       setProgress("Instalado. Iniciando serviço local...");
       const started = await api.layaStart();
-      if (!started.ok) setError(started.error || "Laya instalado, mas não iniciou.");
+      if (!started.ok) {
+        setError(started.error || "Laya instalado, mas não iniciou.");
+      } else {
+        // P0.49: verificar identidade do listener local do Laya após iniciar.
+        try {
+          const handshake = await fetchNoRedirect("/api/laya/identity-handshake", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          if (!handshake.ok) {
+            const data = await handshake.json().catch(() => ({}));
+            setError(`Identidade do Laya não verificada: ${data.reason || "falha no handshake"}`);
+          } else {
+            setProgress("Laya instalado, iniciado e identidade verificada.");
+          }
+        } catch (e: any) {
+          setError(`Não foi possível verificar a identidade do Laya: ${e.message}`);
+        }
+      }
     } catch (e: any) {
       setError(e.message || "Falha inesperada.");
     } finally {
@@ -407,7 +426,27 @@ function LayaSetup() {
     setProgress("Iniciando checkpoint multilingual...");
     try {
       const result = await api.layaStart();
-      if (!result.ok) setError(result.error || "Falha ao iniciar Laya.");
+      if (!result.ok) {
+        setError(result.error || "Falha ao iniciar Laya.");
+      } else {
+        // P0.49: verificar identidade do listener local do Laya após iniciar.
+        // Desbloqueia o Classification V3 (fail-closed: só confia após handshake/health).
+        try {
+          const handshake = await fetchNoRedirect("/api/laya/identity-handshake", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          if (!handshake.ok) {
+            const data = await handshake.json().catch(() => ({}));
+            setError(`Identidade do Laya não verificada: ${data.reason || "falha no handshake"}`);
+          } else {
+            setProgress("Laya iniciado e identidade verificada.");
+          }
+        } catch (e: any) {
+          setError(`Não foi possível verificar a identidade do Laya: ${e.message}`);
+        }
+      }
     } catch (e: any) {
       setError(e.message || "Falha inesperada.");
     } finally {

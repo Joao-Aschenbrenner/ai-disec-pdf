@@ -35,6 +35,13 @@ export interface LayaIdentityVerification {
 const DEFAULT_LAYA_URL = "http://127.0.0.1:8000";
 const IDENTITY_ENDPOINT = "/v1/identity";
 
+/** Modo de verificação de identidade do Laya.
+ *  - "handshake" (default): exige desafio-resposta criptográfica via /v1/identity.
+ *  - "health": aceita health OK do serviço local loopback como prova de identidade
+ *    quando o listener Laya não expõe /v1/identity (ex: Laya 0.3.20).
+ */
+const IDENTITY_MODE = (process.env.LAYA_IDENTITY_MODE || "handshake").toLowerCase();
+
 function resolveLayaUrl(): string | null {
   const rawUrl = (process.env.LAYA_URL || DEFAULT_LAYA_URL).trim();
   try {
@@ -143,6 +150,28 @@ export async function verifyLayaIdentity(): Promise<LayaIdentityVerification> {
   const expectedFingerprint = process.env.LAYA_IDENTITY_FINGERPRINT;
   const publicKeyPem = process.env.LAYA_IDENTITY_PUBLIC_KEY;
   if (!expectedFingerprint || !publicKeyPem) {
+    // Modo compatibilidade: sem chaves configuradas, verifica apenas que o serviço local
+    // está ativo via health. Não comprova identidade criptográfica, mas desbloqueia o
+    // fluxo V3 com Laya 0.3.20 (que não expõe /v1/identity).
+    if (IDENTITY_MODE === "health") {
+      const baseUrl = resolveLayaUrl();
+      if (!baseUrl) {
+        return { verified: false, reason: "URL Laya inválida: apenas 127.0.0.1 HTTP é permitido" };
+      }
+      try {
+        const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(3000) });
+        if (response.ok) {
+          const payload: any = await response.json().catch(() => null);
+          if (payload?.status === "ok") {
+            markLocalHttpTrusted("LAYA_HTTP");
+            return { verified: true, reason: "Laya ativo via health (modo compatibilidade sem handshake criptográfico)" };
+          }
+        }
+        return { verified: false, reason: "Laya não respondeu health com status ok" };
+      } catch (error: any) {
+        return { verified: false, reason: `Laya indisponível: ${error?.message || "falha no health"}` };
+      }
+    }
     return { verified: false, reason: "identidade do Laya não configurada: defina LAYA_IDENTITY_FINGERPRINT e LAYA_IDENTITY_PUBLIC_KEY" };
   }
 
@@ -161,6 +190,22 @@ export async function verifyLayaIdentity(): Promise<LayaIdentityVerification> {
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
+      // Modo compatibilidade: listener não expõe /v1/identity (ex: Laya 0.3.20).
+      // Tenta health como prova de serviço local ativo.
+      if (IDENTITY_MODE === "health" && response.status === 404) {
+        try {
+          const healthRes = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(3000) });
+          if (healthRes.ok) {
+            const payload: any = await healthRes.json().catch(() => null);
+            if (payload?.status === "ok") {
+              markLocalHttpTrusted("LAYA_HTTP");
+              return { verified: true, reason: "Laya ativo via health (modo compatibilidade: listener sem /v1/identity)" };
+            }
+          }
+        } catch {
+          // cai abaixo para falha
+        }
+      }
       return { verified: false, reason: `handshake Laya retornou HTTP ${response.status}` };
     }
     const payload: any = await response.json();
