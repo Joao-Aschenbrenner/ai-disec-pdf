@@ -57,17 +57,14 @@ describe("Laya desktop integration", () => {
     expect(app).toContain("Iniciar Laya");
   });
 
-  it("cliente Laya HTTP não possui transporte enquanto a identidade não é verificada", () => {
-    // P0.41 (política fail-closed): o POST /v1/systemone com o payload
-    // `model: "multilingual"` foi removido do cliente HTTP. O checkpoint
-    // multilingual permanece configurado apenas no Electron (LAYA_MODELS),
-    // para a futura integração MCP; até lá não existe contrato HTTP
-    // verificável a afirmar (lacuna registrada). A negação do cliente e a
-    // ausência de transmissão são cobertas por tests/layaClient.test.ts.
+  it("cliente Laya HTTP não transporta texto nem credenciais antes da identidade ser verificada", () => {
+    // P0.49 (handshake de identidade do Laya): o transporte HTTP só é usado
+    // após isLocalHttpTrusted("LAYA_HTTP") retornar true, estabelecido por
+    // desafio-resposta contra LAYA_IDENTITY_FINGERPRINT/PUBLIC_KEY.
     const client = read("server/classification/layaClient.ts");
-    expect(client).not.toContain('model: "multilingual"');
-    expect(client).not.toContain("fetch");
+    expect(client).toContain('isLocalHttpTrusted("LAYA_HTTP")');
     expect(client).toContain('getLocalHttpDenial("LAYA_HTTP")');
+    expect(client).toContain("verifyLayaIdentity");
   });
 
   it("health declara Classification V3 e não torna VLM autoridade de classe", () => {

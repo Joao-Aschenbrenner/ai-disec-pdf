@@ -10,11 +10,18 @@ import { DOCUMENT_CLASSES } from "./classification/documentTaxonomy";
 import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { collapsePayrollRoster, collapseStatementTransactions } from "./classification/payrollRoster";
 import { isConfirmedTwoDocumentArray, isStrongSingleInvoiceArray, mergeExtractionArray } from "./classification/extractionArray";
-import { getLayaHealth } from "./classification/layaClient";
-import { assertLocalHttpTrusted, getLocalHttpDenial } from "./classification/localHttpTrust";
+import { getLayaHealth, verifyLayaIdentity } from "./classification/layaClient";
+import { assertLocalHttpTrusted, getLocalHttpDenial, isLocalHttpTrusted } from "./classification/localHttpTrust";
 import { fetchNoRedirect } from "../noRedirectFetch";
 
 dotenv.config();
+
+// P0.47-R1: no modo QA (AI_DISEC_QA=1) o backend não realiza nenhuma chamada
+// a provedores reais (discovery, refresh ou extração) — nem Ollama local,
+// nem endpoints externos. O fail-closed do P0.41 é independente desta flag.
+function isQaRuntime(): boolean {
+  return process.env.AI_DISEC_QA === "1";
+}
 
 const DEFAULT_PORT = 3001;
 const DATA_DIR = process.env.AI_DISEC_DATA_DIR || path.join(os.homedir(), ".ai-disec-pdf");
@@ -256,6 +263,8 @@ function getPageFailoverCycle(provider: string, pageKey: string): PageFailoverCy
  */
 async function getRequestModel(provider: string, apiKey: string, pageKey: string, preferredModel = ""): Promise<string> {
   if (provider === "OPENCODE") assertLocalHttpTrusted("OPENCODE_HTTP");
+  // Modo QA: nenhum modelo de provedor real — a extração retornará indisponível.
+  if (isQaRuntime()) return "";
 
   // Garante que a página congele a lista de candidatos já indisponíveis no
   // momento em que começa. Um modelo que falhar NESTA página ainda conta como
@@ -546,6 +555,8 @@ export function filterOpenCodeVisionFreeModels(data: any): string[] {
 
 export async function fetchLiveModelCandidates(provider: string, apiKey: string): Promise<string[]> {
   if (provider === "OPENCODE") assertLocalHttpTrusted("OPENCODE_HTTP");
+  // Modo QA: nenhuma descoberta real (nem Ollama local, nem provedores externos).
+  if (isQaRuntime()) return [];
 
   const catalog = loadModelsCatalog();
   const entry = catalog.providers[provider];
@@ -1812,6 +1823,9 @@ app.post("/api/models/runtime/refresh", async (req, res) => {
   try {
     const settings = getSettings();
     const provider = String(req.body?.provider || settings.provider || "NVIDIA").toUpperCase();
+    if (isQaRuntime()) {
+      return res.status(503).json({ error: "Modo QA: atualização de modelos desabilitada (sem chamadas externas).", code: "QA_MODE_DISABLED", retryable: false });
+    }
     if (provider === "OPENCODE") {
       const denial = getLocalHttpDenial("OPENCODE_HTTP");
       return res.status(503).json({ error: denial.message, code: denial.code, retryable: false });
@@ -1904,7 +1918,8 @@ app.post("/api/models/runtime/refresh-all", async (_req, res) => {
     const results: Record<string, { status: string; candidateCount: number }> = {};
 
     await Promise.all(providers.map(async provider => {
-      if (provider === "OPENCODE") {
+      // Modo QA: nenhum refresh real de nenhum provedor (sem rede).
+      if (isQaRuntime() || provider === "OPENCODE") {
         results[provider] = { status: "unavailable", candidateCount: 0 };
         return;
       }
@@ -1936,7 +1951,20 @@ app.get("/api/classification/health", async (_req, res) => {
     version: "classification-v3",
     laya,
     layaRequired: true,
+    layaIdentityVerified: isLocalHttpTrusted("LAYA_HTTP"),
     strategy: "local-text -> signatures+laya+learning -> sequence -> vision extraction -> final validation"
+  });
+});
+
+// P0.49: handshake de identidade do listener local do Laya.
+// Libera o fluxo V3 somente quando a identidade do Laya é comprovada
+// por desafio-resposta contra LAYA_IDENTITY_FINGERPRINT/PUBLIC_KEY.
+app.post("/api/laya/identity-handshake", async (_req, res) => {
+  const result = await verifyLayaIdentity();
+  return res.status(result.verified ? 200 : 403).json({
+    verified: result.verified,
+    reason: result.reason,
+    layaIdentityVerified: isLocalHttpTrusted("LAYA_HTTP"),
   });
 });
 

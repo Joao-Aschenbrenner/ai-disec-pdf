@@ -110,17 +110,26 @@ describe("redirect policy wiring", () => {
     }
   });
 
-  it("Laya client has no HTTP transport while its identity is unverified", () => {
-    // P0.41 (política fail-closed): o transporte HTTP do Laya foi removido de
-    // propósito. Esta inspeção textual não prova sozinha a ausência de todos
-    // os caminhos de rede possíveis — essa propriedade é também demonstrada
-    // pelos testes comportamentais de tests/layaClient.test.ts (fetch mockado,
-    // zero chamadas) e tests/openCodeFailClosed.test.ts.
+  it("Laya client sends no document text or credentials before identity is verified", () => {
+    // P0.49 (handshake de identidade do Laya): o transporte que envia texto do
+    // documento (/v1/systemone) só é usado após isLocalHttpTrusted("LAYA_HTTP")
+    // retornar true, estabelecido por desafio-resposta contra
+    // LAYA_IDENTITY_FINGERPRINT/PUBLIC_KEY. O handshake de identidade
+    // (/v1/identity) é um desafio-resposta sem documento nem credenciais.
     const client = readFileSync(path.resolve(process.cwd(), "server/classification/layaClient.ts"), "utf8");
-    expect(client).not.toMatch(/\bfetch\s*\(/);
-    expect(client).not.toContain("/v1/systemone");
-    expect(client).not.toContain("LAYA_API_KEY");
+    // Guarda de fail-closed: classificação bloqueada sem identidade verificada.
+    expect(client).toContain('isLocalHttpTrusted("LAYA_HTTP")');
     expect(client).toContain('getLocalHttpDenial("LAYA_HTTP")');
+    expect(client).toContain("verifyLayaIdentity");
+    // O /v1/systemone (texto do documento) só aparece após o guarda de trust.
+    const systemoneIdx = client.indexOf("/v1/systemone");
+    const before = client.slice(Math.max(0, systemoneIdx - 500), systemoneIdx);
+    expect(before).toContain("isLocalHttpTrusted(\"LAYA_HTTP\")");
+    // O handshake de identidade não trafega LAYA_API_KEY nem Authorization.
+    const identityIdx = client.indexOf("/v1/identity");
+    const identityBlock = client.slice(Math.max(0, identityIdx - 300), identityIdx + 300);
+    expect(identityBlock).not.toContain("Authorization");
+    expect(identityBlock).not.toContain("LAYA_API_KEY");
   });
 
   it("preserves the benchmark nosemgrep annotation", () => {
