@@ -39,8 +39,13 @@ const IDENTITY_ENDPOINT = "/v1/identity";
  *  - "handshake" (default): exige desafio-resposta criptográfica via /v1/identity.
  *  - "health": aceita health OK do serviço local loopback como prova de identidade
  *    quando o listener Laya não expõe /v1/identity (ex: Laya 0.3.20).
+ *
+ * Lido dinamicamente (não no carregamento do módulo): dotenv.config() roda após
+ * os imports em server.ts, então uma constante de módulo veria env indefinida.
  */
-const IDENTITY_MODE = (process.env.LAYA_IDENTITY_MODE || "handshake").toLowerCase();
+function resolveIdentityMode(): string {
+  return (process.env.LAYA_IDENTITY_MODE || "handshake").toLowerCase();
+}
 
 function resolveLayaUrl(): string | null {
   const rawUrl = (process.env.LAYA_URL || DEFAULT_LAYA_URL).trim();
@@ -153,7 +158,7 @@ export async function verifyLayaIdentity(): Promise<LayaIdentityVerification> {
     // Modo compatibilidade: sem chaves configuradas, verifica apenas que o serviço local
     // está ativo via health. Não comprova identidade criptográfica, mas desbloqueia o
     // fluxo V3 com Laya 0.3.20 (que não expõe /v1/identity).
-    if (IDENTITY_MODE === "health") {
+    if (resolveIdentityMode() === "health") {
       const baseUrl = resolveLayaUrl();
       if (!baseUrl) {
         return { verified: false, reason: "URL Laya inválida: apenas 127.0.0.1 HTTP é permitido" };
@@ -192,7 +197,7 @@ export async function verifyLayaIdentity(): Promise<LayaIdentityVerification> {
     if (!response.ok) {
       // Modo compatibilidade: listener não expõe /v1/identity (ex: Laya 0.3.20).
       // Tenta health como prova de serviço local ativo.
-      if (IDENTITY_MODE === "health" && response.status === 404) {
+      if (resolveIdentityMode() === "health" && response.status === 404) {
         try {
           const healthRes = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(3000) });
           if (healthRes.ok) {
