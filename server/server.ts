@@ -11,6 +11,7 @@ import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { collapsePayrollRoster, collapseStatementTransactions } from "./classification/payrollRoster";
 import { isConfirmedTwoDocumentArray, isStrongSingleInvoiceArray, mergeExtractionArray } from "./classification/extractionArray";
 import { getLayaHealth, verifyLayaIdentity } from "./classification/layaClient";
+import { getOpenCodeHealth, verifyOpenCodeIdentity } from "./classification/openCodeClient";
 import { assertLocalHttpTrusted, getLocalHttpDenial, isLocalHttpTrusted } from "./classification/localHttpTrust";
 import { fetchNoRedirect } from "../noRedirectFetch";
 
@@ -1945,16 +1946,19 @@ app.post("/api/models/runtime/refresh-all", async (_req, res) => {
 });
 
 // ─── Classification V3: pre-pass / sequence / learning ─────────────
-app.get("/api/classification/health", async (_req, res) => {
-  const laya = await getLayaHealth();
-  return res.json({
-    version: "classification-v3",
-    laya,
-    layaRequired: true,
-    layaIdentityVerified: isLocalHttpTrusted("LAYA_HTTP"),
-    strategy: "local-text -> signatures+laya+learning -> sequence -> vision extraction -> final validation"
-  });
-});
+	app.get("/api/classification/health", async (_req, res) => {
+	  const laya = await getLayaHealth();
+	  const opencode = await getOpenCodeHealth();
+	  return res.json({
+	    version: "classification-v3",
+	    laya,
+	    opencode,
+	    layaRequired: true,
+	    layaIdentityVerified: isLocalHttpTrusted("LAYA_HTTP"),
+	    opencodeIdentityVerified: isLocalHttpTrusted("OPENCODE_HTTP"),
+	    strategy: "local-text -> signatures+laya+learning -> sequence -> vision extraction -> final validation"
+	  });
+	});
 
 // P0.49: handshake de identidade do listener local do Laya.
 // Libera o fluxo V3 somente quando a identidade do Laya é comprovada
@@ -1965,6 +1969,18 @@ app.post("/api/laya/identity-handshake", async (_req, res) => {
     verified: result.verified,
     reason: result.reason,
     layaIdentityVerified: isLocalHttpTrusted("LAYA_HTTP"),
+  });
+});
+
+// P0.50: handshake de identidade do listener local do OpenCode.
+// Libera o acesso ao OpenCode somente quando a identidade é comprovada
+// por desafio-resposta contra OPENCODE_IDENTITY_FINGERPRINT/PUBLIC_KEY.
+app.post("/api/opencode/identity-handshake", async (_req, res) => {
+  const result = await verifyOpenCodeIdentity();
+  return res.status(result.verified ? 200 : 403).json({
+    verified: result.verified,
+    reason: result.reason,
+    opencodeIdentityVerified: isLocalHttpTrusted("OPENCODE_HTTP"),
   });
 });
 
