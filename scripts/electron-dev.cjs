@@ -1,16 +1,27 @@
 const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
+const fs = require("node:fs");
 const { spawn } = require("node:child_process");
 
 const rootDir = path.join(__dirname, "..");
 const tsxCli = require.resolve("tsx/cli");
 const electronCli = require.resolve("electron/cli.js");
 const children = new Set();
+// P0.47: modo QA (AI_DISEC_QA=1) isola dados do backend em diretório temporário
+// exclusivo. Não é bypass de segurança: o fail-closed do P0.41 não lê env.
+const isQa = process.env.AI_DISEC_QA === "1";
+const qaDataDir = isQa
+  ? path.join(os.tmpdir(), "ai-disec-pdf-qa-" + process.pid, "data")
+  : null;
+if (qaDataDir) fs.mkdirSync(qaDataDir, { recursive: true });
 
 function start(command, args) {
+  const env = { ...process.env, NODE_ENV: "development" };
+  if (qaDataDir) env.AI_DISEC_DATA_DIR = qaDataDir;
   const child = spawn(command, args, {
     cwd: rootDir,
-    env: { ...process.env, NODE_ENV: "development" },
+    env,
     stdio: "inherit",
     windowsHide: false,
   });

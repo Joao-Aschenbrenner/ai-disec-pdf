@@ -217,9 +217,10 @@ function stopLayaService() {
   }
 }
 
-ipcMain.handle("laya:status", async () => getLayaStatus());
+ipcMain.handle("laya:status", async () => isQa ? { installed: false, running: false, disabledInQa: true } : getLayaStatus());
 
 ipcMain.handle("laya:install", async () => {
+  if (isQa) return { ...QA_DISABLED };
   try {
     const existing = getLayaInstallInfo();
     if (existing.installed) {
@@ -263,7 +264,7 @@ ipcMain.handle("laya:install", async () => {
   }
 });
 
-ipcMain.handle("laya:start", async () => startLayaService({ silent: false }));
+ipcMain.handle("laya:start", async () => isQa ? { ...QA_DISABLED } : startLayaService({ silent: false }));
 ipcMain.handle("laya:stop", async () => stopLayaService());
 
 
@@ -325,6 +326,7 @@ function getOllamaPath() {
 
 // Detecta hardware (RAM total, CPU cores, GPU) e sugere modelo Ollama ideal
 ipcMain.handle("ollama:get-hardware", () => {
+  if (isQa) return { ...QA_DISABLED };
   try {
     const totalMemGB = Math.round(os.totalmem() / 1024 / 1024 / 1024);
     const cpuCores = os.cpus().length;
@@ -367,12 +369,14 @@ ipcMain.handle("ollama:get-hardware", () => {
 });
 
 ipcMain.handle("ollama:check-installed", () => {
+  if (isQa) return { installed: false, disabledInQa: true };
   const ollamaPath = getOllamaPath();
   return { installed: !!ollamaPath, path: ollamaPath };
 });
 
 // Instala Ollama baixando o instalador oficial e executando silenciosamente
 ipcMain.handle("ollama:install", async () => {
+  if (isQa) return { ...QA_DISABLED };
   if (process.platform !== "win32") {
     return { ok: false, error: "Instalação automática suportada apenas no Windows. No Linux/macOS instale via https://ollama.com" };
   }
@@ -412,6 +416,7 @@ ipcMain.handle("ollama:install", async () => {
 
 // Baixa (pull) um modelo via `ollama pull <model>` com progresso via IPC
 ipcMain.handle("ollama:pull-model", async (event, model) => {
+  if (isQa) return { ...QA_DISABLED };
   const ollamaPath = getOllamaPath();
   if (!ollamaPath) return { ok: false, error: "Ollama não instalado" };
   try {
@@ -548,6 +553,7 @@ async function openCodeHealth(timeoutMs = 700) {
 }
 
 ipcMain.handle("opencode:status", async () => {
+  if (isQa) return { installed: false, running: false, version: null, disabledInQa: true };
   const executable = findOpenCodePath();
   const health = await openCodeHealth();
   let version = health?.version || null;
@@ -567,6 +573,7 @@ ipcMain.handle("opencode:status", async () => {
 });
 
 ipcMain.handle("opencode:install", async () => {
+  if (isQa) return { ...QA_DISABLED };
   if (findOpenCodePath()) return { ok: true, alreadyInstalled: true };
   return new Promise(resolve => {
     try {
@@ -602,6 +609,7 @@ ipcMain.handle("opencode:install", async () => {
 });
 
 ipcMain.handle("opencode:start", async () => {
+  if (isQa) return { ...QA_DISABLED };
   const existingHealth = await openCodeHealth();
   if (existingHealth?.healthy) return { ok: true, alreadyRunning: true, version: existingHealth.version };
   const executable = findOpenCodePath();
@@ -655,6 +663,7 @@ function readCodexToken() {
 }
 
 ipcMain.handle("codex:login", async (event) => {
+  if (isQa) return { ...QA_DISABLED };
   // Se já tem token válido, retorna
   const existing = readCodexToken();
   if (existing) {
@@ -721,6 +730,7 @@ ipcMain.handle("codex:login", async (event) => {
 });
 
 ipcMain.handle("codex:logout", async () => {
+  if (isQa) return { ...QA_DISABLED };
   try {
     const authPath = getCodexAuthPath();
     if (fs.existsSync(authPath)) fs.unlinkSync(authPath);
@@ -729,15 +739,26 @@ ipcMain.handle("codex:logout", async () => {
 });
 
 ipcMain.handle("codex:check-login", async () => {
+  if (isQa) return { loggedIn: false, disabledInQa: true };
   const token = readCodexToken();
   return { logged: !!token };
 });
 
 const PORT = 3001;
 const isDev = process.env.NODE_ENV === "development";
+// P0.47: modo QA (AI_DISEC_QA=1) restringe o bootstrap ao ambiente de teste:
+// userData temporária, sem auto-start de serviços, sem installs, sem DevTools
+// e com sandbox ativo. Não é bypass: o fail-closed do P0.41 não lê env.
+const isQa = process.env.AI_DISEC_QA === "1";
+const QA_DISABLED = { ok: false, disabledInQa: true, error: "Desabilitado no modo QA (AI_DISEC_QA=1)." };
+if (isQa) {
+  const qaDir = path.join(os.tmpdir(), "ai-disec-pdf-qa-" + process.pid, "electron-userData");
+  fs.mkdirSync(qaDir, { recursive: true });
+  app.setPath("userData", qaDir);
+}
 
 app.commandLine.appendSwitch("disable-gpu");
-app.commandLine.appendSwitch("no-sandbox");
+if (!isQa) app.commandLine.appendSwitch("no-sandbox");
 
 async function startServer() {
   if (isDev) {
@@ -788,7 +809,7 @@ function createWindow() {
   mainWindow.webContents.on("did-finish-load", () => {
     console.log("[main] Page loaded successfully");
   });
-  if (isDev) mainWindow.webContents.openDevTools({ mode: "detach" });
+  if (isDev && !isQa) mainWindow.webContents.openDevTools({ mode: "detach" });
   mainWindow.on("closed", () => { mainWindow = null; });
 
   if (!isDev && autoUpdater) setupAutoUpdater();
@@ -863,8 +884,10 @@ app.whenReady().then(async () => {
     if (ok) {
       console.log("[main] Server started. Creating window...");
       createWindow();
-      if (getLayaInstallInfo().installed) {
+      if (!isQa && getLayaInstallInfo().installed) {
         startLayaService({ silent: true }).catch(err => console.warn("[laya] Auto-start falhou:", err.message));
+      } else if (isQa) {
+        console.log("[main] QA mode: Laya auto-start desabilitado.");
       }
       app.on("activate", () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
