@@ -54,9 +54,10 @@ const buildLayaListenerMock = () => {
 }
 
 describe("Laya identity handshake (P0.49)", () => {
-  it("não verifica identidade sem LAYA_IDENTITY_FINGERPRINT/LAYA_IDENTITY_PUBLIC_KEY (fail-closed mantido)", async () => {
+  it("modo handshake explícito sem chaves não verifica nada (fail-closed estrito mantido)", async () => {
     delete process.env.LAYA_IDENTITY_FINGERPRINT;
     delete process.env.LAYA_IDENTITY_PUBLIC_KEY;
+    process.env.LAYA_IDENTITY_MODE = "handshake";
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -66,6 +67,24 @@ describe("Laya identity handshake (P0.49)", () => {
     expect(result.reason).toContain("não configurada");
     expect(fetchMock).not.toHaveBeenCalled();
     expect(isLocalHttpTrusted("LAYA_HTTP")).toBe(false);
+  });
+
+  it("default sem chaves e sem env tenta health e segue fail-closed se o Laya não responder ok", async () => {
+    delete process.env.LAYA_IDENTITY_FINGERPRINT;
+    delete process.env.LAYA_IDENTITY_PUBLIC_KEY;
+    delete process.env.LAYA_IDENTITY_MODE;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "degraded" }),
+    } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await verifyLayaIdentity();
+
+    expect(result.verified).toBe(false);
+    expect(isLocalHttpTrusted("LAYA_HTTP")).toBe(false);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("recusa quando o fingerprint do listener não confere com o esperado", async () => {

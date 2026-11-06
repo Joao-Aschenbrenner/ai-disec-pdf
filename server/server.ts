@@ -10,7 +10,7 @@ import { DOCUMENT_CLASSES } from "./classification/documentTaxonomy";
 import { buildExtractionPrompt } from "./classification/extractionPrompt";
 import { collapsePayrollRoster, collapseStatementTransactions } from "./classification/payrollRoster";
 import { isConfirmedTwoDocumentArray, isStrongSingleInvoiceArray, mergeExtractionArray } from "./classification/extractionArray";
-import { getLayaHealth, verifyLayaIdentity } from "./classification/layaClient";
+import { getLayaHealth, ensureLayaIdentityVerified, verifyLayaIdentity } from "./classification/layaClient";
 import { getOpenCodeHealth, verifyOpenCodeIdentity } from "./classification/openCodeClient";
 import { assertLocalHttpTrusted, getLocalHttpDenial, isLocalHttpTrusted } from "./classification/localHttpTrust";
 import { fetchNoRedirect } from "../noRedirectFetch";
@@ -1950,6 +1950,8 @@ app.post("/api/models/runtime/refresh-all", async (_req, res) => {
 
 // ─── Classification V3: pre-pass / sequence / learning ─────────────
 	app.get("/api/classification/health", async (_req, res) => {
+	  // P0.51: o auto-start do Laya no boot não dispara handshake — tenta uma vez.
+	  await ensureLayaIdentityVerified();
 	  const laya = await getLayaHealth();
 	  const opencode = await getOpenCodeHealth();
 	  return res.json({
@@ -1992,6 +1994,9 @@ app.post("/api/classification/pass1", async (req, res) => {
     const pages = Array.isArray(req.body?.pages) ? req.body.pages : [];
     if (!pages.length) return res.status(400).json({ error: "pages obrigatório" });
 
+    // P0.51: antes de falhar com LAYA_REQUIRED, tenta a verificação de
+    // identidade uma vez (auto-start no boot não dispara handshake).
+    await ensureLayaIdentityVerified();
     const laya = await getLayaHealth(1500);
     if (!laya.healthy) {
       return res.status(503).json({

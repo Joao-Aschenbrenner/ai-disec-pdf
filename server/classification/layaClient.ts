@@ -36,15 +36,35 @@ const DEFAULT_LAYA_URL = "http://127.0.0.1:8000";
 const IDENTITY_ENDPOINT = "/v1/identity";
 
 /** Modo de verificação de identidade do Laya.
- *  - "handshake" (default): exige desafio-resposta criptográfica via /v1/identity.
+ *  - "handshake": exige desafio-resposta criptográfica via /v1/identity (com chaves).
  *  - "health": aceita health OK do serviço local loopback como prova de identidade
  *    quando o listener Laya não expõe /v1/identity (ex: Laya 0.3.20).
+ *
+ * Default SEM env: com chaves configuradas → "handshake"; sem chaves → "health"
+ * (o app empacotado não carrega .env do checkout — sem este default o V3 ficava
+ * bloqueado no instalado mesmo com o Laya rodando). LAYA_IDENTITY_MODE explícito
+ * sobrescreve (estrito quando "handshake").
  *
  * Lido dinamicamente (não no carregamento do módulo): dotenv.config() roda após
  * os imports em server.ts, então uma constante de módulo veria env indefinida.
  */
 function resolveIdentityMode(): string {
-  return (process.env.LAYA_IDENTITY_MODE || "handshake").toLowerCase();
+  const explicit = (process.env.LAYA_IDENTITY_MODE || "").trim().toLowerCase();
+  if (explicit === "health" || explicit === "handshake") return explicit;
+  const hasKeys = Boolean(process.env.LAYA_IDENTITY_FINGERPRINT && process.env.LAYA_IDENTITY_PUBLIC_KEY);
+  return hasKeys ? "handshake" : "health";
+}
+
+/** P0.51: verificação lazy de identidade, uma única tentativa por sessão.
+ *  O auto-start do Laya no boot do app empacotado não dispara handshake — o
+ *  health/pass1 chama isto para desbloquear o V3 sem clique do usuário. */
+let layaIdentityAttempted = false;
+export async function ensureLayaIdentityVerified(): Promise<boolean> {
+  if (isLocalHttpTrusted("LAYA_HTTP")) return true;
+  if (layaIdentityAttempted) return false;
+  layaIdentityAttempted = true;
+  const result = await verifyLayaIdentity();
+  return result.verified;
 }
 
 function resolveLayaUrl(): string | null {
