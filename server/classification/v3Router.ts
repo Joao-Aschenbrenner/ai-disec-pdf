@@ -376,7 +376,10 @@ export async function applyDocumentRoutingV3<T extends Record<string, any>>(
   let specializationStatus: "COMPLETE" | "PARTIAL" | "CLASSIFICATION_ONLY";
   if (!rawProvidedAnyField) {
     specializationStatus = "CLASSIFICATION_ONLY";
-  } else if (expectedFields.length > 0 && missingFields.length === 0) {
+  } else if (missingFields.length === 0) {
+    // P0.52-R1 (B7): COMPLETE quando nada falta — inclusive classes sem campos
+    // obrigatórios (OUTRO/PLANILHA) que receberam algum campo do modelo. Antes
+    // caíam em PARTIAL com chip "revisar" sem nada a revisar.
     specializationStatus = "COMPLETE";
   } else {
     specializationStatus = "PARTIAL";

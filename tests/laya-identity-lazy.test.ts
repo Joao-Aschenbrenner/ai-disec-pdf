@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  ensureLayaIdentityVerified,
   verifyLayaIdentity,
 } from "../server/classification/layaClient";
 import { clearLocalHttpTrust, isLocalHttpTrusted } from "../server/classification/localHttpTrust";
@@ -84,8 +83,40 @@ describe("default de identidade sem .env (app empacotado)", () => {
   });
 });
 
-describe("ensureLayaIdentityVerified (lazy, uma tentativa por sessão)", () => {
-  it("primeira chamada tenta e libera; após clear, segunda não re-tenta", async () => {
+describe("ensureLayaIdentityVerified (lazy, single-flight, recuperação)", () => {
+  // O estado do ensure é module-level; cada teste importa uma instância fresca.
+  async function freshEnsure() {
+    vi.resetModules();
+    const mod = await import("../server/classification/layaClient");
+    const trust = await import("../server/classification/localHttpTrust");
+    return { ensure: mod.ensureLayaIdentityVerified, isTrusted: trust.isLocalHttpTrusted };
+  }
+
+  it("falha na primeira tentativa permite RE-TENTAR na segunda (fix A1 do dead-end)", async () => {
+    delete process.env.LAYA_IDENTITY_MODE;
+    delete process.env.LAYA_IDENTITY_FINGERPRINT;
+    delete process.env.LAYA_IDENTITY_PUBLIC_KEY;
+    let calls = 0;
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("ECONNREFUSED — checkpoint ainda carregando");
+      return { ok: true, status: 200, json: async () => ({ status: "ok" }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { ensure, isTrusted } = await freshEnsure();
+
+    const first = await ensure();
+    expect(first).toBe(false);
+    expect(isTrusted("LAYA_HTTP")).toBe(false);
+
+    // Laya ficou saudável: o próximo health/pass1 DEVE conseguir liberar.
+    const second = await ensure();
+    expect(second).toBe(true);
+    expect(isTrusted("LAYA_HTTP")).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it("chamadas concorrentes compartilham a promessa em voo (single-flight)", async () => {
     delete process.env.LAYA_IDENTITY_MODE;
     delete process.env.LAYA_IDENTITY_FINGERPRINT;
     delete process.env.LAYA_IDENTITY_PUBLIC_KEY;
@@ -95,16 +126,35 @@ describe("ensureLayaIdentityVerified (lazy, uma tentativa por sessão)", () => {
       json: async () => ({ status: "ok" }),
     });
     vi.stubGlobal("fetch", fetchMock);
+    const { ensure } = await freshEnsure();
 
-    const first = await ensureLayaIdentityVerified();
-    expect(first).toBe(true);
-    expect(isLocalHttpTrusted("LAYA_HTTP")).toBe(true);
+    const [a, b, c] = await Promise.all([ensure(), ensure(), ensure()]);
 
-    // Reset de confiança (ex.: teste/sessão): ensure não re-tenta automaticamente.
-    clearLocalHttpTrust();
-    const second = await ensureLayaIdentityVerified();
-    expect(second).toBe(false);
-    expect(isLocalHttpTrusted("LAYA_HTTP")).toBe(false);
+    expect(a).toBe(true);
+    expect(b).toBe(true);
+    expect(c).toBe(true);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("sucesso fixa o latch: após clear de confiança, não re-tenta automaticamente", async () => {
+    delete process.env.LAYA_IDENTITY_MODE;
+    delete process.env.LAYA_IDENTITY_FINGERPRINT;
+    delete process.env.LAYA_IDENTITY_PUBLIC_KEY;
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "ok" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { ensure, isTrusted } = await freshEnsure();
+    const trustMod = await import("../server/classification/localHttpTrust");
+
+    expect(await ensure()).toBe(true);
+    expect(isTrusted("LAYA_HTTP")).toBe(true);
+
+    trustMod.clearLocalHttpTrust();
+    expect(await ensure()).toBe(false);
+    expect(isTrusted("LAYA_HTTP")).toBe(false);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

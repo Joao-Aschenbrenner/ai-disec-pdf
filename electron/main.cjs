@@ -265,7 +265,7 @@ ipcMain.handle("laya:install", async () => {
 });
 
 ipcMain.handle("laya:start", async () => isQa ? { ...QA_DISABLED } : startLayaService({ silent: false }));
-ipcMain.handle("laya:stop", async () => stopLayaService());
+ ipcMain.handle("laya:stop", async () => { if (isQa) return { ...QA_DISABLED }; return stopLayaService(); });
 
 
 ipcMain.on("processing-started", () => {
@@ -671,43 +671,102 @@ ipcMain.handle("codex:login", async (event) => {
   }
 
   try {
-    // Abre o fluxo OAuth do ChatGPT no browser padrão.
-    // O Codex CLI usa auth.openai.com com PKCE. Como não temos client_id oficial publicado,
-    // abrimos a página de login do ChatGPT e orientamos o usuário.
-    // Após login, o usuário pode usar o Codex CLI para gerar o auth.json automaticamente,
-    // OU colar o token manualmente.
-    const loginUrl = "https://auth.openai.com/authorize?client_id=app_EMoamXZG11Bxl5J3pCKnz1&redirect_uri=http://localhost:1455&response_type=code&scope=openid+email+profile&prompt=login";
+    // P0.52-R1 (A2): OAuth correto do Codex CLI — PKCE S256 (client público,
+    // sem secret), state anti-CSRF, callback bindado em 127.0.0.1 e troca real
+    // code→token. Nunca salvar o code cru: sem a troca o token é inútil e o
+    // code pode ser reutilizado por quem o capturar.
+    const cryptoMod = require("crypto");
+    const codeVerifier = cryptoMod.randomBytes(32).toString("base64url");
+    const codeChallenge = cryptoMod.createHash("sha256").update(codeVerifier).digest("base64url");
+    const oauthState = cryptoMod.randomBytes(16).toString("base64url");
+
+    const loginUrl = "https://auth.openai.com/authorize?client_id=app_EMoamXZG11Bxl5J3pCKnz1" +
+      "&redirect_uri=http%3A%2F%2Flocalhost%3A1455&response_type=code&scope=openid+email+profile" +
+      "&prompt=login" +
+      `&code_challenge=${encodeURIComponent(codeChallenge)}&code_challenge_method=S256` +
+      `&state=${encodeURIComponent(oauthState)}`;
     await shell.openExternal(loginUrl);
 
-    // Sobe servidor de callback para capturar o code
     return await new Promise((resolve) => {
+      let settled = false;
+      let timeoutHandle = null;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        try { callbackServer.close(); } catch (e) {}
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        resolve(result);
+      };
+
       const callbackServer = http.createServer(async (req, res) => {
-        const url = new URL(req.url, "http://localhost:1455");
+        const url = new URL(req.url, "http://127.0.0.1:1455");
         const code = url.searchParams.get("code");
         const error = url.searchParams.get("error");
+        const state = url.searchParams.get("state");
 
         if (error) {
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
           res.end("<h1>Login cancelado</h1><p>Você pode fechar esta janela.</p>");
-          callbackServer.close();
-          resolve({ ok: false, error: "Login cancelado pelo usuário" });
+          finish({ ok: false, error: "Login cancelado pelo usuário" });
+          return;
+        }
+
+        // Anti-CSRF: o state do callback TEM que bater com o que geramos.
+        if (code && state !== oauthState) {
+          res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+          res.end("<h1>Requisição inválida</h1><p>State OAuth não corresponde. Feche esta janela e tente novamente.</p>");
+          console.warn("[codex] state OAuth divergente — callback descartado");
+          finish({ ok: false, error: "State OAuth inválido (possível CSRF). Tente logar novamente." });
           return;
         }
 
         if (code) {
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-          res.end("<h1>Login realizado!</h1><p>Você já pode fechar esta janela e voltar ao AI Disec PDF.</p>");
-          callbackServer.close();
-
-          // Troca o code por token (simplificado — em produção precisaria do client_secret)
-          // Por agora, salva o code como token de acesso temporário
-          const authData = {
-            tokens: { access_token: code, token_type: "codex_temp" },
-            saved_at: new Date().toISOString(),
-          };
-          fs.writeFileSync(getCodexAuthPath(), JSON.stringify(authData, null, 2));
-          console.log("[codex] Token salvo em", getCodexAuthPath());
-          resolve({ ok: true, message: "Login ChatGPT realizado! Token salvo em ~/.codex/auth.json" });
+          res.end("<h1>Autenticando...</h1><p>Trocando o código por token, aguarde.</p>");
+          try {
+            const tokenRes = await fetch("https://auth.openai.com/oauth/token", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({
+                grant_type: "authorization_code",
+                code,
+                redirect_uri: "http://localhost:1455",
+                client_id: "app_EMoamXZG11Bxl5J3pCKnz1",
+                code_verifier: codeVerifier,
+              }).toString(),
+            });
+            const tokenPayload = await tokenRes.json().catch(() => null);
+            if (!tokenRes.ok || !tokenPayload?.access_token) {
+              console.error("[codex] Troca de token falhou:", tokenRes.status, tokenPayload?.error || "");
+              res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+              res.end("<h1>Falha na autenticação</h1><p>Não foi possível trocar o código por token. Feche e tente novamente.</p>");
+              finish({ ok: false, error: `Troca de token falhou (HTTP ${tokenRes.status})` });
+              return;
+            }
+            const authData = {
+              tokens: {
+                access_token: tokenPayload.access_token,
+                refresh_token: tokenPayload.refresh_token || null,
+                token_type: tokenPayload.token_type || "bearer",
+                expires_at: tokenPayload.expires_in
+                  ? new Date(Date.now() + tokenPayload.expires_in * 1000).toISOString()
+                  : null,
+              },
+              saved_at: new Date().toISOString(),
+            };
+            const authPath = getCodexAuthPath();
+            fs.writeFileSync(authPath, JSON.stringify(authData, null, 2));
+            if (process.platform !== "win32") {
+              try { fs.chmodSync(authPath, 0o600); } catch (e) {}
+            }
+            console.log("[codex] Token trocado e salvo em", authPath);
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end("<h1>Login realizado!</h1><p>Você já pode fechar esta janela e voltar ao AI Disec PDF.</p>");
+            finish({ ok: true, message: "Login ChatGPT realizado! Token salvo em ~/.codex/auth.json" });
+          } catch (e) {
+            console.error("[codex] Erro na troca de token:", e.message);
+            finish({ ok: false, error: "Erro na troca de token: " + e.message });
+          }
           return;
         }
 
@@ -715,12 +774,12 @@ ipcMain.handle("codex:login", async (event) => {
         res.end("<h1>Aguardando login...</h1><p>Faça login no ChatGPT para continuar.</p>");
       });
 
-      callbackServer.listen(1455, () => {
-        console.log("[codex] Callback server rodando em localhost:1455");
-        // Timeout de 5 minutos
-        setTimeout(() => {
-          try { callbackServer.close(); } catch (e) {}
-          resolve({ ok: false, error: "Timeout: login não completado em 5 minutos" });
+      // A2: bind explícito em loopback — sem isso o callback escuta em 0.0.0.0
+      // e aceita ?code= de qualquer máquina da rede.
+      callbackServer.listen(1455, "127.0.0.1", () => {
+        console.log("[codex] Callback server rodando em 127.0.0.1:1455");
+        const timeoutHandle = setTimeout(() => {
+          finish({ ok: false, error: "Timeout: login não completado em 5 minutos" });
         }, 300000);
       });
     });

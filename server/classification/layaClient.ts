@@ -55,16 +55,30 @@ function resolveIdentityMode(): string {
   return hasKeys ? "handshake" : "health";
 }
 
-/** P0.51: verificação lazy de identidade, uma única tentativa por sessão.
+/** P0.52-R1 (A1): verificação lazy com single-flight e RECUPERAÇÃO.
  *  O auto-start do Laya no boot do app empacotado não dispara handshake — o
- *  health/pass1 chama isto para desbloquear o V3 sem clique do usuário. */
-let layaIdentityAttempted = false;
+ *  health/pass1 chama isto. A v2.0.1 travava a sessão em latch permanente se a
+ *  PRIMEIRA tentativa acontecesse durante o carregamento do checkpoint (a
+ *  v2.0.1 setava a flag antes do await e nunca resetava). Agora: falha libera
+ *  nova tentativa no próximo health/pass1; sucesso mantém o latch; chamadas
+ *  concorrentes compartilham a promessa em voo (sem stampede). */
+let layaIdentityInFlight: Promise<boolean> | null = null;
+let layaIdentitySucceededOnce = false;
 export async function ensureLayaIdentityVerified(): Promise<boolean> {
   if (isLocalHttpTrusted("LAYA_HTTP")) return true;
-  if (layaIdentityAttempted) return false;
-  layaIdentityAttempted = true;
-  const result = await verifyLayaIdentity();
-  return result.verified;
+  if (layaIdentitySucceededOnce) return false;
+  if (layaIdentityInFlight) return layaIdentityInFlight;
+  layaIdentityInFlight = verifyLayaIdentity()
+    .then(result => {
+      layaIdentityInFlight = null;
+      layaIdentitySucceededOnce = result.verified;
+      return result.verified;
+    })
+    .catch(() => {
+      layaIdentityInFlight = null;
+      return false;
+    });
+  return layaIdentityInFlight;
 }
 
 function resolveLayaUrl(): string | null {

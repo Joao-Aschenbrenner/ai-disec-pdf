@@ -117,6 +117,18 @@ describe("contrato de especialização em applyDocumentRoutingV3", () => {
     expect(routed.specializationStatus).toBe("CLASSIFICATION_ONLY");
     expect(routed.missingFields).toEqual([]);
   });
+
+  it("OUTRO com campo fornecido fica COMPLETE (P0.52-R1 B7: sem chip 'revisar' falso)", async () => {
+    const routed: any = await applyDocumentRoutingV3({
+      classificationText: "texto generico de pagina sem assinatura conhecida com conteudo suficiente para rotear",
+      companyName: "NOME AVULSO DO DOCUMENTO",
+    });
+    expect(routed.specializationStatus).toBe("COMPLETE");
+    expect(routed.missingFields).toEqual([]);
+    // O contrato não ADICIONA revisão para classes sem campos obrigatórios
+    // (a rota pode marcar por baixa confiança — comportamento dela).
+    expect((routed.classificationEvidence || []).some(e => String(e).startsWith("specialization:"))).toBe(false);
+  });
 });
 
 describe("prompt P0.51: campos primeiro, classificationText por último e limitado", () => {

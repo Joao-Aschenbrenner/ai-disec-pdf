@@ -8,7 +8,9 @@ const tag = "v" + v;
 
 console.log(`[release] Creating GitHub release ${tag}...`);
 
-const cmd = `gh release create ${tag} --repo Joao-Aschenbrenner/ai-disec-pdf --title ${tag} --notes "Release automatica v${v}" "release/AI-Disec-PDF-Setup-${v}.exe" "release/AI-Disec-PDF-Setup-${v}.exe.blockmap" "release/latest.yml"`;
+// P0.52-R1 (A3): o electron-builder grava em build/electron (package.json
+// directories.output) — o caminho antigo release/ quebrava o gh release create.
+const cmd = `gh release create ${tag} --repo Joao-Aschenbrenner/ai-disec-pdf --title ${tag} --notes "Release automatica v${v}" "build/electron/AI-Disec-PDF-Setup-${v}.exe" "build/electron/AI-Disec-PDF-Setup-${v}.exe.blockmap" "build/electron/latest.yml"`;
 
 console.log(`[release] Running: gh release create ${tag} ...`);
 execSync(cmd, { stdio: "inherit", cwd: path.join(__dirname, "..") });
